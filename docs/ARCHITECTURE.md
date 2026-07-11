@@ -51,3 +51,8 @@ Future inventory architecture should support multiple warehouses, countries, bus
 - GitHub is the source of truth for source control and review.
 - Vercel is the deployment infrastructure for the Next.js application.
 - Supabase is the backend infrastructure for database and future authentication capabilities.
+
+
+## Phase 2.5 Product Content Architecture
+
+Public homepage product highlights are queried server-side through `lib/data/products.ts`, using the centralized server Supabase utility in `lib/supabase/server.ts`. Client components do not access Supabase for homepage products. The `products` table is intentionally minimal and belongs to the public catalogue foundation, not ERP inventory. RLS permits anonymous reads only for published rows.

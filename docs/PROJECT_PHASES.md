@@ -12,6 +12,10 @@ Create foundational documentation, typed public configuration, route constants, 
 
 Build the public company website structure and content pages. The Phase 2 homepage foundation is implemented with public navigation, footer structure, corporate content sections, sample product previews and environment verification moved to `/environment-check`.
 
+## Phase 2.5: Premium Homepage and Product Data Foundation — Completed
+
+Redesigned the homepage, integrated real brand paths, fixed public navigation, added foundational public routes and introduced a minimal Supabase-backed featured-products structure with RLS and optional sample content.
+
 ## Phase 3: Product Catalogue
 
 Introduce product discovery, category structure and product presentation.

@@ -1,15 +1,12 @@
-export const featuredProducts = [
-  ["Networking", "Enterprise network switch", "Representative switching platform for campus and ISP access projects."],
-  ["Networking", "Rack server", "Sample compute platform for data center and enterprise workloads."],
-  ["Others", "Industrial PLC", "Representative automation controller for manufacturing equipment."],
-  ["Energy", "UPS and inverter system", "Sample power continuity equipment for critical facilities."],
-  ["Medical Equipment", "Patient monitoring equipment", "Representative healthcare technology for clinical environments."],
-  ["Networking", "Fiber-optic module", "Sample optical connectivity component for network infrastructure."],
+export const technologyShowcase = [
+  { title: "Enterprise Servers & Data Centers", slug: "servers", href: "/products#servers", image: "/images/home/servers/rack-servers.svg", alt: "Abstract rack server and data-center infrastructure visual", description: "Rack servers, GPU compute classes, storage, racks and power foundations for critical IT environments.", technologies: ["Rack compute", "GPU workloads", "Data-center power", "Virtualization"] },
+  { title: "Networking & Fibre Infrastructure", slug: "networking", href: "/products#networking", image: "/images/home/networking/fibre-core.svg", alt: "Abstract enterprise fibre and switching network visual", description: "Core switching, routers, optical modules and fibre infrastructure for enterprise, campus and ISP projects.", technologies: ["Core switching", "Carrier routing", "Optical modules", "ISP access"] },
+  { title: "Medical & Laboratory Equipment", slug: "medical", href: "/products#medical", image: "/images/home/medical/diagnostic-suite.svg", alt: "Abstract hospital diagnostic and monitoring equipment visual", description: "Structured sourcing support for diagnostic, patient-monitoring, laboratory and clinical technology categories.", technologies: ["Patient monitoring", "Diagnostics", "Laboratory systems", "Clinical technology"] },
+  { title: "Energy, Electrical & Electronics", slug: "energy", href: "/products#energy", image: "/images/home/energy/power-systems.svg", alt: "Abstract energy, UPS and industrial control technology visual", description: "UPS, inverters, PLCs, drives, automation control and power electronics for industrial and energy projects.", technologies: ["UPS systems", "Solar inverters", "PLC controls", "Servo drives"] },
 ] as const;
 
-export const benefits = ["Direct sourcing from China", "Bangladesh warehouse and local coordination", "Enterprise and industrial product expertise", "Quality-focused supplier selection", "Corporate quotation support", "International delivery capability", "Responsive customer service", "Custom procurement support"] as const;
-export const industries = ["Internet service providers", "Data centers", "Manufacturing", "Industrial facilities", "Healthcare", "Education", "Corporate enterprises", "Government and infrastructure projects"] as const;
-export const workflow = ["Requirement consultation", "Product sourcing and quotation", "Quality verification", "International shipment", "Bangladesh warehouse receiving", "Customer delivery and support"] as const;
-export const capabilities = ["4 core business categories", "China sourcing network", "Bangladesh operations", "Corporate quotation support", "Technical product categories", "International delivery coordination"] as const;
-// Representative brand names only; these text placeholders are not partnership, authorization or certification claims.
-export const representativeBrands = ["Cisco", "Huawei", "Dell Technologies", "Siemens", "ABB", "Schneider Electric", "Mitsubishi Electric", "Omron"] as const;
+export const benefits = ["China sourcing coordination", "Bangladesh operations support", "Technical category understanding", "Requirement-led quotation process", "International shipment coordination", "Supplier and specification checks", "Corporate procurement communication", "Future catalogue-ready data model"] as const;
+export const industries = ["Data centers", "Internet service providers", "Healthcare", "Manufacturing", "Energy infrastructure", "Corporate enterprises", "Education", "Government and public infrastructure"] as const;
+export const workflow = ["Confirm technical requirement", "Shortlist sourcing options", "Coordinate quotation details", "Verify specifications and documents", "Plan shipment and handover", "Support delivery follow-up"] as const;
+export const capabilities = ["Enterprise infrastructure", "Industrial technology", "Medical equipment", "Energy systems", "Global sourcing", "Bangladesh operations"] as const;
+export const representativeBrands = ["Dell Technologies", "Cisco", "Huawei", "Siemens", "ABB", "Schneider Electric", "Mitsubishi Electric", "Omron", "Delta", "Supermicro"] as const;

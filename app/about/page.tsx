@@ -1,0 +1,4 @@
+import type { Metadata } from "next";
+import { PublicPage } from "@/components/pages/PublicPage";
+export const metadata: Metadata = { title: "About", description: "About SEN — Shenzhen Energy & Networks." };
+export default function AboutPage(){return <PublicPage eyebrow="About SEN" title="A sourcing and technology partner connecting China capability with Bangladesh operations" description="SEN is building a scalable platform for public product discovery, quotation support and future operational workflows."><div className="prose max-w-none text-[var(--muted-text)]"><p>We support corporate customers with technical product sourcing, quotation coordination and delivery planning across enterprise infrastructure, energy, medical and industrial categories.</p><p>No partnership or authorization status is implied unless explicitly verified in project documentation.</p></div></PublicPage>}
