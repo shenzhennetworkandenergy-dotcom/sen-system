@@ -1,0 +1,5 @@
+import type { Metadata } from "next";
+import { siteConfig } from "@/config/site";
+import { PublicPage } from "@/components/pages/PublicPage";
+export const metadata: Metadata = { title: "Solutions", description: "SEN public solution areas for enterprise infrastructure, data centers, industrial automation and sourcing." };
+export default function SolutionsPage(){return <PublicPage eyebrow="Solutions" title="Project-oriented technology sourcing solutions" description="SEN supports requirement definition, sourcing coordination and delivery planning for technical projects."><div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">{siteConfig.solutionAreas.map(s=><section id={s.href.split('#')[1]} key={s.href} className="rounded-2xl border border-[var(--border)] p-6"><h2 className="text-xl font-semibold">{s.label}</h2><p className="mt-3 text-sm leading-6 text-[var(--muted-text)]">{s.description}</p><p className="mt-4 text-xs font-bold uppercase tracking-[0.16em] text-[var(--primary)]">{s.useCase}</p></section>)}</div></PublicPage>}

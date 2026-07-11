@@ -1,49 +1,36 @@
 # SEN Homepage
 
-## Purpose
+## Phase 2.5 purpose
 
-The Phase 2 homepage positions SEN — Shenzhen Energy & Networks as an international technology company, enterprise solution provider, industrial equipment supplier and sourcing/procurement partner connecting China-based supply capabilities with Bangladesh operations and global customers.
+The homepage now presents SEN as a premium B2B technology sourcing and infrastructure partner across enterprise servers, networking, medical equipment, energy systems, electrical/electronics and industrial automation.
 
 ## Section order
 
-1. Public header and utility bar
-2. Hero section
-3. Business categories
-4. Company introduction
+1. Premium public header
+2. Dark enterprise hero with server/network visual
+3. Technology showcase for four major categories
+4. Supabase-backed featured products
 5. Featured solutions
-6. Sample featured products preview
-7. Why choose SEN
-8. Industries served
-9. Project workflow
-10. Capability statements
-11. Brands and technologies
-12. Final call to action
-13. Public footer
+6. Why choose SEN
+7. Industries served
+8. Project workflow
+9. Capabilities
+10. Representative brands and technologies
+11. Final CTA
+12. Public footer
 
-## Component structure
+## Navigation
 
-Homepage sections are implemented as reusable components under `components/home`. Shared primitives remain in `components/ui`, and global public chrome remains in `components/layout`.
-
-## Content strategy
-
-Copy is professional and capability-focused. It avoids unsupported claims such as market leadership, guaranteed lowest pricing, official brand partnerships, exact shipment volume or exact customer count.
+Header and footer links now point to implemented public routes or real homepage/page anchors. Search, login and tracking are not shown as active features because those workflows are not implemented in this phase.
 
 ## Brand assets
 
-The public header and footer reference `/public/brand/sen-logo.svg`. App Router icon metadata references `app/icon.svg` and `app/apple-icon.svg`. The provided task did not include an accessible binary attachment in the workspace, so the current SVG is a local SEN wordmark placeholder that should be replaced with the supplied official logo file when available.
+The SEN logo is stored at `public/brand/sen-logo.svg` and is used in the header, mobile navigation and footer. App icon metadata references `app/icon.svg` and `app/apple-icon.svg`, which mirror the brand asset.
 
-## Responsive strategy
+## Product content
 
-Layouts use mobile-first grids, wrapping CTA groups and a compact client-side mobile menu. Decorative hero artwork is CSS/SVG-free layout styling and does not require remote imagery.
+Featured products are loaded through `getFeaturedProducts()` in `lib/data/products.ts`. Supabase rows are displayed only when `published = true` and `featured = true`. Empty and unavailable states are explicit. Demo fallback records are labelled and do not imply live stock.
 
-## Accessibility decisions
+## Visual assets
 
-The page has one `h1`, semantic sections, named navigation landmarks, descriptive logo alt text, visible focus rings, keyboard-accessible links/buttons and an Escape-close mobile navigation dialog. Decorative visuals are hidden from assistive technology where applicable.
-
-## Static placeholders
-
-Featured products are a typed static dataset with no prices, stock claims or live inventory. They are intentionally marked as representative placeholders until Supabase product catalogue data replaces them.
-
-## Future integration
-
-Future Phase 3 work can replace static product data with Supabase catalogue records, add category/detail pages for placeholder routes and expand solution/industry content without changing the homepage component boundaries.
+Local abstract visuals live under `public/images/home/` and are not manufacturer photos or proof of inventory. They can later be replaced with licensed photography or Supabase Storage-hosted product images.

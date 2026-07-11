@@ -8,10 +8,10 @@
   --muted-surface: #f3f4f6;
   --muted-text: #4b5563;
   --border: #d1d5db;
-  --primary: #1f3a5f;
+  --primary: #0f4c81;
   --primary-foreground: #ffffff;
   --secondary: #e5e7eb;
-  --accent: #0f766e;
+  --accent: #00a6a6;
   --success: #047857;
   --warning: #b45309;
   --destructive: #b91c1c;
@@ -76,3 +76,6 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+a { text-underline-offset: 0.2em; }
+::selection { background: #7dd3fc; color: #07111f; }

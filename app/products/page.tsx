@@ -1,0 +1,5 @@
+import type { Metadata } from "next";
+import { technologyShowcase } from "@/components/home/homeData";
+import { PublicPage } from "@/components/pages/PublicPage";
+export const metadata: Metadata = { title: "Products", description: "SEN product category foundation for servers, networking, medical, energy and industrial technology." };
+export default function ProductsPage(){return <PublicPage eyebrow="Products" title="Product categories for enterprise procurement" description="Category foundations for verified product catalogue content. Exact model availability and stock must be confirmed through quotation."><div className="grid gap-5 md:grid-cols-2">{technologyShowcase.map(item=><section id={item.slug} key={item.slug} className="rounded-2xl border border-[var(--border)] p-6"><h2 className="text-2xl font-semibold">{item.title}</h2><p className="mt-3 text-sm leading-6 text-[var(--muted-text)]">{item.description}</p><ul className="mt-5 grid gap-2 text-sm text-[var(--muted-text)]">{item.technologies.map(t=><li key={t}>• {t}</li>)}</ul></section>)}</div></PublicPage>}

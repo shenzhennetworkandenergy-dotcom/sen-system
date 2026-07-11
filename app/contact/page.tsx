@@ -1,0 +1,4 @@
+import type { Metadata } from "next";
+import { PublicPage } from "@/components/pages/PublicPage";
+export const metadata: Metadata = { title: "Contact", description: "Contact SEN for enterprise technology sourcing and procurement enquiries." };
+export default function ContactPage(){return <PublicPage eyebrow="Contact" title="Discuss your technical sourcing requirement" description="Use this foundation page to prepare product categories, specifications, target delivery location and documentation needs before contacting SEN."><div className="grid gap-5 md:grid-cols-3">{["Product category", "Required specifications", "Delivery location"].map(x=><div className="rounded-2xl border border-[var(--border)] p-6" key={x}><h2 className="text-lg font-semibold">{x}</h2><p className="mt-2 text-sm text-[var(--muted-text)]">Include this information for a clearer quotation discussion.</p></div>)}</div></PublicPage>}
