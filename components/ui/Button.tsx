@@ -1,4 +1,8 @@
-import type { AnchorHTMLAttributes, ButtonHTMLAttributes } from "react";
+import type {
+  AnchorHTMLAttributes,
+  ButtonHTMLAttributes,
+  ReactNode,
+} from "react";
 
 import { cn } from "@/lib/utils/cn";
 
@@ -6,18 +10,19 @@ type ButtonVariant = "primary" | "secondary" | "outline";
 type ButtonSize = "sm" | "md" | "lg";
 
 type SharedButtonProps = {
+  children?: ReactNode;
   variant?: ButtonVariant;
   size?: ButtonSize;
   className?: string;
 };
 
 type NativeButtonProps = SharedButtonProps &
-  ButtonHTMLAttributes<HTMLButtonElement> & {
+  Omit<ButtonHTMLAttributes<HTMLButtonElement>, keyof SharedButtonProps> & {
     href?: never;
   };
 
 type LinkButtonProps = SharedButtonProps &
-  AnchorHTMLAttributes<HTMLAnchorElement> & {
+  Omit<AnchorHTMLAttributes<HTMLAnchorElement>, keyof SharedButtonProps> & {
     href: string;
     disabled?: boolean;
   };
@@ -39,31 +44,61 @@ const sizeClasses: Record<ButtonSize, string> = {
   lg: "h-12 px-6 text-base",
 };
 
-export function Button({
-  variant = "primary",
-  size = "md",
-  className,
-  ...props
-}: ButtonProps) {
+export function Button(props: ButtonProps) {
+  const {
+    variant = "primary",
+    size = "md",
+    className,
+  } = props;
+
   const classes = cn(
-    "inline-flex items-center justify-center rounded-[var(--radius-md)] border font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--background)] disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50",
+    "inline-flex items-center justify-center rounded-[var(--radius-md)] border font-medium transition",
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]",
+    "focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--background)]",
+    "disabled:pointer-events-none disabled:opacity-50",
+    "aria-disabled:pointer-events-none aria-disabled:opacity-50",
     variantClasses[variant],
     sizeClasses[size],
     className,
   );
 
-  if ("href" in props && props.href) {
-    const { disabled, ...anchorProps } = props;
+  if (typeof props.href === "string") {
+    const {
+      href,
+      disabled,
+      variant: _variant,
+      size: _size,
+      className: _className,
+      onClick,
+      ...anchorProps
+    } = props;
 
     return (
       <a
+        {...anchorProps}
+        href={disabled ? undefined : href}
         className={classes}
         aria-disabled={disabled || undefined}
         tabIndex={disabled ? -1 : anchorProps.tabIndex}
-        {...anchorProps}
+        onClick={(event) => {
+          if (disabled) {
+            event.preventDefault();
+            return;
+          }
+
+          onClick?.(event);
+        }}
       />
     );
   }
 
-  return <button className={classes} {...props} />;
+  const {
+    href: _href,
+    variant: _variant,
+    size: _size,
+    className: _className,
+    ...buttonProps
+  } = props;
+
+  return <button {...buttonProps} className={classes} />;
 }
