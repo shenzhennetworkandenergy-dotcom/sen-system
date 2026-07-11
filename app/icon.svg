@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="64" viewBox="0 0 220 64" role="img" aria-labelledby="title desc">
+  <title id="title">SEN — Shenzhen Energy &amp; Networks</title>
+  <desc id="desc">SEN wordmark for Shenzhen Energy and Networks.</desc>
+  <rect width="220" height="64" rx="8" fill="none"/>
+  <text x="2" y="41" fill="#12345a" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="800" letter-spacing="2">SEN</text>
+  <path d="M90 18h112M90 32h92M90 46h112" stroke="#1f8a70" stroke-width="3" stroke-linecap="round"/>
+</svg>

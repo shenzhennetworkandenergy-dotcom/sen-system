@@ -63,15 +63,10 @@ export function Button(props: ButtonProps) {
   );
 
   if (typeof props.href === "string") {
-    const {
-      href,
-      disabled,
-      variant: _variant,
-      size: _size,
-      className: _className,
-      onClick,
-      ...anchorProps
-    } = props;
+    const { href, disabled, ...anchorProps } = props;
+    delete anchorProps.variant;
+    delete anchorProps.size;
+    delete anchorProps.className;
 
     return (
       <a
@@ -80,25 +75,14 @@ export function Button(props: ButtonProps) {
         className={classes}
         aria-disabled={disabled || undefined}
         tabIndex={disabled ? -1 : anchorProps.tabIndex}
-        onClick={(event) => {
-          if (disabled) {
-            event.preventDefault();
-            return;
-          }
-
-          onClick?.(event);
-        }}
       />
     );
   }
 
-  const {
-    href: _href,
-    variant: _variant,
-    size: _size,
-    className: _className,
-    ...buttonProps
-  } = props;
+  const buttonProps = { ...props };
+  delete buttonProps.variant;
+  delete buttonProps.size;
+  delete buttonProps.className;
 
   return <button {...buttonProps} className={classes} />;
 }

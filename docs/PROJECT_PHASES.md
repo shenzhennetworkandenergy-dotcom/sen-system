@@ -4,13 +4,13 @@
 
 Local development, Next.js foundation, Supabase connectivity, GitHub workflow and Vercel deployment are established.
 
-## Phase 1: Project Foundation and Design System — In Progress
+## Phase 1: Project Foundation and Design System — Completed
 
 Create foundational documentation, typed public configuration, route constants, shared types, design tokens, reusable UI primitives and layout foundations.
 
-## Phase 2: Public Corporate Website
+## Phase 2: Public Corporate Website — Completed
 
-Build the public company website structure and content pages.
+Build the public company website structure and content pages. The Phase 2 homepage foundation is implemented with public navigation, footer structure, corporate content sections, sample product previews and environment verification moved to `/environment-check`.
 
 ## Phase 3: Product Catalogue
 

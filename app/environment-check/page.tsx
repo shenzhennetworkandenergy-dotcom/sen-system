@@ -1,0 +1,24 @@
+export const dynamic = "force-dynamic";
+
+type CheckResult = { message: string | null; connected: boolean };
+
+async function verifySupabase(environmentConfigured: boolean): Promise<CheckResult> {
+  if (!environmentConfigured) {
+    return { message: null, connected: false };
+  }
+
+  try {
+    const { supabase } = await import("@/lib/supabase/client");
+    const { data, error } = await supabase.from("environment_check").select("message").limit(1).single();
+    return { message: data?.message ?? "Supabase connection verified", connected: !error };
+  } catch {
+    return { message: null, connected: false };
+  }
+}
+
+export default async function EnvironmentCheckPage() {
+  const environmentConfigured = Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY);
+  const result = await verifySupabase(environmentConfigured);
+  return <main className="min-h-screen bg-[var(--muted-surface)] px-6 py-16"><section className="mx-auto max-w-2xl rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-8 shadow-sm"><p className="text-sm font-semibold uppercase tracking-[0.18em] text-[var(--primary)]">Environment check</p><h1 className="mt-3 text-3xl font-semibold text-[var(--foreground)]">SEN Platform Environment Ready</h1><div className="mt-8 space-y-4"><Status label="Next.js running" ok /><Status label="Supabase environment configured" ok={environmentConfigured} /><Status label="Supabase database connected" ok={result.connected} /></div><p className="mt-6 text-sm leading-6 text-[var(--muted-text)]">{result.connected ? result.message : "Supabase connection could not be verified. Check server environment configuration."}</p></section></main>;
+}
+function Status({label,ok}:{label:string;ok:boolean}){return <div className="flex items-center justify-between rounded-[var(--radius-md)] border border-[var(--border)] p-4"><span className="font-medium text-[var(--foreground)]">{label}</span><span className={ok?"text-[var(--success)]":"text-[var(--destructive)]"}>{ok?"Ready":"Unavailable"}</span></div>}
