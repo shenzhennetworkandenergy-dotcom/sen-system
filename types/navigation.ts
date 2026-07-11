@@ -1,8 +1,6 @@
-import type { RoutePath } from "@/lib/constants/routes";
-
 export type NavigationItem = {
   label: string;
-  href: RoutePath;
+  href: string;
   description?: string;
   isExternal?: false;
 };

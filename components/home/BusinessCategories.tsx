@@ -1,0 +1,6 @@
+import { siteConfig } from "@/config/site";
+import { Section } from "@/components/ui/Section";
+import { SectionHeading } from "@/components/ui/SectionHeading";
+
+export function BusinessCategories() { return <Section><SectionHeading eyebrow="Business categories" heading="Four focused supply areas for enterprise and project needs" description="SEN organizes sourcing and delivery support across core technology, power, healthcare and specialized procurement categories." />
+<div className="mt-10 grid gap-5 md:grid-cols-2 xl:grid-cols-4">{siteConfig.businessCategories.map((c)=><a key={c.slug} href={c.href} className="group rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-6 shadow-sm transition hover:-translate-y-1 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"><span className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--primary)]">{c.accent}</span><h3 className="mt-4 text-xl font-semibold text-[var(--foreground)]">{c.label}</h3><p className="mt-3 text-sm leading-6 text-[var(--muted-text)]">{c.description}</p><ul className="mt-5 space-y-2 text-sm text-[var(--muted-text)]">{c.examples.map((e)=><li key={e}>• {e}</li>)}</ul><span className="mt-6 inline-flex text-sm font-semibold text-[var(--primary)]">View category →</span></a>)}</div></Section> }

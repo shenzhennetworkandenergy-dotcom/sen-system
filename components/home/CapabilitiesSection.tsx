@@ -1,0 +1,2 @@
+import { capabilities } from "@/components/home/homeData";import { Section } from "@/components/ui/Section";
+export function CapabilitiesSection(){return <Section className="bg-[var(--primary)] text-[var(--primary-foreground)]"><div className="grid gap-5 md:grid-cols-2 lg:grid-cols-3">{capabilities.map(c=><div className="rounded-[var(--radius-lg)] border border-white/20 p-6" key={c}><p className="text-lg font-semibold">{c}</p></div>)}</div></Section>}

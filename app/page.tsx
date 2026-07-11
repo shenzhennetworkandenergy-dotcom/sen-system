@@ -1,23 +1,17 @@
-import { supabase } from "@/lib/supabase/client";
+import { BusinessCategories } from "@/components/home/BusinessCategories";
+import { BrandsSection } from "@/components/home/BrandsSection";
+import { CapabilitiesSection } from "@/components/home/CapabilitiesSection";
+import { CompanyIntroduction } from "@/components/home/CompanyIntroduction";
+import { FeaturedProducts } from "@/components/home/FeaturedProducts";
+import { FeaturedSolutions } from "@/components/home/FeaturedSolutions";
+import { FinalCta } from "@/components/home/FinalCta";
+import { HeroSection } from "@/components/home/HeroSection";
+import { IndustriesSection } from "@/components/home/IndustriesSection";
+import { ProjectWorkflow } from "@/components/home/ProjectWorkflow";
+import { WhyChooseSen } from "@/components/home/WhyChooseSen";
+import { PublicFooter } from "@/components/layout/PublicFooter";
+import { PublicHeader } from "@/components/layout/PublicHeader";
 
-export default async function Home() {
-  const { data, error } = await supabase
-    .from("environment_check")
-    .select("message")
-    .limit(1)
-    .single();
-
-  return (
-    <main className="flex min-h-screen items-center justify-center">
-      <div className="text-center">
-        <h1 className="text-4xl font-bold">
-          SEN Platform Environment Ready
-        </h1>
-
-        <p className="mt-4 text-lg">
-          {error ? "Supabase connection failed" : data.message}
-        </p>
-      </div>
-    </main>
-  );
+export default function Home() {
+  return <><PublicHeader /><main><HeroSection /><BusinessCategories /><CompanyIntroduction /><FeaturedSolutions /><FeaturedProducts /><WhyChooseSen /><IndustriesSection /><ProjectWorkflow /><CapabilitiesSection /><BrandsSection /><FinalCta /></main><PublicFooter /></>;
 }
