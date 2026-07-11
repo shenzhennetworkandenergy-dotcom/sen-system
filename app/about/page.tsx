@@ -1,0 +1,1 @@
+import { siteConfig } from "@/config/site";import { Section } from "@/components/ui/Section";export default function AboutPage(){return <Section><h1 className="text-4xl font-semibold">About {siteConfig.contact.displayName}</h1><p className="mt-4 max-w-3xl text-lg leading-8 text-[var(--muted-text)]">{siteConfig.description}</p></Section>}

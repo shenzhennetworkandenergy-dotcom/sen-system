@@ -1,15 +1,12 @@
+import Image from "next/image";
 import { siteConfig } from "@/config/site";
 import { Button } from "@/components/ui/Button";
 import { Section } from "@/components/ui/Section";
 
 export function HeroSection() {
-  return <Section className="overflow-hidden bg-[linear-gradient(135deg,var(--background),var(--muted-surface))] py-20 sm:py-28">
-    <div className="grid items-center gap-12 lg:grid-cols-[1.05fr_.95fr]">
-      <div><p className="text-sm font-semibold uppercase tracking-[0.2em] text-[var(--primary)]">Shenzhen Energy & Networks</p>
-      <h1 className="mt-5 max-w-4xl text-4xl font-semibold tracking-tight text-[var(--foreground)] sm:text-6xl">Integrated Technology Solutions for Modern Business</h1>
-      <p className="mt-6 max-w-2xl text-lg leading-8 text-[var(--muted-text)]">SEN supplies and sources enterprise technology, energy, medical and industrial products while supporting customers through China-based procurement, Bangladesh operations and global delivery coordination.</p>
-      <div className="mt-8 flex flex-col gap-3 sm:flex-row"><Button href={siteConfig.publicCtas.exploreProducts.href} size="lg">Explore Products</Button><Button href={siteConfig.publicCtas.requestQuote.href} size="lg" variant="outline">Request a Quote</Button><a className="inline-flex items-center justify-center px-2 text-sm font-semibold text-[var(--primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]" href={siteConfig.publicCtas.learnAbout.href}>Learn About SEN</a></div></div>
-      <div className="relative min-h-[22rem] rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface)] p-6 shadow-sm"><div className="absolute inset-0 bg-[linear-gradient(90deg,transparent_24px,var(--border)_25px,transparent_26px),linear-gradient(0deg,transparent_24px,var(--border)_25px,transparent_26px)] bg-[length:52px_52px] opacity-35" aria-hidden="true"/><div className="relative grid h-full place-items-center"><div className="h-52 w-52 rounded-full border border-[var(--primary)]/30 bg-[radial-gradient(circle,var(--primary)_0_2px,transparent_3px)] bg-[length:28px_28px]" aria-hidden="true"/><div className="absolute rounded-full border border-[var(--accent)]/40 px-5 py-3 text-sm font-semibold text-[var(--foreground)] shadow-sm">Global sourcing network</div></div></div>
-    </div>
+  return <Section className="relative isolate overflow-hidden bg-slate-950 py-24 text-white sm:py-32">
+    <Image src="/images/home/enterprise-rack-servers.webp" alt="Modern enterprise data center with illuminated rack servers and network equipment" fill priority sizes="100vw" className="absolute inset-0 -z-20 object-cover" />
+    <div className="absolute inset-0 -z-10 bg-[linear-gradient(90deg,rgba(2,6,23,.92),rgba(15,23,42,.72),rgba(15,118,110,.28))]" />
+    <div className="max-w-4xl"><p className="text-sm font-semibold uppercase tracking-[0.24em] text-cyan-200">Shenzhen Energy & Networks</p><h1 className="mt-5 text-4xl font-semibold tracking-tight sm:text-6xl">Advanced Infrastructure and Technology, Sourced Globally</h1><p className="mt-6 max-w-3xl text-lg leading-8 text-slate-200">SEN supplies enterprise technology, industrial equipment, medical systems and energy solutions through China-based sourcing, Bangladesh operations and global delivery coordination.</p><div className="mt-9 flex flex-col gap-3 sm:flex-row"><Button href={siteConfig.publicCtas.exploreProducts.href} size="lg">Explore Products</Button><Button href={siteConfig.publicCtas.requestQuote.href} size="lg" variant="outline">Request a Quote</Button><a className="inline-flex items-center justify-center rounded-[var(--radius-md)] px-4 text-sm font-semibold text-cyan-100 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300" href={siteConfig.contact.whatsappLink} target="_blank" rel="noopener noreferrer">WhatsApp SEN</a></div></div>
   </Section>;
 }
