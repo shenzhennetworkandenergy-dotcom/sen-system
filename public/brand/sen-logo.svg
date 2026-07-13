@@ -1,7 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="220" height="64" viewBox="0 0 220 64" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1500" viewBox="0 0 1600 1500" role="img" aria-labelledby="title desc">
   <title id="title">SEN — Shenzhen Energy &amp; Networks</title>
-  <desc id="desc">SEN wordmark for Shenzhen Energy and Networks.</desc>
-  <rect width="220" height="64" rx="8" fill="none"/>
-  <text x="2" y="41" fill="#12345a" font-family="Arial, Helvetica, sans-serif" font-size="38" font-weight="800" letter-spacing="2">SEN</text>
-  <path d="M90 18h112M90 32h92M90 46h112" stroke="#1f8a70" stroke-width="3" stroke-linecap="round"/>
+  <desc id="desc">Official SEN logo for Shenzhen Energy and Networks with crescent arcs and SEN wordmark.</desc>
+  <rect width="1600" height="1500" fill="#fff"/>
+  <path d="M638 205C373 305 190 560 204 847c13 284 220 521 489 589-220-110-365-336-374-589-10-286 113-522 319-642Z" fill="#35bdf2"/>
+  <path d="M1224 438C923 276 553 378 388 671c-164 292-66 656 205 833-198-196-258-505-110-768 149-265 454-384 741-298Z" fill="#35bdf2"/>
+  <text x="520" y="830" fill="#35108a" font-family="Arial, Helvetica, sans-serif" font-size="245" font-weight="900" letter-spacing="8">S</text>
+  <text x="780" y="830" fill="#35bdf2" font-family="Arial, Helvetica, sans-serif" font-size="245" font-weight="900" letter-spacing="8">E</text>
+  <text x="1015" y="830" fill="#35108a" font-family="Arial, Helvetica, sans-serif" font-size="245" font-weight="900" letter-spacing="8">N</text>
+  <text x="700" y="960" fill="#35108a" font-family="Arial, Helvetica, sans-serif" font-size="84" font-weight="900">Shenzhen</text>
+  <text x="1110" y="960" fill="#35bdf2" font-family="Arial, Helvetica, sans-serif" font-size="84" font-weight="900">Energy</text>
+  <text x="780" y="1090" fill="#35108a" font-family="Arial, Helvetica, sans-serif" font-size="86" font-weight="900">And Networks</text>
 </svg>

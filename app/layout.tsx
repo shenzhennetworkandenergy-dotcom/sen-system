@@ -7,7 +7,7 @@ export const metadata: Metadata = {
   title: { default: "SEN — Shenzhen Energy & Networks", template: "%s | SEN" },
   description: siteConfig.description,
   applicationName: siteConfig.company.shortName,
-  icons: { icon: "/icon.svg", apple: "/apple-icon.svg" },
+  icons: { icon: "/brand/sen-logo.svg", apple: "/apple-icon.svg" },
   openGraph: { title: "SEN — Shenzhen Energy & Networks", description: siteConfig.description, type: "website" },
   twitter: { card: "summary", title: "SEN — Shenzhen Energy & Networks", description: siteConfig.description },
   robots: { index: true, follow: true },

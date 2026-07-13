@@ -43,3 +43,11 @@ Add customer-facing authenticated workflows and e-commerce capabilities.
 ## Phase 10: Warranty, Service and Reporting
 
 Implement warranty, service operations and reporting dashboards.
+
+## Phase 3A: Authentication, Central Accounts and Dashboard Foundation — Completed in this branch
+
+Implemented Supabase email/password authentication foundations, customer-only public registration, profile schema migrations, role/status model, first-admin bootstrap SQL, RLS policies, admin user management foundation, customer account foundation, employee workspace placeholder and authentication/database documentation.
+
+## Phase 3B: Granular Employee Permissions and ERP Module Foundations — Planned
+
+Future work will add module permissions, employee activity views and the first operational ERP foundations without weakening the Phase 3A central account model.
