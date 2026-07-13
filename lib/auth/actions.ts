@@ -13,8 +13,43 @@ const statuses: AccountStatus[] = ["active", "suspended", "disabled"];
 const customerTypes: CustomerType[] = ["individual", "company"];
 
 type ActionState = { ok?: boolean; message?: string };
+type SupabaseSafeError = { code?: string; message?: string; status?: number; name?: string };
+
 function value(formData: FormData, key: string) { return String(formData.get(key) ?? "").trim(); }
-function safeAuthMessage() { return "We could not complete that request. Please check your details and try again."; }
+
+function getSafeSupabaseError(error: unknown): SupabaseSafeError {
+  if (!error || typeof error !== "object") return {};
+  const candidate = error as Record<string, unknown>;
+  return {
+    code: typeof candidate.code === "string" ? candidate.code : undefined,
+    message: typeof candidate.message === "string" ? candidate.message : undefined,
+    status: typeof candidate.status === "number" ? candidate.status : undefined,
+    name: typeof candidate.name === "string" ? candidate.name : undefined,
+  };
+}
+
+function logSupabaseAuthError(context: string, error: unknown) {
+  if (process.env.NODE_ENV !== "development") return;
+  const safeError = getSafeSupabaseError(error);
+  console.warn("[Supabase Auth]", context, {
+    code: safeError.code ?? "unknown",
+    message: safeError.message ?? "No message provided.",
+    status: safeError.status,
+    name: safeError.name,
+  });
+}
+
+function authErrorMessage(error: unknown, fallback: string) {
+  const safeError = getSafeSupabaseError(error);
+  const code = safeError.code?.toLowerCase() ?? "";
+  const message = safeError.message?.toLowerCase() ?? "";
+  if (code.includes("invalid_credentials") || message.includes("invalid login credentials")) return "Invalid email or password.";
+  if (code.includes("email_not_confirmed") || message.includes("email not confirmed")) return "Please confirm your email address before signing in. If you need help, contact SEN administration.";
+  if (code.includes("signup_disabled") || message.includes("signups not allowed") || message.includes("signup is disabled")) return "New account registration is currently unavailable. Please contact SEN administration.";
+  if (code.includes("user_already_exists") || message.includes("already registered") || message.includes("already exists")) return "An account already exists for this email. Please sign in or contact SEN administration for help.";
+  if (code.includes("unexpected_failure") || message.includes("database") || message.includes("saving new user")) return "We could not finish creating your account right now. Please try again later or contact SEN administration.";
+  return fallback;
+}
 
 export async function registerAction(_state: ActionState, formData: FormData): Promise<ActionState> {
   const fullName = value(formData, "fullName");
@@ -30,9 +65,19 @@ export async function registerAction(_state: ActionState, formData: FormData): P
   if (!customerTypes.includes(customerType)) return { message: "Please select a valid customer type." };
   if (customerType === "company" && companyName.length < 2) return { message: "Please provide the company name." };
   const supabase = await createSupabaseServerClient();
-  const { error } = await supabase.auth.signUp({ email, password, options: { data: { full_name: fullName, phone, country_code: country.code, country_name: country.name, customer_type: customerType, company_name: customerType === "company" ? companyName : null } } });
-  if (error) return { message: safeAuthMessage() };
-  return { ok: true, message: "Registration submitted. If sign-in is available, continue to your dashboard; otherwise sign in after SEN enables your session." };
+  const { data, error } = await supabase.auth.signUp({ email, password, options: { data: { full_name: fullName, phone, country_code: country.code, country_name: country.name, customer_type: customerType, company_name: customerType === "company" ? companyName : null } } });
+  if (error) {
+    logSupabaseAuthError("signUp failed", error);
+    return { message: authErrorMessage(error, "We could not create your account right now. Please try again later or contact SEN administration.") };
+  }
+  if (!data.user) {
+    logSupabaseAuthError("signUp returned no user", { code: "missing_user", message: "Supabase signUp completed without returning a user object." });
+    return { message: "We could not confirm that your account was created. Please try again later or contact SEN administration." };
+  }
+  if (Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+    return { message: "An account already exists for this email. Please sign in or contact SEN administration for help." };
+  }
+  return { ok: true, message: "Registration completed. Please sign in to continue to your SEN account." };
 }
 
 export async function loginAction(_state: ActionState, formData: FormData): Promise<ActionState> {
@@ -41,7 +86,10 @@ export async function loginAction(_state: ActionState, formData: FormData): Prom
   if (!email.includes("@") || password.length < 1) return { message: "Enter your email and password." };
   const supabase = await createSupabaseServerClient();
   const { error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) return { message: "Invalid email or password." };
+  if (error) {
+    logSupabaseAuthError("signInWithPassword failed", error);
+    return { message: authErrorMessage(error, "We could not sign you in right now. Please try again later or contact SEN administration.") };
+  }
   const profile = await getCurrentProfile();
   if (!profile) return { message: "Your account profile is not ready. Please contact SEN administration." };
   if (profile.status !== "active") return { message: `Your account is ${profile.status}. Please contact SEN administration for help.` };
