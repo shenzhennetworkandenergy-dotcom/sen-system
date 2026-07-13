@@ -8,9 +8,14 @@ export const routes = {
   requestQuote: "/request-quote",
   search: "/search",
   login: "/login",
-  customerPortal: "/portal",
+  register: "/register",
+  forgotPassword: "/forgot-password",
+  account: "/account",
+  admin: "/admin",
+  employee: "/employee",
+  customerPortal: "/account",
   environmentCheck: "/environment-check",
-  erp: "/erp",
+  erp: "/admin",
 } as const;
 
 export type RouteKey = keyof typeof routes;

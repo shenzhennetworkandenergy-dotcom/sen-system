@@ -51,3 +51,11 @@ Future inventory architecture should support multiple warehouses, countries, bus
 - GitHub is the source of truth for source control and review.
 - Vercel is the deployment infrastructure for the Next.js application.
 - Supabase is the backend infrastructure for database and future authentication capabilities.
+
+## Phase 3A Authentication and Account Foundation
+
+Phase 3A introduces Supabase Auth for email/password sessions and a central `public.profiles` account table. All public registrations create `customer` accounts with `active` status. Role-sensitive access is centralized in `lib/auth/server.ts`, while privileged account updates use server-only code and `SUPABASE_SERVICE_ROLE_KEY`.
+
+Protected application boundaries now include `/account` for customers, `/employee` for employees and `/admin` for administrators. Middleware refreshes Supabase sessions, but protected pages also perform server-side authorization checks. Database RLS remains the primary data boundary for profile and audit-log access.
+
+The admin dashboard foundation includes real account counts and user role/status management. ERP module functionality, granular permissions and employee activity reporting remain Phase 3B work.
