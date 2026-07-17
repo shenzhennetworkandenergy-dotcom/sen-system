@@ -5,13 +5,24 @@ export const routes = {
   industries: "/industries",
   about: "/about",
   contact: "/contact",
-  requestQuote: "/request-quote",
   search: "/search",
+  requestQuote: "/request-quote",
   login: "/login",
-  customerPortal: "/portal",
+  register: "/register",
+  forgotPassword: "/forgot-password",
+  logout: "/logout",
+  account: "/account",
+  employee: "/employee",
+  admin: "/admin",
+  adminUsers: "/admin/users",
   environmentCheck: "/environment-check",
-  erp: "/erp",
 } as const;
 
-export type RouteKey = keyof typeof routes;
-export type RoutePath = (typeof routes)[RouteKey] | `/${string}`;
+export type AccountRole = "customer" | "employee" | "admin";
+export type AccountStatus = "active" | "suspended" | "disabled";
+
+export function dashboardPathForRole(role?: string | null) {
+  if (role === "admin") return routes.admin;
+  if (role === "employee") return routes.employee;
+  return routes.account;
+}

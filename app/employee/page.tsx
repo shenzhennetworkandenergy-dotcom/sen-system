@@ -1,0 +1,3 @@
+import { requireProfile } from "@/lib/auth/session";
+import { DashboardShell } from "@/components/dashboard/Shell";
+export default async function EmployeePage(){ await requireProfile(["employee", "admin"]); return <DashboardShell title="Employee Workspace" subtitle="Phase 3A employee workspace foundation with protected access."><div className="grid gap-4 md:grid-cols-3">{["Assigned work", "Customer support", "Internal activity"].map((item)=><section key={item} className="rounded-xl border bg-[var(--surface)] p-6"><h2 className="font-semibold">{item}</h2><p className="mt-2 text-sm text-[var(--muted-text)]">Workspace module placeholder.</p></section>)}</div></DashboardShell> }
