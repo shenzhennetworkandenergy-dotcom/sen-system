@@ -12,6 +12,8 @@ import { WhyChooseSen } from "@/components/home/WhyChooseSen";
 import { PublicFooter } from "@/components/layout/PublicFooter";
 import { PublicHeader } from "@/components/layout/PublicHeader";
 
+export const dynamic = "force-dynamic";
+
 export default function Home() {
   return <><PublicHeader /><main><HeroSection /><BusinessCategories /><CompanyIntroduction /><FeaturedSolutions /><FeaturedProducts /><WhyChooseSen /><IndustriesSection /><ProjectWorkflow /><CapabilitiesSection /><BrandsSection /><FinalCta /></main><PublicFooter /></>;
 }
