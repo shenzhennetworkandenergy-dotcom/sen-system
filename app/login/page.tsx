@@ -1,0 +1,4 @@
+import Link from "next/link";
+import { redirectAuthenticatedUser } from "@/lib/auth/session";
+import { loginAction } from "./actions";
+export default async function LoginPage() { await redirectAuthenticatedUser(); return <main className="mx-auto max-w-md px-6 py-16"><h1 className="text-3xl font-bold">Login</h1><form action={loginAction} className="mt-8 grid gap-4"><label>Email<input name="email" type="email" required className="mt-1 w-full rounded border p-3" /></label><label>Password<input name="password" type="password" required className="mt-1 w-full rounded border p-3" /></label><button className="rounded bg-[var(--primary)] px-4 py-3 text-[var(--primary-foreground)]">Login</button></form><p className="mt-4 text-sm"><Link href="/forgot-password">Forgot password?</Link> · <Link href="/register">Create account</Link></p></main>; }
