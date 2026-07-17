@@ -20,6 +20,10 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Environment Variables
+
+Supabase browser access requires `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`. Server-side admin operations use `SUPABASE_SECRET_KEY` for the new `sb_secret_...` API key format, with `SUPABASE_SERVICE_ROLE_KEY` still supported as a legacy fallback. Never expose either admin key through `NEXT_PUBLIC_` variables.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
