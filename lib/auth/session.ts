@@ -4,7 +4,7 @@ import { dashboardPathForRole, routes, type AccountRole, type AccountStatus } fr
 
 export type Profile = {
   id: string; email: string | null; full_name: string | null; role: AccountRole; status: AccountStatus;
-  phone: string | null; country: string | null; customer_type: "individual" | "company" | null; company_name: string | null;
+  phone: string | null; country_code: string | null; country_name: string | null; customer_type: "individual" | "company" | null; company_name: string | null;
 };
 
 function logSafeAuthDiagnostic(message: string, details?: Record<string, string | null | undefined>) {
