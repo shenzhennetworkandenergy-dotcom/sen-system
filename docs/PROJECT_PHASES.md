@@ -1,45 +1,27 @@
 # SEN Platform Project Phases
 
-## Phase 0: Environment Setup — Completed
+## Completed foundations
 
-Local development, Next.js foundation, Supabase connectivity, GitHub workflow and Vercel deployment are established.
+- **Phase 0 — Environment setup:** local development, GitHub, Vercel and Supabase connectivity.
+- **Phase 1 — Project foundation and design system:** shared architecture, UI primitives and project standards.
+- **Phase 2 — Public corporate website:** enterprise homepage and public content foundation.
+- **Phase 3A — Authentication and accounts:** Supabase registration, login/logout, customer profiles, customer/employee/admin roles, account statuses, protected dashboards and admin account management.
 
-## Phase 1: Project Foundation and Design System — Completed
+## Current phase
 
-Create foundational documentation, typed public configuration, route constants, shared types, design tokens, reusable UI primitives and layout foundations.
+### Phase 3B — Permissions and activity foundation
 
-## Phase 2: Public Corporate Website — Completed
+Granular employee permission keys, conservative templates, individual overrides, centralized route guards, account administration, safe audit logging, employee activity and administrator Team Activity.
 
-Build the public company website structure and content pages. The Phase 2 homepage foundation is implemented with public navigation, footer structure, corporate content sections, sample product previews and environment verification moved to `/environment-check`.
+Phase 3B defines access keys for future ERP modules but does not implement their business workflows or create mock operational data.
 
-## Phase 3: Product Catalogue
+## Future phases
 
-Introduce product discovery, category structure and product presentation.
+1. Product catalogue and product administration.
+2. Inventory, warehouses, stock movements and serial tracking.
+3. Suppliers, purchasing and China-to-Bangladesh logistics.
+4. Sales, CRM and quotations.
+5. Customer e-commerce, orders and service workflows.
+6. Accounting, HR, manufacturing, projects, support and reporting.
 
-## Phase 4: Database Architecture
-
-Design and version database schemas, relationships and migrations.
-
-## Phase 5: Authentication and Permissions
-
-Add centralized authentication, authorization and role permissions.
-
-## Phase 6: Inventory and Warehouses
-
-Implement inventory, warehouse locations, stock movement and serial-number foundations.
-
-## Phase 7: Purchasing and Suppliers
-
-Add supplier management and purchasing workflows.
-
-## Phase 8: Sales, CRM and Quotations
-
-Implement sales pipeline, CRM records and quotation workflows.
-
-## Phase 9: E-commerce and Customer Portal
-
-Add customer-facing authenticated workflows and e-commerce capabilities.
-
-## Phase 10: Warranty, Service and Reporting
-
-Implement warranty, service operations and reporting dashboards.
+Future routes must use the Phase 3B permission catalogue and server guards before accessing operational data.

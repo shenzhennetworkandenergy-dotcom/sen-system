@@ -165,7 +165,7 @@ $$;
 
 create or replace function public.effective_permissions_for_profile(requested_profile_id uuid)
 returns table(permission_key text) language sql stable security definer set search_path = '' as $$
-  with target as (select role,status from public.profiles where id=requested_profile_id)
+  with target as (select role,status from public.profiles where id=requested_profile_id and (auth.uid()=requested_profile_id or public.is_current_user_admin() or auth.role()='service_role'))
   select p.key from public.permissions p,target t where t.status='active' and t.role='admin' and p.is_active
   union
   select p.key
@@ -192,6 +192,19 @@ revoke all on function public.current_user_has_permission(text) from public,anon
 grant execute on function public.current_user_has_permission(text) to authenticated,service_role;
 revoke all on function public.is_current_user_admin() from public,anon;
 grant execute on function public.is_current_user_admin() to authenticated,service_role;
+
+create or replace function public.protect_profile_access_fields()
+returns trigger language plpgsql set search_path = '' as $$
+begin
+  if auth.role() is distinct from 'service_role' and (new.role is distinct from old.role or new.status is distinct from old.status) then
+    raise exception 'Role and status may only be changed through authorized account administration';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists protect_profile_access_fields on public.profiles;
+create trigger protect_profile_access_fields before update on public.profiles for each row execute function public.protect_profile_access_fields();
 
 create or replace function public.admin_update_profile_access(
   actor_profile_id uuid,
