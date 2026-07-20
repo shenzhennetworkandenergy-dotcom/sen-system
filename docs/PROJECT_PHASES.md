@@ -7,7 +7,7 @@
 - **Phase 2 — Public corporate website:** enterprise homepage and public content foundation.
 - **Phase 3A — Authentication and accounts:** Supabase registration, login/logout, customer profiles, customer/employee/admin roles, account statuses, protected dashboards and admin account management.
 
-## Current phase
+## Completed permissions foundation
 
 ### Phase 3B — Permissions and activity foundation
 
@@ -15,13 +15,18 @@ Granular employee permission keys, conservative templates, individual overrides,
 
 Phase 3B defines access keys for future ERP modules but does not implement their business workflows or create mock operational data.
 
+## Current phase
+
+### Product and inventory administration
+
+The private ERP now includes product administration, categories, brands, attributes, variations, multi-warehouse inventory, atomic stock adjustments and transfers, movement history, serial-number administration, and CSV export. These features reuse Phase 3B permission guards and audit logging. Public catalogue, import, purchasing, shipments, sales, and checkout remain out of scope.
+
 ## Future phases
 
-1. Product catalogue and product administration.
-2. Inventory, warehouses, stock movements and serial tracking.
-3. Suppliers, purchasing and China-to-Bangladesh logistics.
-4. Sales, CRM and quotations.
-5. Customer e-commerce, orders and service workflows.
-6. Accounting, HR, manufacturing, projects, support and reporting.
+1. Validated product/inventory CSV import and public product catalogue.
+2. Suppliers, purchasing and China-to-Bangladesh logistics.
+3. Sales, CRM and quotations.
+4. Customer e-commerce, orders and service workflows.
+5. Accounting, HR, manufacturing, projects, support and reporting.
 
 Future routes must use the Phase 3B permission catalogue and server guards before accessing operational data.

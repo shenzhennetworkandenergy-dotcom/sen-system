@@ -16,7 +16,7 @@ The customer portal will eventually own authenticated customer workflows such as
 
 ### ERP
 
-The ERP boundary will eventually own internal operations such as inventory, warehouses, purchasing, suppliers, CRM, sales, delivery, warranty and reporting. ERP pages must remain separate from public marketing pages and must be protected by future authentication and role permissions.
+The ERP boundary now owns private product and inventory administration. Purchasing, suppliers, CRM, sales, delivery and reporting remain planned. ERP pages are separate from public marketing routes and use the Phase 3B server permission guards.
 
 ## Shared Application Foundations
 
@@ -42,9 +42,13 @@ Only explicitly public variables prefixed for browser use may be read by client-
 
 Authentication, authorization and role permissions are intentionally not implemented in Phase 1. Future portal and ERP work should define a central permission model before adding protected routes or business operations.
 
-## Warehouse and Serial-Number Direction
+## Product and inventory architecture
 
-Future inventory architecture should support multiple warehouses, countries, business units, stock locations and serial-number tracking. Serial-number data should be modeled as operational records connected to products, inventory movements, warranty and delivery records rather than scattered across unrelated tables.
+Catalogue data is normalized across products, categories, brands, tags, reusable attributes, variations, media metadata, and assignments. `lib/inventory/products.ts` provides bounded product queries, while `lib/inventory/stock.ts` is the single application stock-status calculation.
+
+Inventory is movement-led. Warehouse balances are never directly edited by browser clients; service-role-only, fixed-search-path RPCs atomically validate permission, update balances and serialized units, create immutable movement rows, and write audit events. RLS allows authorized reads but no arbitrary browser stock writes. Reservations and future movement types are schema foundations only.
+
+The private `product-media` Storage bucket accepts bounded JPG, PNG, WebP, and PDF uploads through secured server actions. Storage paths are generated server-side.
 
 ## Infrastructure
 
