@@ -1,0 +1,127 @@
+From 1bdb4e0494c55af4a49bf50de6fdae7e40a1f729 Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Mon, 20 Jul 2026 02:28:43 +0000
+Subject: [PATCH] Fix protected admin navigation cache behavior
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+### Motivation
+- Client-side Next.js `<Link>` navigation could reuse a stale RSC redirect for protected admin routes and cause authenticated users to be redirected to `/login` when navigating from `/admin` to `/admin/users` client-side.
+- The change replaces fragile client-router transitions for authentication-sensitive dashboard routes with full-document navigations and forces request-time rendering for admin user routes to ensure current auth state is always observed.
+
+### Description
+- Replace admin sidebar client-router `Link` usage with full-document anchors in `components/dashboard/Shell.tsx` and `components/layout/DashboardShell.tsx` so sidebar items navigate with a full document load.
+- Replace the `/admin` page “Users” button `Link` with an `<a href={routes.adminUsers}>` anchor in `app/admin/page.tsx`.
+- Convert each user-name detail link on the users table from `Link` to `<a href={`/admin/users/${u.id}`}>` in `app/admin/users/page.tsx`.
+- Mark `app/admin/users/page.tsx` and `app/admin/users/[id]/page.tsx` request-specific by adding `export const dynamic = "force-dynamic"` and calling `await connection()` before `await requireProfile(["admin"])`, and preserve the existing `requireProfile` guards.
+- Add safe Supabase error handling in `app/admin/users/page.tsx` by inspecting `{ data, error }`, logging a non-sensitive server-side diagnostic when the query fails, and rendering a clear admin-facing error message instead of redirecting to login.
+- Files changed: `components/dashboard/Shell.tsx`, `components/layout/DashboardShell.tsx`, `app/admin/page.tsx`, `app/admin/users/page.tsx`, `app/admin/users/[id]/page.tsx`.
+
+Protected navigation converted from Next.js `Link` to full-document anchors (explicit list):
+- Admin sidebar navigation in `components/dashboard/Shell.tsx` for: Overview, Users, Employees, Employee Activity, CRM, Sales, Inventory, Purchasing, Accounting, HR, Manufacturing, Projects, Support, Reports, AI Assistant, Settings.
+- Admin sidebar navigation in `components/layout/DashboardShell.tsx` for the same list of admin items.
+- `/admin` page “Users” button in `app/admin/page.tsx` now uses `<a href={routes.adminUsers}>`.
+- Each user-name row link on the users table in `app/admin/users/page.tsx` now uses `<a href={`/admin/users/${u.id}`}>`.
+
+### Testing
+- Ran `npm run lint` and the lint step completed successfully.
+- Ran `npm run build` and the Next.js production build completed successfully with the admin routes present in the build output.
+---
+ app/admin/page.tsx                   |  3 +--
+ app/admin/users/[id]/page.tsx        |  5 ++++-
+ app/admin/users/page.tsx             | 25 +++++++++++++++++++++++--
+ components/dashboard/Shell.tsx       |  2 +-
+ components/layout/DashboardShell.tsx |  2 +-
+ 5 files changed, 30 insertions(+), 7 deletions(-)
+
+diff --git a/app/admin/page.tsx b/app/admin/page.tsx
+index 3c05515..903c0a5 100644
+--- a/app/admin/page.tsx
++++ b/app/admin/page.tsx
+@@ -1,7 +1,6 @@
+-import Link from "next/link";
+ import { requireProfile } from "@/lib/auth/session";
+ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+ import { DashboardShell } from "@/components/dashboard/Shell";
+ import { routes } from "@/lib/constants/routes";
+ const modules = ["Employees", "Employee Activity", "CRM", "Sales", "Inventory", "Purchasing", "Accounting", "HR", "Manufacturing", "Projects", "Support", "Reports", "AI Assistant", "Settings"];
+-export default async function AdminPage(){ await requireProfile(["admin"]); const supabase = createSupabaseAdminClient(); const stats = await Promise.all(["profiles", "profiles", "profiles", "profiles", "profiles", "profiles"].map((table,i)=> supabase.from(table).select("id",{count:"exact",head:true}).match(i===1?{role:"customer"}:i===2?{role:"employee"}:i===3?{role:"admin"}:i===4?{status:"active"}:i===5?{status:"suspended"}:{}))); const labels=["Total Accounts","Customer count","Employee count","Admin count","Active Accounts count","Suspended Accounts count"]; return <DashboardShell admin title="Admin Overview" subtitle="Manage SEN operations, customers, employees, content and account governance."><section className="grid gap-4 md:grid-cols-3">{labels.map((label,i)=><div key={label} className="rounded-xl border bg-[var(--surface)] p-6"><p className="text-sm text-[var(--muted-text)]">{label}</p><p className="mt-2 text-3xl font-bold">{stats[i].count ?? 0}</p></div>)}</section><Link href={routes.adminUsers} className="mt-6 inline-block rounded-lg border px-4 py-3 font-semibold">Users</Link><section className="mt-6 grid gap-4 md:grid-cols-3">{modules.map((m)=><div key={m} className="rounded-xl border bg-[var(--surface)] p-5"><h2 className="font-semibold">{m}</h2><p className="mt-2 text-sm text-[var(--muted-text)]">Phase 3B dashboard module placeholder.</p></div>)}</section></DashboardShell> }
++export default async function AdminPage(){ await requireProfile(["admin"]); const supabase = createSupabaseAdminClient(); const stats = await Promise.all(["profiles", "profiles", "profiles", "profiles", "profiles", "profiles"].map((table,i)=> supabase.from(table).select("id",{count:"exact",head:true}).match(i===1?{role:"customer"}:i===2?{role:"employee"}:i===3?{role:"admin"}:i===4?{status:"active"}:i===5?{status:"suspended"}:{}))); const labels=["Total Accounts","Customer count","Employee count","Admin count","Active Accounts count","Suspended Accounts count"]; return <DashboardShell admin title="Admin Overview" subtitle="Manage SEN operations, customers, employees, content and account governance."><section className="grid gap-4 md:grid-cols-3">{labels.map((label,i)=><div key={label} className="rounded-xl border bg-[var(--surface)] p-6"><p className="text-sm text-[var(--muted-text)]">{label}</p><p className="mt-2 text-3xl font-bold">{stats[i].count ?? 0}</p></div>)}</section><a href={routes.adminUsers} className="mt-6 inline-block rounded-lg border px-4 py-3 font-semibold">Users</a><section className="mt-6 grid gap-4 md:grid-cols-3">{modules.map((m)=><div key={m} className="rounded-xl border bg-[var(--surface)] p-5"><h2 className="font-semibold">{m}</h2><p className="mt-2 text-sm text-[var(--muted-text)]">Phase 3B dashboard module placeholder.</p></div>)}</section></DashboardShell> }
+diff --git a/app/admin/users/[id]/page.tsx b/app/admin/users/[id]/page.tsx
+index 9ebf1da..9374efe 100644
+--- a/app/admin/users/[id]/page.tsx
++++ b/app/admin/users/[id]/page.tsx
+@@ -1,6 +1,9 @@
+ import { notFound } from "next/navigation";
++import { connection } from "next/server";
+ import { requireProfile } from "@/lib/auth/session";
+ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+ import { DashboardShell } from "@/components/dashboard/Shell";
+ import { updateUserAction } from "./actions";
+-export default async function AdminUserDetailPage({ params }: { params: Promise<{ id: string }> }){ await requireProfile(["admin"]); const {id}=await params; const supabase=createSupabaseAdminClient(); const {data:user}=await supabase.from("profiles").select("*").eq("id",id).maybeSingle(); if(!user) notFound(); const action=updateUserAction.bind(null,id); return <DashboardShell admin title={user.full_name ?? "User detail"} subtitle="Review profile details, role/status management, final-active-admin protection and audit logging."><section className="grid gap-6 lg:grid-cols-2"><div className="rounded-xl border bg-[var(--surface)] p-6"><h2 className="text-xl font-semibold">Profile</h2><dl className="mt-4 grid gap-2"><dt>Email</dt><dd>{user.email}</dd><dt>Phone</dt><dd>{user.phone ?? "—"}</dd><dt>Country</dt><dd>{user.country ?? "—"}</dd><dt>Customer type</dt><dd>{user.customer_type ?? "—"}</dd><dt>Company</dt><dd>{user.company_name ?? "—"}</dd></dl></div><form action={action} className="rounded-xl border bg-[var(--surface)] p-6"><h2 className="text-xl font-semibold">Role and status</h2><label className="mt-4 block">Role<select name="role" defaultValue={user.role} className="mt-1 w-full rounded border p-3"><option>customer</option><option>employee</option><option>admin</option></select></label><label className="mt-4 block">Status<select name="status" defaultValue={user.status} className="mt-1 w-full rounded border p-3"><option>active</option><option>suspended</option><option>disabled</option></select></label><button className="mt-4 rounded bg-[var(--primary)] px-4 py-3 text-[var(--primary-foreground)]">Save changes</button><p className="mt-3 text-sm text-[var(--muted-text)]">The final active admin cannot be downgraded or suspended.</p></form></section></DashboardShell> }
++
++export const dynamic = "force-dynamic";
++export default async function AdminUserDetailPage({ params }: { params: Promise<{ id: string }> }){ await connection(); await requireProfile(["admin"]); const {id}=await params; const supabase=createSupabaseAdminClient(); const {data:user}=await supabase.from("profiles").select("*").eq("id",id).maybeSingle(); if(!user) notFound(); const action=updateUserAction.bind(null,id); return <DashboardShell admin title={user.full_name ?? "User detail"} subtitle="Review profile details, role/status management, final-active-admin protection and audit logging."><section className="grid gap-6 lg:grid-cols-2"><div className="rounded-xl border bg-[var(--surface)] p-6"><h2 className="text-xl font-semibold">Profile</h2><dl className="mt-4 grid gap-2"><dt>Email</dt><dd>{user.email}</dd><dt>Phone</dt><dd>{user.phone ?? "—"}</dd><dt>Country</dt><dd>{user.country ?? "—"}</dd><dt>Customer type</dt><dd>{user.customer_type ?? "—"}</dd><dt>Company</dt><dd>{user.company_name ?? "—"}</dd></dl></div><form action={action} className="rounded-xl border bg-[var(--surface)] p-6"><h2 className="text-xl font-semibold">Role and status</h2><label className="mt-4 block">Role<select name="role" defaultValue={user.role} className="mt-1 w-full rounded border p-3"><option>customer</option><option>employee</option><option>admin</option></select></label><label className="mt-4 block">Status<select name="status" defaultValue={user.status} className="mt-1 w-full rounded border p-3"><option>active</option><option>suspended</option><option>disabled</option></select></label><button className="mt-4 rounded bg-[var(--primary)] px-4 py-3 text-[var(--primary-foreground)]">Save changes</button><p className="mt-3 text-sm text-[var(--muted-text)]">The final active admin cannot be downgraded or suspended.</p></form></section></DashboardShell> }
+diff --git a/app/admin/users/page.tsx b/app/admin/users/page.tsx
+index a64366e..9c9cd53 100644
+--- a/app/admin/users/page.tsx
++++ b/app/admin/users/page.tsx
+@@ -1,5 +1,26 @@
+-import Link from "next/link";
++import { connection } from "next/server";
+ import { requireProfile } from "@/lib/auth/session";
+ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+ import { DashboardShell } from "@/components/dashboard/Shell";
+-export default async function AdminUsersPage({ searchParams }: { searchParams: Promise<{ q?: string; role?: string; status?: string }> }){ await requireProfile(["admin"]); const params=await searchParams; const supabase=createSupabaseAdminClient(); let query=supabase.from("profiles").select("id,email,full_name,role,status,country,customer_type,updated_at").order("updated_at",{ascending:false}).limit(100); if(params.role) query=query.eq("role",params.role); if(params.status) query=query.eq("status",params.status); if(params.q) query=query.or(`email.ilike.%${params.q}%,full_name.ilike.%${params.q}%`); const {data}=await query; const users=data ?? []; return <DashboardShell admin title="Users" subtitle="Search, filter and manage account roles and statuses."><form className="mb-6 flex flex-wrap gap-3"><input name="q" placeholder="Search users" defaultValue={params.q} className="rounded border p-2"/><select name="role" defaultValue={params.role} className="rounded border p-2"><option value="">All roles</option><option>customer</option><option>employee</option><option>admin</option></select><select name="status" defaultValue={params.status} className="rounded border p-2"><option value="">All statuses</option><option>active</option><option>suspended</option><option>disabled</option></select><button className="rounded border px-4">Filter</button></form><div className="overflow-hidden rounded-xl border bg-[var(--surface)]"><table className="w-full text-left text-sm"><thead><tr className="border-b"><th className="p-3">Name</th><th>Email</th><th>Role</th><th>Status</th><th>Country</th></tr></thead><tbody>{users.map((u)=><tr key={u.id} className="border-b"><td className="p-3"><Link href={`/admin/users/${u.id}`} className="font-semibold">{u.full_name ?? "Unnamed"}</Link></td><td>{u.email}</td><td>{u.role}</td><td>{u.status}</td><td>{u.country}</td></tr>)}</tbody></table></div></DashboardShell> }
++
++export const dynamic = "force-dynamic";
++
++export default async function AdminUsersPage({ searchParams }: { searchParams: Promise<{ q?: string; role?: string; status?: string }> }){
++  await connection();
++  await requireProfile(["admin"]);
++  const params=await searchParams;
++  const supabase=createSupabaseAdminClient();
++  let query=supabase.from("profiles").select("id,email,full_name,role,status,country,customer_type,updated_at").order("updated_at",{ascending:false}).limit(100);
++  if(params.role) query=query.eq("role",params.role);
++  if(params.status) query=query.eq("status",params.status);
++  if(params.q) query=query.or(`email.ilike.%${params.q}%,full_name.ilike.%${params.q}%`);
++  const {data,error}=await query;
++
++  if(error){
++    console.error("Admin users query failed", { code: error.code, message: error.message });
++    return <DashboardShell admin title="Users" subtitle="Search, filter and manage account roles and statuses."><div className="rounded-xl border border-red-200 bg-red-50 p-6 text-red-900"><h2 className="text-lg font-semibold">Unable to load users</h2><p className="mt-2 text-sm">Your admin session is still active, but the user list could not be loaded. Please try again or contact support if the problem continues.</p></div></DashboardShell>;
++  }
++
++  const users=data ?? [];
++  return <DashboardShell admin title="Users" subtitle="Search, filter and manage account roles and statuses."><form className="mb-6 flex flex-wrap gap-3"><input name="q" placeholder="Search users" defaultValue={params.q} className="rounded border p-2"/><select name="role" defaultValue={params.role} className="rounded border p-2"><option value="">All roles</option><option>customer</option><option>employee</option><option>admin</option></select><select name="status" defaultValue={params.status} className="rounded border p-2"><option value="">All statuses</option><option>active</option><option>suspended</option><option>disabled</option></select><button className="rounded border px-4">Filter</button></form><div className="overflow-hidden rounded-xl border bg-[var(--surface)]"><table className="w-full text-left text-sm"><thead><tr className="border-b"><th className="p-3">Name</th><th>Email</th><th>Role</th><th>Status</th><th>Country</th></tr></thead><tbody>{users.map((u)=><tr key={u.id} className="border-b"><td className="p-3"><a href={`/admin/users/${u.id}`} className="font-semibold">{u.full_name ?? "Unnamed"}</a></td><td>{u.email}</td><td>{u.role}</td><td>{u.status}</td><td>{u.country}</td></tr>)}</tbody></table></div></DashboardShell>;
++}
+diff --git a/components/dashboard/Shell.tsx b/components/dashboard/Shell.tsx
+index e4ef277..8e6a0da 100644
+--- a/components/dashboard/Shell.tsx
++++ b/components/dashboard/Shell.tsx
+@@ -8,7 +8,7 @@ export function DashboardShell({ title, subtitle, children, admin = false }: { t
+   return <div className="min-h-screen bg-[var(--muted-surface)]">
+     <header className="border-b border-[var(--border)] bg-[var(--surface)]"><div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4"><Link href={routes.home} className="flex items-center gap-3"><Image src="/brand/sen-logo.svg" alt="SEN logo" width={137} height={40} className="h-10 w-auto" priority /><span className="font-semibold">Dashboard</span></Link><nav className="flex gap-4 text-sm font-semibold"><Link href={routes.home}>View Public Website</Link><Link href={routes.logout}>Logout</Link></nav></div></header>
+     <div className="mx-auto grid max-w-7xl gap-6 px-6 py-8 lg:grid-cols-[16rem_1fr]">
+-      {admin ? <aside className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4"><nav className="space-y-1 text-sm">{adminItems.map((item) => <Link key={item} href={item === "Users" ? routes.adminUsers : routes.admin} className="block rounded-lg px-3 py-2 font-medium hover:bg-[var(--muted-surface)]">{item}</Link>)}</nav></aside> : null}
++      {admin ? <aside className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4"><nav className="space-y-1 text-sm">{adminItems.map((item) => <a key={item} href={item === "Users" ? routes.adminUsers : routes.admin} className="block rounded-lg px-3 py-2 font-medium hover:bg-[var(--muted-surface)]">{item}</a>)}</nav></aside> : null}
+       <main className={admin ? "" : "lg:col-span-2"}><div className="mb-6"><h1 className="text-3xl font-bold">{title}</h1><p className="mt-2 text-[var(--muted-text)]">{subtitle}</p></div>{children}</main>
+     </div>
+   </div>;
+diff --git a/components/layout/DashboardShell.tsx b/components/layout/DashboardShell.tsx
+index e4ef277..8e6a0da 100644
+--- a/components/layout/DashboardShell.tsx
++++ b/components/layout/DashboardShell.tsx
+@@ -8,7 +8,7 @@ export function DashboardShell({ title, subtitle, children, admin = false }: { t
+   return <div className="min-h-screen bg-[var(--muted-surface)]">
+     <header className="border-b border-[var(--border)] bg-[var(--surface)]"><div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4"><Link href={routes.home} className="flex items-center gap-3"><Image src="/brand/sen-logo.svg" alt="SEN logo" width={137} height={40} className="h-10 w-auto" priority /><span className="font-semibold">Dashboard</span></Link><nav className="flex gap-4 text-sm font-semibold"><Link href={routes.home}>View Public Website</Link><Link href={routes.logout}>Logout</Link></nav></div></header>
+     <div className="mx-auto grid max-w-7xl gap-6 px-6 py-8 lg:grid-cols-[16rem_1fr]">
+-      {admin ? <aside className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4"><nav className="space-y-1 text-sm">{adminItems.map((item) => <Link key={item} href={item === "Users" ? routes.adminUsers : routes.admin} className="block rounded-lg px-3 py-2 font-medium hover:bg-[var(--muted-surface)]">{item}</Link>)}</nav></aside> : null}
++      {admin ? <aside className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-4"><nav className="space-y-1 text-sm">{adminItems.map((item) => <a key={item} href={item === "Users" ? routes.adminUsers : routes.admin} className="block rounded-lg px-3 py-2 font-medium hover:bg-[var(--muted-surface)]">{item}</a>)}</nav></aside> : null}
+       <main className={admin ? "" : "lg:col-span-2"}><div className="mb-6"><h1 className="text-3xl font-bold">{title}</h1><p className="mt-2 text-[var(--muted-text)]">{subtitle}</p></div>{children}</main>
+     </div>
+   </div>;
+-- 
+2.43.0
+
