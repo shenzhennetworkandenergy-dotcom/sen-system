@@ -15,6 +15,9 @@ export const routes = {
   employee: "/employee",
   admin: "/admin",
   adminUsers: "/admin/users",
+  adminPermissions: "/admin/permissions",
+  adminActivity: "/admin/activity",
+  employeeActivity: "/employee/activity",
   environmentCheck: "/environment-check",
 } as const;
 
