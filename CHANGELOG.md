@@ -37,3 +37,4 @@
 - Added Supabase-backed simple and variable products, categories, brands, attributes, media metadata and safe bulk archive operations.
 - Added multi-warehouse balances, atomic adjustments and transfers, movement history, serial tracking, inventory CSV export and permission-aware routes.
 - Added additive inventory migrations, strict RLS, service-role-only stock RPCs, centralized stock-state calculation and audit activity labels.
+- Added pre-deployment inventory integrity hardening for global SKUs, stock ownership, relationship constraints, adjustment direction, transactional product/category saves, and deterministic transfer locking.
