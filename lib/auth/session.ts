@@ -15,7 +15,7 @@ export async function getCurrentProfile() {
   const supabase = await createSupabaseServerClient();
   const { data: { user }, error: userError } = await supabase.auth.getUser();
 
-  if (userError) {
+  if (userError && userError.name !== "AuthSessionMissingError") {
     logSafeAuthDiagnostic("Unable to read authenticated user from Supabase.", { code: userError.code, name: userError.name });
   }
 
