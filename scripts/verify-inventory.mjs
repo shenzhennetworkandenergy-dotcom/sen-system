@@ -1,0 +1,39 @@
+import assert from "node:assert/strict";
+import { access, readFile } from "node:fs/promises";
+
+const root = new URL("../", import.meta.url);
+const foundation = await readFile(new URL("supabase/migrations/202607200002_inventory_foundation.sql", root), "utf8");
+const reporting = await readFile(new URL("supabase/migrations/202607200003_inventory_reporting.sql", root), "utf8");
+const hardening = await readFile(new URL("supabase/migrations/202607200004_inventory_integrity_hardening.sql", root), "utf8");
+const navigation = await readFile(new URL("lib/navigation/dashboard.ts", root), "utf8");
+const stock = await readFile(new URL("lib/inventory/stock.ts", root), "utf8");
+const inventoryActions = await readFile(new URL("app/admin/inventory/actions.ts", root), "utf8");
+const tables = ["product_categories", "brands", "attributes", "attribute_values", "warehouses", "warehouse_locations", "products", "product_variations", "product_media", "inventory_balances", "inventory_movements", "inventory_movement_items", "inventory_reservations", "serial_numbers"];
+for (const table of tables) assert.match(foundation, new RegExp(`create table public\\.${table}\\b`), `Missing ${table}`);
+for (const fn of ["admin_adjust_inventory", "admin_transfer_inventory"]) assert.match(foundation, new RegExp(`function public\\.${fn}\\b`), `Missing ${fn}`);
+assert.match(reporting, /function public\.inventory_dashboard_summary\b/);
+assert.match(foundation, /security definer set search_path=''/);
+assert.match(reporting, /security definer set search_path=''/);
+assert.match(hardening, /security definer set search_path=''/);
+assert.match(foundation, /revoke all on function public\.admin_adjust_inventory/);
+assert.match(foundation, /inventory\.adjusted/);
+assert.match(foundation, /inventory\.transferred/);
+for (const requirement of ["enforce_global_product_sku", "product-stock:", "validate_product_stock_model", "inventory_balances_variation_product_fk", "inventory_movement_items_variation_product_fk", "inventory_reservations_variation_product_fk", "serial_numbers_variation_product_fk", "inventory_balances_location_warehouse_fk", "serial_numbers_location_warehouse_fk", "Selected reason only permits", "admin_save_product", "order by id", "40P01"]) {
+  assert.ok(hardening.includes(requirement) || (requirement === "40P01" && inventoryActions.includes(requirement)), `Missing hardening requirement: ${requirement}`);
+}
+assert.match(hardening, /to_regprocedure\('public\.effective_permissions_for_profile\(uuid\)'\)/);
+assert.match(hardening, /revoke all on function public\.admin_save_product\(uuid,uuid,jsonb,uuid\) from public,anon,authenticated/);
+const productActions = await readFile(new URL("app/admin/products/actions.ts", root), "utf8");
+assert.match(productActions, /db\.rpc\("admin_save_product"/);
+assert.doesNotMatch(productActions, /setCategory\(/);
+for (const parameter of ["actor_profile_id", "requested_product_id", "requested_product", "requested_category_id"]) assert.ok(productActions.includes(parameter), `Product save RPC is missing ${parameter}`);
+for (const parameter of ["actor_profile_id", "requested_warehouse_id", "requested_product_id", "requested_variation_id", "quantity_change", "requested_reason_id", "requested_notes", "requested_serials"]) assert.ok(inventoryActions.includes(parameter), `Adjustment RPC is missing ${parameter}`);
+for (const parameter of ["source_id", "destination_id", "transfer_quantity"]) assert.ok(inventoryActions.includes(parameter), `Transfer RPC is missing ${parameter}`);
+assert.doesNotMatch(inventoryActions, /40P01[\s\S]{0,300}(retry|admin_transfer_inventory)/i);
+assert.match(stock, /export function deriveStockStatus/);
+const labels = ["Overview", "Users", "Permissions", "Team Activity", "Employees", "Employee Activity", "CRM", "Products", "Sales", "Quotations", "Inventory", "Warehouses", "Serial Tracking", "Shipments", "Purchasing", "Suppliers", "Accounting", "HR", "Manufacturing", "Projects", "Support", "Reports", "AI Assistant", "Settings"];
+for (const label of labels) assert.ok(navigation.includes(`label:"${label}"`), `Navigation is missing ${label}`);
+for (const planned of ["CRM", "Sales", "Quotations", "Shipments", "Purchasing", "Suppliers", "Accounting", "HR", "Manufacturing", "Projects", "Support", "Reports", "AI Assistant", "Settings"]) assert.ok(navigation.includes(`label:"${planned}",route:null`), `Planned item ${planned} needs a disabled route`);
+const routes = ["app/admin/products/page.tsx", "app/admin/products/new/page.tsx", "app/admin/inventory/page.tsx", "app/admin/inventory/adjustments/new/page.tsx", "app/admin/inventory/movements/page.tsx", "app/admin/warehouses/page.tsx", "app/admin/serials/page.tsx", "app/admin/inventory/export/route.ts"];
+await Promise.all(routes.map((route) => access(new URL(route, root))));
+console.log(`Inventory static verification passed: ${tables.length} core tables, 4 RPCs, ${labels.length} navigation items, and ${routes.length} route entry points.`);

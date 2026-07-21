@@ -15,5 +15,5 @@ import { PublicHeader } from "@/components/layout/PublicHeader";
 export const dynamic = "force-dynamic";
 
 export default function Home() {
-  return <><PublicHeader /><main><HeroSection /><BusinessCategories /><CompanyIntroduction /><FeaturedSolutions /><FeaturedProducts /><WhyChooseSen /><IndustriesSection /><ProjectWorkflow /><CapabilitiesSection /><BrandsSection /><FinalCta /></main><PublicFooter /></>;
+  return <div className="public-experience"><PublicHeader /><main><HeroSection /><BusinessCategories /><CompanyIntroduction /><FeaturedSolutions /><FeaturedProducts /><WhyChooseSen /><IndustriesSection /><ProjectWorkflow /><CapabilitiesSection /><BrandsSection /><FinalCta /></main><PublicFooter /></div>;
 }

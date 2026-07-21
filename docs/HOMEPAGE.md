@@ -30,7 +30,7 @@ Copy is professional and capability-focused. It avoids unsupported claims such a
 
 ## Brand assets
 
-The public header and footer reference `/public/brand/sen-logo.svg`. App Router icon metadata references `app/icon.svg` and `app/apple-icon.svg`. The provided task did not include an accessible binary attachment in the workspace, so the current SVG is a local SEN wordmark placeholder that should be replaced with the supplied official logo file when available.
+The public website and dashboard reference the supplied official SEN logo at `/public/brand/sen-official-logo.png`. App Router icon metadata references `app/icon.svg` and `app/apple-icon.svg`.
 
 ## Responsive strategy
 

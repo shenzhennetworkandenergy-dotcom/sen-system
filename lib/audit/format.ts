@@ -11,6 +11,14 @@ const actionLabels: Record<string, string> = {
   "permissions.template_duplicated": "Permission template duplicated",
   "permissions.template_status_changed": "Permission template status changed",
   "permissions.reset_to_template": "Permissions reset to template",
+  "product.created": "Product created",
+  "product.updated": "Product updated",
+  "product.archived": "Product archived",
+  "product.variation_created": "Product variation created",
+  "inventory.adjusted": "Inventory adjusted",
+  "inventory.transferred": "Inventory transferred",
+  "warehouse.created": "Warehouse created",
+  "warehouse.location_created": "Warehouse location created",
 };
 
 export function activityLabel(action: string) {

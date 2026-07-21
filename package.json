@@ -7,7 +7,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:phase3b": "node scripts/verify-phase3b.mjs"
+    "supabase:start": "supabase start",
+    "supabase:status": "supabase status",
+    "supabase:reset": "supabase db reset",
+    "supabase:stop": "supabase stop",
+    "test:phase3b": "node scripts/verify-phase3b.mjs",
+    "test:inventory": "node scripts/verify-inventory.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",
@@ -23,6 +28,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.10",
+    "supabase": "^2.109.1",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
