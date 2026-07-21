@@ -81,6 +81,24 @@ create table if not exists public.profile_permission_overrides (
 );
 
 alter table public.audit_logs add column if not exists actor_role public.account_role;
+-- Phase 3A was initially installed manually on some environments with
+-- actor_user_id instead of actor_id and without a target/metadata pair. Keep
+-- that history intact while providing the canonical columns used by Phase 3B.
+alter table public.audit_logs add column if not exists actor_id uuid references public.profiles(id) on delete set null;
+alter table public.audit_logs add column if not exists target_profile_id uuid references public.profiles(id) on delete set null;
+alter table public.audit_logs add column if not exists metadata jsonb not null default '{}'::jsonb;
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'audit_logs' and column_name = 'actor_user_id'
+  ) then
+    update public.audit_logs
+    set actor_id = actor_user_id
+    where actor_id is null and actor_user_id is not null;
+  end if;
+end
+$$;
 alter table public.audit_logs add column if not exists module text;
 alter table public.audit_logs add column if not exists entity_type text;
 alter table public.audit_logs add column if not exists entity_id text;

@@ -41,12 +41,17 @@ export async function getProductList(params: ProductListParams) {
   ]) : Array.from({ length: 7 }, () => ({ data: [] }));
   const [brandsResult, balancesResult, assignmentsResult, categoriesResult, mediaResult, variationsResult, warehousesResult] = related;
   const brands = brandsResult.data ?? [], balances = balancesResult.data ?? [], assignments = assignmentsResult.data ?? [], categories = categoriesResult.data ?? [], media = mediaResult.data ?? [], variations = variationsResult.data ?? [], warehouses = warehousesResult.data ?? [];
+  const mediaPaths = media.map((item) => item.storage_path);
+  const { data: signedMedia } = mediaPaths.length ? await db.storage.from("product-media").createSignedUrls(mediaPaths, 3600) : { data: [] };
+  const mediaUrlMap = new Map((signedMedia ?? []).map((item) => [item.path, item.signedUrl]));
   const brandMap = new Map(brands.map((item) => [item.id, item.name])), categoryMap = new Map(categories.map((item) => [item.id, item.name])), warehouseMap = new Map(warehouses.map((item) => [item.id, item.code]));
   const products = (data ?? []).map((product) => {
     const productBalances = balances.filter((item) => item.product_id === product.id), available = productBalances.reduce((sum, item) => sum + quantity(item.available), 0);
     const primary = assignments.find((item) => item.product_id === product.id && item.is_primary) ?? assignments.find((item) => item.product_id === product.id);
     const warehouseSummary = productBalances.length ? productBalances.map((item) => `${warehouseMap.get(item.warehouse_id) ?? "Warehouse"}: ${quantity(item.available)}`).join(", ") : "No balances";
-    return { ...product, brand: product.brand_id ? brandMap.get(product.brand_id) ?? null : null, category: primary ? categoryMap.get(primary.category_id) ?? null : null, available, warehouseSummary, derivedStock: deriveStockStatus(available, quantity(product.low_stock_threshold), product.allow_backorders), image: media.find((item) => item.product_id === product.id) ?? null, variationCount: variations.filter((item) => item.product_id === product.id).length };
+    const primaryMedia = media.find((item) => item.product_id === product.id) ?? null;
+    const image = primaryMedia ? { ...primaryMedia, signedUrl: mediaUrlMap.get(primaryMedia.storage_path) ?? null } : null;
+    return { ...product, brand: product.brand_id ? brandMap.get(product.brand_id) ?? null : null, category: primary ? categoryMap.get(primary.category_id) ?? null : null, available, warehouseSummary, derivedStock: deriveStockStatus(available, quantity(product.low_stock_threshold), product.allow_backorders), image, variationCount: variations.filter((item) => item.product_id === product.id).length };
   });
   return { products: params.stock ? products.filter((item) => item.derivedStock === params.stock) : products, count: count ?? 0, page, size };
 }

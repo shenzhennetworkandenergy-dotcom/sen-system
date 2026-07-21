@@ -36,7 +36,7 @@ export const siteConfig = {
   },
   description:
     "SEN connects China-based technology sourcing with Bangladesh operations and global customer requirements across enterprise networking, energy, medical and industrial equipment.",
-  brandAsset: { logo: "/brand/sen-logo.svg" },
+  brandAsset: { logo: "/brand/sen-official-logo.png" },
   routes,
   navigation: [
     { label: "Products", href: routes.products },

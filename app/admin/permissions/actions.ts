@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth/session";
-import { getPermissionCatalogue } from "@/lib/auth/permissions";
+import { getPermissionCatalogue, getPermissionTemplates, updatePermissionOverrides } from "@/lib/auth/permissions";
 import { writeAuditLog } from "@/lib/audit/log";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { routes } from "@/lib/constants/routes";
@@ -19,6 +19,37 @@ async function validatedPermissionIds(formData: FormData) {
   const valid = new Map(catalogue.flatMap((module) => module.permissions.map((permission) => [permission.key, permission.id])));
   if (requested.some((key) => !valid.has(key))) throw new Error("Invalid permission selection.");
   return requested.map((key) => valid.get(key)!);
+}
+
+export async function saveEmployeePermissionsAction(formData: FormData) {
+  const { profile } = await requireProfile(["admin"]);
+  const employeeId = String(formData.get("employeeId") ?? "");
+  const templateId = String(formData.get("templateId") ?? "");
+  const supabase = createSupabaseAdminClient();
+  const [{ data: employee }, catalogue, templates] = await Promise.all([
+    supabase.from("profiles").select("id,role,status").eq("id", employeeId).maybeSingle(),
+    getPermissionCatalogue(),
+    getPermissionTemplates(),
+  ]);
+  if (!employee || employee.role !== "employee") redirect(`${routes.adminPermissions}?error=${encodeURIComponent("Select a valid employee before assigning permissions.")}`);
+  const template = templates.find((item) => item.id === templateId);
+  if (!template) redirect(`${routes.adminPermissions}?employee=${employeeId}&error=${encodeURIComponent("Select an active baseline template.")}`);
+  const validKeys = new Set(catalogue.flatMap((module) => module.permissions.map((permission) => permission.key)));
+  const selected = uniqueStrings(formData.getAll("permissionKeys"));
+  if (selected.some((key) => !validKeys.has(key))) redirect(`${routes.adminPermissions}?employee=${employeeId}&error=${encodeURIComponent("One or more permissions are invalid.")}`);
+  const templateKeys = new Set(template.permissionKeys);
+  const allowKeys = selected.filter((key) => !templateKeys.has(key));
+  const denyKeys = template.permissionKeys.filter((key) => !selected.includes(key));
+  try {
+    await updatePermissionOverrides(profile.id, employeeId, templateId, allowKeys, denyKeys);
+  } catch (error) {
+    console.error("Focused employee permission update failed", { message: error instanceof Error ? error.message : "Unknown error" });
+    redirect(`${routes.adminPermissions}?employee=${employeeId}&error=${encodeURIComponent("Unable to save employee permissions.")}`);
+  }
+  revalidatePath(routes.adminPermissions);
+  revalidatePath(`/admin/users/${employeeId}`);
+  revalidatePath(routes.employee);
+  redirect(`${routes.adminPermissions}?employee=${employeeId}&success=${encodeURIComponent("Employee permissions saved successfully.")}`);
 }
 
 export async function saveTemplateAction(formData: FormData) {
