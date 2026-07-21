@@ -15,7 +15,7 @@ export default async function AdminUserDetailPage({ params, searchParams }: { pa
   await requireProfile(["admin"]);
   const [{ id }, message] = await Promise.all([params, searchParams]);
   const supabase = createSupabaseAdminClient();
-  const { data: user, error } = await supabase.from("profiles").select("id,email,full_name,phone,country,customer_type,company_name,role,status,created_at,updated_at").eq("id", id).maybeSingle();
+  const { data: user, error } = await supabase.from("profiles").select("*").eq("id", id).maybeSingle();
   if (error) {
     console.error("Admin user detail query failed", { code: error.code, message: error.message, details: error.details, hint: error.hint });
     return <DashboardShell admin title="User detail" subtitle="Review profile details, employment access, permissions and activity."><div className="rounded-xl border border-red-200 bg-red-50 p-6 text-red-900"><h2 className="text-lg font-semibold">Unable to load user details</h2><p className="mt-2 text-sm">Your admin session is still active, but this profile could not be loaded.</p></div></DashboardShell>;
@@ -29,7 +29,7 @@ export default async function AdminUserDetailPage({ params, searchParams }: { pa
   const accountAction = updateUserAction.bind(null, id);
   const permissionAction = savePermissionsAction.bind(null, id);
   const profileValues = [
-    ["Full name", user.full_name], ["Email", user.email], ["Phone", user.phone], ["Country", user.country],
+    ["Full name", user.full_name], ["Email", user.email], ["Phone", user.phone], ["Country", user.country ?? user.country_name ?? user.country_code],
     ["Customer type", user.customer_type], ["Company", user.company_name], ["Role", user.role], ["Status", user.status],
     ["Created", user.created_at ? new Date(user.created_at).toLocaleString() : null], ["Last updated", user.updated_at ? new Date(user.updated_at).toLocaleString() : null],
   ];

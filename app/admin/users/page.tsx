@@ -16,7 +16,7 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
   await requireProfile(["admin"]);
   const params = await searchParams;
   const supabase = createSupabaseAdminClient();
-  let query = supabase.from("profiles").select("id,email,full_name,phone,country,customer_type,company_name,role,status,created_at,updated_at").order("updated_at", { ascending: false }).limit(100);
+  let query = supabase.from("profiles").select("*").order("updated_at", { ascending: false }).limit(100);
   if (params.role && allowedRoles.has(params.role)) query = query.eq("role", params.role);
   if (params.status && allowedStatuses.has(params.status)) query = query.eq("status", params.status);
   if (params.q?.trim()) query = query.or(`email.ilike.%${params.q.slice(0, 80)}%,full_name.ilike.%${params.q.slice(0, 80)}%,phone.ilike.%${params.q.slice(0, 80)}%,company_name.ilike.%${params.q.slice(0, 80)}%`);
@@ -27,7 +27,10 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
     return <DashboardShell admin title="Users" subtitle="Complete customer, employee and administrator profiles."><div className="rounded-2xl border border-red-200 bg-red-50 p-6 text-red-900"><h2 className="text-lg font-semibold">Unable to load users</h2><p className="mt-2 text-sm">Your admin session is active, but the complete profile list could not be loaded.</p></div></DashboardShell>;
   }
 
-  const users = data ?? [];
+  const users = (data ?? []).map((user) => ({
+    ...user,
+    country: user.country ?? user.country_name ?? user.country_code ?? null,
+  }));
   return <DashboardShell admin title="Users" subtitle="View complete account information and manage access from each profile.">
     <section className="mb-6 grid gap-3 sm:grid-cols-3"><div className="rounded-2xl border bg-[var(--surface)] p-5"><p className="text-sm text-[var(--muted-text)]">Visible accounts</p><strong className="mt-2 block text-3xl">{users.length}</strong></div><div className="rounded-2xl border bg-[var(--surface)] p-5"><p className="text-sm text-[var(--muted-text)]">Active</p><strong className="mt-2 block text-3xl text-green-700">{users.filter((user) => user.status === "active").length}</strong></div><div className="rounded-2xl border bg-[var(--surface)] p-5"><p className="text-sm text-[var(--muted-text)]">Employees</p><strong className="mt-2 block text-3xl text-blue-700">{users.filter((user) => user.role === "employee").length}</strong></div></section>
     <form className="mb-6 grid gap-3 rounded-2xl border bg-[var(--surface)] p-4 sm:grid-cols-2 xl:grid-cols-[minmax(18rem,1fr)_12rem_12rem_auto]"><label className="text-sm font-semibold">Search all profile fields<input name="q" placeholder="Name, email, phone or company" defaultValue={params.q} className="mt-1 w-full rounded-lg border p-3 font-normal"/></label><label className="text-sm font-semibold">Role<select name="role" defaultValue={params.role} className="mt-1 w-full rounded-lg border p-3 font-normal"><option value="">All roles</option><option value="customer">Customer</option><option value="employee">Employee</option><option value="admin">Administrator</option></select></label><label className="text-sm font-semibold">Status<select name="status" defaultValue={params.status} className="mt-1 w-full rounded-lg border p-3 font-normal"><option value="">All statuses</option><option value="active">Active</option><option value="suspended">Suspended</option><option value="disabled">Disabled</option></select></label><button className="self-end rounded-lg bg-[var(--primary)] px-5 py-3 font-semibold text-[var(--primary-foreground)]">Apply filters</button></form>
