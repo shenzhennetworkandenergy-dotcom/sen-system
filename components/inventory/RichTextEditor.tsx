@@ -1,0 +1,9 @@
+"use client";
+import { useRef,useState } from "react";
+
+export function RichTextEditor({name,label,defaultValue="",maxLength=20000}:{name:string;label:string;defaultValue?:string;maxLength?:number}){
+  const[mode,setMode]=useState<"visual"|"html">("visual"),[value,setValue]=useState(defaultValue),visual=useRef<HTMLDivElement>(null);
+  const sync=()=>{if(visual.current)setValue(visual.current.innerHTML.slice(0,maxLength));};
+  const command=(name:string,value?:string)=>{document.execCommand(name,false,value);sync();visual.current?.focus();};
+  return <fieldset className="mt-4"><legend className="font-medium">{label}</legend><input type="hidden" name={name} value={value}/><div className="mt-1 rounded border bg-white"><div className="flex flex-wrap gap-1 border-b p-2" aria-label={`${label} formatting`}><button type="button" onClick={()=>command("bold")} className="rounded border px-2 font-bold">B</button><button type="button" onClick={()=>command("italic")} className="rounded border px-2 italic">I</button><button type="button" onClick={()=>command("insertUnorderedList")} className="rounded border px-2">List</button><button type="button" onClick={()=>setMode(mode==="visual"?"html":"visual")} className="ml-auto rounded border px-3">{mode==="visual"?"HTML source":"Visual editor"}</button></div>{mode==="visual"?<div ref={visual} contentEditable suppressContentEditableWarning onInput={sync} dangerouslySetInnerHTML={{__html:value}} className="prose min-h-32 max-w-none p-3 outline-none" aria-label={`${label} visual editor`}/>:<textarea value={value} onChange={(event)=>setValue(event.target.value.slice(0,maxLength))} className="min-h-40 w-full p-3 font-mono text-sm outline-none" aria-label={`${label} HTML source`}/>}</div><p className="mt-1 text-xs text-[var(--muted-text)]">Formatting is sanitized on the server before saving.</p></fieldset>;
+}

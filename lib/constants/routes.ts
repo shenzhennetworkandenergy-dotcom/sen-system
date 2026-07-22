@@ -26,6 +26,9 @@ export const routes = {
   adminInventoryMovements: "/admin/inventory/movements",
   adminWarehouses: "/admin/warehouses",
   adminSerials: "/admin/serials",
+  adminWorkLocations: "/admin/work-locations",
+  adminTrackingStatuses: "/admin/tracking-statuses",
+  employeeProfile: "/employee/profile",
   employeeActivity: "/employee/activity",
   environmentCheck: "/environment-check",
 } as const;

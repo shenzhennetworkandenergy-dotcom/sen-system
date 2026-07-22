@@ -21,6 +21,10 @@ Phase 3B defines access keys for future ERP modules but does not implement their
 
 The private ERP now includes product administration, categories, brands, attributes, variations, multi-warehouse inventory, atomic stock adjustments and transfers, movement history, serial-number administration, and CSV export. These features reuse Phase 3B permission guards and audit logging. Public catalogue, import, purchasing, shipments, sales, and checkout remain out of scope.
 
+### Inventory modernization — Phase 1 in review
+
+Product model numbers, rich descriptions, classified media, individually generated SEN serials, optional manufacturer serials, labels, scanning, workplace snapshots, configurable tracking statuses, revision history, and serialized stock RPCs are implemented in the feature branch. The database migration and authenticated operational matrix must pass in an approved disposable environment before this phase can be marked complete.
+
 ## Future phases
 
 1. Validated product/inventory CSV import and public product catalogue.
