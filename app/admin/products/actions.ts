@@ -2,6 +2,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requirePermission } from "@/lib/auth/permissions";
+import { requireProfile } from "@/lib/auth/session";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
 import { checked, optionalNumber, optionalText, productStatuses, productTypes, requiredText, slugify, uuidOrNull, businessCategories } from "@/lib/inventory/validation";
@@ -13,7 +14,7 @@ function payload(form: FormData) {
   const name = requiredText(form, "name"), sku = requiredText(form, "sku", 100), product_type = String(form.get("product_type")), status = String(form.get("status")), sen_business_category = String(form.get("sen_business_category")), regular_price = optionalNumber(form, "regular_price"), sale_price = optionalNumber(form, "sale_price"), stock_status = String(form.get("stock_status") ?? "in_stock");
   if (!productTypes.includes(product_type as never) || !productStatuses.includes(status as never) || !businessCategories.includes(sen_business_category as never) || !["in_stock", "out_of_stock", "on_backorder"].includes(stock_status)) throw new Error("Invalid product type, status, business category, or stock status.");
   if (sale_price !== null && regular_price !== null && sale_price > regular_price) throw new Error("Sale price cannot exceed regular price.");
-  const currency = requiredText(form, "currency", 3).toUpperCase(); if (currency.length !== 3) throw new Error("Currency must be a three-letter code.");
+  const currency = requiredText(form, "currency", 3).toUpperCase(); if (currency !== "BDT") throw new Error("SEN product prices must use BDT.");
   let specifications = {}; try { specifications = JSON.parse(String(form.get("specifications") ?? "{}")); } catch { throw new Error("Specifications must be valid JSON."); }
   const serialTracking = checked(form, "serial_tracking_required"), modelNumber = optionalText(form, "model_number", 160); if (serialTracking && !modelNumber) throw new Error("Model number is required for serial-tracked products.");
   return { name, sku, model_number: modelNumber, slug: slugify(String(form.get("slug") || name)), product_type, status, sen_business_category, brand_id: uuidOrNull(form.get("brand_id")), barcode: optionalText(form, "barcode", 100), manufacturer_part_number: optionalText(form, "manufacturer_part_number", 100), short_description: sanitizeProductHtml(optionalText(form, "short_description", 4000)), description: sanitizeProductHtml(optionalText(form, "description", 20000)), specifications, internal_notes: optionalText(form, "internal_notes", 5000), warranty_information: optionalText(form, "warranty_information", 1000), purchase_cost: optionalNumber(form, "purchase_cost"), regular_price, sale_price, currency, weight: optionalNumber(form, "weight"), length: optionalNumber(form, "length"), width: optionalNumber(form, "width"), height: optionalNumber(form, "height"), country_of_origin: optionalText(form, "country_of_origin", 100), manage_stock: checked(form, "manage_stock"), stock_status, low_stock_threshold: optionalNumber(form, "low_stock_threshold") ?? 0, allow_backorders: checked(form, "allow_backorders"), sold_individually: checked(form, "sold_individually"), serial_tracking_required: serialTracking, batch_tracking_enabled: checked(form, "batch_tracking_enabled"), featured: checked(form, "featured"), public_catalogue_visible: checked(form, "public_catalogue_visible") };
@@ -67,6 +68,35 @@ export async function updateProductAction(productId: string, form: FormData) {
   const failures=await uploadFormImages(productId,profile.id,form); revalidatePath(`/admin/products/${productId}`); revalidatePath("/admin/products"); if(form.get("submit_intent")==="save_generate") redirect(`/admin/products/${productId}/serials/new`); redirect(target(productId, failures.length?"error":"success", failures.length?`Product updated, but ${failures.length} image(s) failed to upload.`:"Product updated."));
 }
 export async function archiveProductAction(form: FormData) { const { profile } = await requirePermission("products.archive"); const ids = [...new Set(form.getAll("productIds").map(String))].filter((item) => /^[0-9a-f-]{36}$/i.test(item)).slice(0, 100); if (!ids.length) redirect(target(undefined, "error", "Select at least one product.")); const db = createSupabaseAdminClient(); const { error } = await db.from("products").update({ status: "archived", updated_by: profile.id, updated_at: new Date().toISOString() }).in("id", ids); if (error) redirect(target(undefined, "error", "Unable to archive products.")); await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "product.archived", module: "products", entityType: "product", description: "Products archived.", newValues: { product_ids: ids, count: ids.length } }); revalidatePath("/admin/products"); redirect(target(undefined, "success", `${ids.length} product(s) archived.`)); }
+export async function deleteProductAction(productId: string) {
+  const { profile } = await requireProfile(["admin"]), db = createSupabaseAdminClient();
+  if (!/^[0-9a-f-]{36}$/i.test(productId)) redirect(target(undefined, "error", "Invalid product."));
+  const { data: product, error: productError } = await db.from("products").select("id,name,sku").eq("id", productId).maybeSingle();
+  if (productError || !product) redirect(target(undefined, "error", "Product not found."));
+  const checks = await Promise.all([
+    db.from("inventory_balances").select("id", { count: "exact", head: true }).eq("product_id", productId),
+    db.from("inventory_movement_items").select("id", { count: "exact", head: true }).eq("product_id", productId),
+    db.from("inventory_reservations").select("id", { count: "exact", head: true }).eq("product_id", productId),
+    db.from("serial_numbers").select("id", { count: "exact", head: true }).eq("product_id", productId),
+    db.from("serial_generation_batches").select("id", { count: "exact", head: true }).eq("product_id", productId),
+    db.from("sales_order_items").select("id", { count: "exact", head: true }).eq("product_id", productId),
+    db.from("product_variations").select("id", { count: "exact", head: true }).eq("product_id", productId),
+  ]);
+  if (checks.some((result) => result.error || (result.count ?? 0) > 0)) redirect(target(productId, "error", "This product has inventory, serial, variation, movement, reservation, or order history. Archive it instead so business records remain intact."));
+  const { data: media } = await db.from("product_media").select("storage_path").eq("product_id", productId);
+  const cleanupResults = await Promise.all([
+    db.from("product_identifier_history").delete().eq("product_id", productId),
+    db.from("product_revisions").delete().eq("product_id", productId),
+  ]);
+  if (cleanupResults.some((result) => result.error)) redirect(target(productId, "error", "Unable to prepare this unused product for deletion."));
+  const { error } = await db.from("products").delete().eq("id", productId);
+  if (error) redirect(target(productId, "error", "Unable to delete this product. Archive it instead."));
+  const storagePaths = (media ?? []).map((item) => item.storage_path);
+  if (storagePaths.length) await db.storage.from("product-media").remove(storagePaths);
+  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "product.deleted", module: "products", entityType: "product", entityId: productId, description: "Unused product permanently deleted.", oldValues: { name: product.name, sku: product.sku } });
+  revalidatePath("/admin/products"); revalidatePath("/admin/inventory"); revalidatePath("/products");
+  redirect(target(undefined, "success", "Unused product permanently deleted."));
+}
 export async function createVariationAction(productId: string, form: FormData) {
   const { profile } = await requirePermission("products.edit"); const db = createSupabaseAdminClient();
   const { data: parent, error: parentError } = await db.from("products").select("product_type,manage_stock").eq("id", productId).maybeSingle();

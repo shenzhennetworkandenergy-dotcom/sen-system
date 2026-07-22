@@ -68,3 +68,9 @@
 - Required `shipments.view` before employees can read customer-safe shipment location projections.
 - Added a rollback-only Phase 3 database acceptance test covering product identity, serialized receiving, and location sessions.
 - Backfilled missing model identifiers for legacy serial-tracked catalogue products without changing their protected SKUs.
+
+### Added
+- Standardized the existing SEN catalogue with BDT pricing, complete identity/specification data, default warehouses and traceable demonstration inventory.
+- Linked inventory summary metrics to detailed product, quantity, location and serial-status views.
+- Added guarded permanent deletion for unused products, brands, attributes and users.
+- Expanded administrator user details with safe Supabase Auth information and temporary-password reset without exposing stored credentials.

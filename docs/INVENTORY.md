@@ -13,3 +13,7 @@ Required view/write permissions are `inventory.view`, `inventory.adjust_stock`, 
 ## Individually serialized units
 
 Phase 1 adds pre-receipt SEN serial generation, optional manufacturer serials, immutable issued identifiers, controlled expected-unit regeneration, Code 128/QR labels, scan/search, unit history, tracking events, workplace snapshots, and atomic serialized receipt/adjustment/transfer RPCs. See `docs/SERIALIZED_INVENTORY_PHASE_1.md` for the exact invariants and deployment matrix.
+
+## Standardized demonstration catalogue
+
+The local catalogue now uses BDT and complete operational product identity. Inventory summary cards link to detailed, filter-specific views with quantity, current warehouse/location and serial status. Guarded deletion and secure account administration are documented in `docs/INVENTORY_STANDARDIZATION_ADMIN_CONTROLS.md`.
