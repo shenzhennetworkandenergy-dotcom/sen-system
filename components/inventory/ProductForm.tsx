@@ -5,7 +5,7 @@ type Options=Awaited<ReturnType<typeof getProductOptions>>; type Product=Record<
 const input="mt-1 w-full rounded border p-3";
 export function ProductForm({action,options,product}:{action:(formData:FormData)=>void|Promise<void>;options:Options;product?:Product}){
  const value=(key:string,fallback="")=>String(product?.[key]??fallback);
- return <form action={action} className="space-y-6" encType="multipart/form-data">
+ return <form action={action} className="space-y-6">
   <section className="rounded-xl border bg-[var(--surface)] p-6"><h2 className="text-xl font-semibold">General</h2><div className="mt-4 grid gap-4 md:grid-cols-2">
    <label>Name<input name="name" required defaultValue={value("name")} className={input}/></label><label>Slug<input name="slug" defaultValue={value("slug")} className={input}/></label>
    <ProductIdentityFields brands={options.brands} productId={value("id")||undefined} initialBrandId={value("brand_id")} initialModel={value("model_number")} initialSku={value("sku")}/>
