@@ -50,6 +50,8 @@ Inventory is movement-led. Warehouse balances are never directly edited by brows
 
 The private `product-media` Storage bucket accepts bounded JPG, PNG, WebP, and PDF uploads through secured server actions. Storage paths are generated server-side.
 
+Serialized inventory uses a durable unit identity independent of changing product display data. SEN identifiers are generated only in privileged database functions, issued identifiers are never edited in place, and regeneration reserves the previous value in append-only history. Serialized stock operations update unit state, aggregate balance, movement, history, workplace snapshot, and audit data atomically. Product descriptions are sanitized against an explicit allowlist before storage and again before public rendering.
+
 ## Infrastructure
 
 - GitHub is the source of truth for source control and review.

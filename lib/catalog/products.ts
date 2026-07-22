@@ -39,7 +39,7 @@ export async function getPublicProducts(params: CatalogueParams = {}) {
   const brandIds = products.map((product) => product.brand_id).filter((id): id is string => Boolean(id));
   const [{ data: brands }, { data: media }, { data: balances }] = ids.length ? await Promise.all([
     brandIds.length ? db.from("brands").select("id,name").in("id", [...new Set(brandIds)]) : Promise.resolve({ data: [] }),
-    db.from("product_media").select("product_id,storage_path,alt_text,is_primary,sort_order").in("product_id", ids).eq("media_type", "image").order("sort_order"),
+    db.from("product_media").select("product_id,storage_path,alt_text,is_primary,sort_order").in("product_id", ids).eq("media_type", "image").eq("visibility", "public").order("sort_order"),
     db.from("inventory_balances").select("product_id,available").in("product_id", ids),
   ]) : [{ data: [] }, { data: [] }, { data: [] }];
   const signed = await signedMediaMap((media ?? []).map((item) => item.storage_path));
@@ -59,7 +59,7 @@ export async function getPublicProduct(slug: string) {
   const [{ data: brand }, { data: assignments }, { data: media }, { data: variations }, { data: balances }] = await Promise.all([
     product.brand_id ? db.from("brands").select("name,description,website_url").eq("id", product.brand_id).maybeSingle() : Promise.resolve({ data: null }),
     db.from("product_category_assignments").select("is_primary,product_categories(name,slug)").eq("product_id", product.id),
-    db.from("product_media").select("id,storage_path,alt_text,is_primary,sort_order").eq("product_id", product.id).eq("media_type", "image").order("sort_order"),
+    db.from("product_media").select("id,storage_path,alt_text,is_primary,sort_order").eq("product_id", product.id).eq("media_type", "image").eq("visibility", "public").order("sort_order"),
     db.from("product_variations").select("id,sku,combination_key,regular_price,sale_price,stock_status").eq("product_id", product.id).eq("status", "active").order("created_at"),
     db.from("inventory_balances").select("available,incoming").eq("product_id", product.id),
   ]);

@@ -38,3 +38,10 @@
 - Added multi-warehouse balances, atomic adjustments and transfers, movement history, serial tracking, inventory CSV export and permission-aware routes.
 - Added additive inventory migrations, strict RLS, service-role-only stock RPCs, centralized stock-state calculation and audit activity labels.
 - Added pre-deployment inventory integrity hardening for global SKUs, stock ownership, relationship constraints, adjustment direction, transactional product/category saves, and deterministic transfer locking.
+
+## Inventory Modernization — Phase 1
+
+- Added model numbers, sanitized rich product content, media purpose/visibility metadata, and immutable product revisions.
+- Added pre-receipt SEN serial batches, optional normalized manufacturer serials, controlled regeneration history, Code 128/QR labels, CSV export, scan/search, and unit trace pages.
+- Added work locations, employee primary workplace assignment, immutable event-location snapshots, and configurable tracking statuses.
+- Added atomic serialized receipt, adjustment, and transfer RPCs with permission, balance, unit-count, history, and audit enforcement.
