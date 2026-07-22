@@ -15,6 +15,9 @@ begin
   select id into warehouse from public.warehouses where is_active order by created_at limit 1;
   select id into reason from public.stock_adjustment_reasons where key='opening_balance' and is_active;
   if actor is null or customer is null or product is null or warehouse is null or reason is null then raise exception 'Phase 2 test prerequisites are missing'; end if;
+  -- Existing demo products predate Phase 1 model validation; repair only inside this
+  -- rollback-only transaction so SEN serial generation can be exercised safely.
+  update public.products set model_number='PHASE2-ROLLBACK-TEST' where id=product and nullif(trim(model_number),'') is null;
   select coalesce(on_hand,0),coalesce(reserved,0) into original_on_hand,original_reserved
     from public.inventory_balances where product_id=product and warehouse_id=warehouse and variation_id is null and location_id is null;
   original_on_hand:=coalesce(original_on_hand,0); original_reserved:=coalesce(original_reserved,0);
