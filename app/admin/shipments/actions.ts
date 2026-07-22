@@ -40,3 +40,24 @@ export async function markDeliveredAction(shipmentId: string, form: FormData) {
   const { profile } = await requirePermission("shipments.confirm_receipt"); const db = createSupabaseAdminClient(); const { error } = await db.rpc("mark_shipment_delivered", { actor_profile_id: profile.id, requested_shipment_id: shipmentId, requested_note: optionalString(form, "note", 1000) });
   if (error) redirect(target(shipmentId, "error", safe(error.message))); await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "shipment.delivered", module: "shipments", entityType: "shipment", entityId: shipmentId, description: "Shipment marked delivered." }); revalidatePath(`/admin/shipments/${shipmentId}`); redirect(target(shipmentId, "success", "Shipment marked delivered."));
 }
+
+export async function linkShipmentDocumentAction(shipmentId: string, orderId: string, form: FormData) {
+  const { profile } = await requirePermission("shipments.manage_documents");
+  const db = createSupabaseAdminClient();
+  const mediaId = uuid(form.get("product_media_id"), "Document");
+  const documentType = String(form.get("document_type") ?? "");
+  const visibility = String(form.get("visibility") ?? "internal");
+  const allowedTypes = ["warranty_document", "purchase_invoice", "packing_list", "customs_document", "supplier_invoice", "other"];
+  if (!allowedTypes.includes(documentType)) redirect(target(shipmentId, "error", "Invalid document type."));
+  if (!["internal", "customer_order_restricted"].includes(visibility)) redirect(target(shipmentId, "error", "Invalid document visibility."));
+  if (visibility === "customer_order_restricted" && !["warranty_document", "purchase_invoice"].includes(documentType)) redirect(target(shipmentId, "error", "Only warranty documents and purchase invoices can be shared with customers."));
+
+  const { data: media, error: mediaError } = await db.from("product_media").select("id,storage_path,media_purpose,media_type").eq("id", mediaId).eq("media_type", "document").maybeSingle();
+  if (mediaError || !media) redirect(target(shipmentId, "error", "The selected product document is unavailable."));
+  const { data: linked, error } = await db.from("shipment_documents").insert({ shipment_id: shipmentId, order_id: orderId, product_media_id: media.id, storage_bucket: "product-media", storage_path: media.storage_path, document_type: documentType, visibility, uploaded_by: profile.id }).select("id").single();
+  if (error || !linked) redirect(target(shipmentId, "error", "Unable to link the shipment document."));
+  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "shipment.document_linked", module: "shipments", entityType: "shipment_document", entityId: linked.id, description: "Existing product document linked to shipment.", newValues: { shipment_id: shipmentId, order_id: orderId, document_type: documentType, visibility } });
+  revalidatePath(`/admin/shipments/${shipmentId}`);
+  revalidatePath(`/account/orders/${orderId}`);
+  redirect(target(shipmentId, "success", "Document linked to shipment."));
+}

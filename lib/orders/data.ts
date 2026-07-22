@@ -55,17 +55,19 @@ export async function getShipment(shipmentId: string, customerProfileId?: string
   let query = db.from("shipments").select("*,sales_orders!inner(id,order_number,customer_profile_id,currency,total_amount)").eq("id", shipmentId);
   if (customerProfileId) query = query.eq("sales_orders.customer_profile_id", customerProfileId).eq("customer_visible", true);
   const shipment = await query.maybeSingle(); fail("Unable to load shipment.", shipment.error); if (!shipment.data) return null;
-  const [items, serials, events, points, statuses, workplaces] = await Promise.all([
-    db.from("shipment_items").select("*,sales_order_items(product_name_snapshot,sku_snapshot,quantity)").eq("shipment_id", shipmentId),
+  const [items, serials, events, points, statuses, workplaces, documents, availableDocuments] = await Promise.all([
+    db.from("shipment_items").select("*,sales_order_items(product_id,product_name_snapshot,sku_snapshot,quantity)").eq("shipment_id", shipmentId),
     db.from("shipment_serials").select("*,serial_numbers(sen_serial,manufacturer_serial),shipment_items!inner(shipment_id)").eq("shipment_items.shipment_id", shipmentId),
     db.from("shipment_tracking_events").select("*,tracking_status_definitions(key,name,color)").eq("shipment_id", shipmentId).order("occurred_at", { ascending: false }),
     db.from("shipment_route_points").select("*").eq("shipment_id", shipmentId).order("version", { ascending: false }).order("point_order"),
     db.from("tracking_status_definitions").select("id,key,name,description,color,customer_visible_default,sort_order").eq("is_active", true).order("sort_order"),
     db.from("work_locations").select("id,name,location_type,country_code,city,latitude,longitude").eq("is_active", true).order("name"),
+    db.from("shipment_documents").select("*").eq("shipment_id", shipmentId).order("created_at", { ascending: false }),
+    db.from("product_media").select("id,product_id,storage_path,original_file_name,media_purpose,visibility").eq("media_type", "document").limit(100),
   ]);
-  for (const [name, result] of Object.entries({ items, serials, events, points, statuses, workplaces })) fail(`Unable to load shipment ${name}.`, result.error);
+  for (const [name, result] of Object.entries({ items, serials, events, points, statuses, workplaces, documents, availableDocuments })) fail(`Unable to load shipment ${name}.`, result.error);
   const visibleEvents = customerProfileId ? (events.data ?? []).filter((event) => event.event_visibility === "customer" || event.event_visibility === "both") : events.data ?? [];
-  return { shipment: shipment.data, items: items.data ?? [], serials: serials.data ?? [], events: visibleEvents, points: (points.data ?? []).filter((point) => !customerProfileId || point.customer_visible), statuses: statuses.data ?? [], workplaces: workplaces.data ?? [] };
+  return { shipment: shipment.data, items: items.data ?? [], serials: serials.data ?? [], events: visibleEvents, points: (points.data ?? []).filter((point) => !customerProfileId || point.customer_visible), statuses: statuses.data ?? [], workplaces: workplaces.data ?? [], documents: documents.data ?? [], availableDocuments: availableDocuments.data ?? [] };
 }
 
 export async function getShipments(params: { q?: string; status?: string; mode?: string; page?: string }) {

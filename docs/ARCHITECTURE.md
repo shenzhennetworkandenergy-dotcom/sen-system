@@ -54,6 +54,12 @@ Serialized inventory uses a durable unit identity independent of changing produc
 
 ## Infrastructure
 
+## Order fulfilment and shipment tracking
+
+Phase 2 connects customer orders to physical-unit inventory. Order confirmation creates warehouse reservations; serialized allocation selects exact units; packing accepts only assigned units; dispatch atomically updates quantities, reservations, movements, shipments, and serial state; delivery derives final order state. Multiple shipments may fulfil one order.
+
+Commercial, product, address, route, and transport details are snapshotted so historical records remain stable. Customer routes filter by authenticated profile and expose only safe serial identity, explicitly customer-visible events, and restricted warranty/invoice documents. Operational maps are estimates built from recorded points, not live GPS.
+
 - GitHub is the source of truth for source control and review.
 - Vercel is the deployment infrastructure for the Next.js application.
 - Supabase is the backend infrastructure for database and future authentication capabilities.

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-07-22 — Inventory Modernization Phase 2
+
+- Added customer addresses, staff-created orders, immutable commercial snapshots, stock reservations, exact serial allocation, packing, multiple partial shipments, dispatch, delivery, and customer-safe tracking.
+- Added responsive staff order/shipment workspaces and the customer Order Centre with safe serial and restricted-document visibility.
+- Added estimated China-to-Bangladesh route visualization with recorded checkpoints, explicit non-live-GPS language, reduced-motion support, and no paid map dependency.
+- Added additive database migrations, service-role-only operational RPCs, granular permissions, RLS, audit events, static verification, and a rollback-only end-to-end local SQL test.
+- Repaired packing and work-location snapshot defects discovered by the transactional local acceptance test.
+
 ## 2026-07-11
 
 ### Added

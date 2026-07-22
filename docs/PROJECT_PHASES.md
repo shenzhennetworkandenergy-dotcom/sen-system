@@ -34,3 +34,7 @@ Product model numbers, rich descriptions, classified media, individually generat
 5. Accounting, HR, manufacturing, projects, support and reporting.
 
 Future routes must use the Phase 3B permission catalogue and server guards before accessing operational data.
+
+## Offline review checkpoint — Inventory modernization Phase 2
+
+Customer addresses, staff-created customer orders, reservations, exact serial allocation, packing, multiple partial shipments, dispatch, recorded tracking checkpoints, delivery, restricted documents, and the customer Order Centre are implemented on the offline Phase 2 branch. Local migrations and the rollback-only order-to-delivery database workflow pass. GitHub, hosted Supabase, and Vercel remain unchanged pending user review.
