@@ -99,6 +99,21 @@ update public.products
 set currency = 'BDT', updated_at = now()
 where currency <> 'BDT';
 
+-- Clear the existing primary flag first because the partial unique index allows
+-- only one primary category per product, even when a different assignment row
+-- already exists.
+update public.product_category_assignments assignment
+set is_primary = false
+from public.products product
+where assignment.product_id = product.id
+  and assignment.is_primary
+  and product.sku in (
+    'SEN-SEN-STR-1000','SEN-CISCO-N3K-C3172PQ','SEN-DELL-R630-E52680V4',
+    'SEN-DELL-R640-G6138','SEN-DELL-R640-P8160','SEN-DELL-R730XD',
+    'SEN-DELL-R740XD','SEN-SM-2029GP-TR','SEN-SM-2028TP-HTTR',
+    'SEN-DELL-R750','SEN-DELL-R760'
+  );
+
 insert into public.product_category_assignments(product_id, category_id, is_primary)
 select p.id, c.id, true
 from public.products p
