@@ -11,7 +11,7 @@ export async function getOrderCreationOptions() {
   const [customers, products, variations, balances, warehouses, addresses] = await Promise.all([
     db.from("profiles").select("id,email,full_name,phone,company_name,status").eq("role", "customer").eq("status", "active").order("full_name").limit(200),
     db.from("products").select("id,name,sku,model_number,brand_id,product_type,status,regular_price,sale_price,currency,serial_tracking_required").eq("status", "active").order("name").limit(500),
-    db.from("product_variations").select("id,product_id,name,sku,regular_price,sale_price,status").eq("status", "active").order("name").limit(1000),
+    db.from("product_variations").select("id,product_id,name:combination_key,sku,regular_price,sale_price,status").eq("status", "active").order("combination_key").limit(1000),
     db.from("inventory_balances").select("product_id,variation_id,warehouse_id,available").gt("available", 0).limit(2000),
     db.from("warehouses").select("id,code,name,country_code").eq("is_active", true).order("name"),
     db.from("customer_addresses").select("*").order("is_default_shipping", { ascending: false }).order("updated_at", { ascending: false }).limit(1000),
