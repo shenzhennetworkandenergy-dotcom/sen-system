@@ -1,0 +1,13 @@
+import { NextRequest, NextResponse } from "next/server";
+import { requirePermission } from "@/lib/auth/permissions";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+export const dynamic = "force-dynamic";
+export async function GET(request: NextRequest) {
+  await requirePermission("orders.allocate"); const raw = request.nextUrl.searchParams.get("q")?.replace(/^SEN:1:/, "").trim().slice(0, 160) ?? "", orderItemId = request.nextUrl.searchParams.get("orderItemId") ?? "";
+  if (raw.length < 2 || !/^[0-9a-f-]{36}$/i.test(orderItemId)) return NextResponse.json({ results: [] }); const db = createSupabaseAdminClient(); const { data: item, error: itemError } = await db.from("sales_order_items").select("product_id,variation_id,fulfillment_warehouse_id").eq("id", orderItemId).maybeSingle(); if (itemError || !item) return NextResponse.json({ error: "Order item is unavailable." }, { status: 404 });
+  const normalized = raw.replace(/[^A-Za-z0-9]/g, "").toUpperCase(); let query = db.from("serial_numbers").select("id,sen_serial,manufacturer_serial,manufacturer_serial_normalized,status,condition,warehouse_id,location_id,warehouses(name),warehouse_locations(name)").eq("product_id", item.product_id).eq("warehouse_id", item.fulfillment_warehouse_id).eq("status", "available"); if (item.variation_id) query = query.eq("variation_id", item.variation_id); else query = query.is("variation_id", null);
+  const { data, error } = await query.or(`sen_serial.ilike.%${raw}%,manufacturer_serial.ilike.%${raw}%,manufacturer_serial_normalized.ilike.%${normalized}%`).limit(20); if (error) { console.error("Order serial search failed", { code: error.code, message: error.message }); return NextResponse.json({ error: "Unable to search eligible serials." }, { status: 500 }); }
+  const { data: assigned } = await db.from("order_serial_allocations").select("serial_number_id").in("status", ["active", "packed", "shipped"]); const assignedIds = new Set((assigned ?? []).map((row) => row.serial_number_id));
+  const results = (data ?? []).filter((serial) => !assignedIds.has(serial.id)).map((serial) => ({ id: serial.id, sen_serial: serial.sen_serial, manufacturer_serial: serial.manufacturer_serial, status: serial.status, condition: serial.condition, warehouse_name: (serial.warehouses as unknown as { name: string } | null)?.name ?? null, location_name: (serial.warehouse_locations as unknown as { name: string } | null)?.name ?? null, exact: serial.sen_serial.toUpperCase() === raw.toUpperCase() || serial.manufacturer_serial_normalized === normalized })).sort((a, b) => Number(b.exact) - Number(a.exact));
+  return NextResponse.json({ results });
+}
