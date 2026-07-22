@@ -16,4 +16,3 @@ where serial_tracking_required
     or sku ~ '^SEN-SM-'
     or nullif(trim(manufacturer_part_number), '') is not null
   );
-
