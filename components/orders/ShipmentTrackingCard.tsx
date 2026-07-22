@@ -1,4 +1,5 @@
 import { AnimatedShipmentMap } from "@/components/orders/AnimatedShipmentMap";
+import { LiveLocationCard } from "@/components/orders/LiveLocationCard";
 import { dateTime, label, type RoutePoint } from "@/lib/orders/types";
 
 type Event = {
@@ -13,7 +14,7 @@ type Event = {
 };
 
 export function ShipmentTrackingCard({ shipment, events, points, internal = false }: {
-  shipment: { shipment_number: string; status: string; transport_mode: string; latest_location_snapshot: Record<string, unknown> | null; estimated_arrival_at: string | null };
+  shipment: { id: string; shipment_number: string; status: string; transport_mode: string; latest_location_snapshot: Record<string, unknown> | null; estimated_arrival_at: string | null };
   events: Event[];
   points: RoutePoint[];
   internal?: boolean;
@@ -22,7 +23,7 @@ export function ShipmentTrackingCard({ shipment, events, points, internal = fals
   const latestLabel = latest && (String(latest.label ?? latest.name ?? latest.city ?? "") || null);
 
   return <div className="grid gap-5 xl:grid-cols-[1.2fr_.8fr]">
-    <AnimatedShipmentMap points={points} latestLabel={latestLabel} transportMode={shipment.transport_mode} delivered={shipment.status === "delivered"}/>
+    <div className="space-y-3"><AnimatedShipmentMap points={points} latestLabel={latestLabel} transportMode={shipment.transport_mode} delivered={shipment.status === "delivered"}/><LiveLocationCard shipmentId={shipment.id}/></div>
     <section className="rounded-2xl border bg-[var(--surface)] p-5">
       <div className="flex items-start justify-between gap-3">
         <div><p className="text-xs font-bold uppercase tracking-wider text-[var(--muted-text)]">{shipment.shipment_number}</p><h3 className="mt-1 text-lg font-semibold">Tracking timeline</h3></div>
