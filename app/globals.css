@@ -215,3 +215,23 @@ html { scroll-behavior: smooth; }
     transition-duration: 0.01ms !important;
   }
 }
+
+.product-rich-content p + p { margin-top: 1rem; }
+.product-rich-content h2, .product-rich-content h3, .product-rich-content h4 { margin-top: 1.5rem; margin-bottom: .6rem; color: #10152f; font-weight: 700; line-height: 1.25; }
+.product-rich-content h2 { font-size: 1.6rem; }.product-rich-content h3 { font-size: 1.3rem; }
+.product-rich-content ul, .product-rich-content ol { margin: 1rem 0; padding-left: 1.5rem; }.product-rich-content ul { list-style: disc; }.product-rich-content ol { list-style: decimal; }
+.product-rich-content a { color: #176dc2; text-decoration: underline; }.product-rich-content img { max-width: 100%; height: auto; border-radius: .75rem; }
+.product-rich-content table { width: 100%; border-collapse: collapse; }.product-rich-content th, .product-rich-content td { border: 1px solid var(--border); padding: .65rem; text-align: left; }
+
+.label-grid { display: grid; grid-template-columns: repeat(auto-fill, 60mm); justify-content: center; gap: 4mm; }
+.serial-label { box-sizing: border-box; width: 60mm; min-height: 40mm; overflow: hidden; }
+.preset-50x30 .label-grid { grid-template-columns: repeat(auto-fill, 50mm); }.preset-50x30 .serial-label { width: 50mm; min-height: 30mm; }
+.preset-a4 .label-grid { grid-template-columns: repeat(3, 60mm); align-content: start; }
+
+@media print {
+  @page { size: A4; margin: 8mm; }
+  body { background: white !important; }
+  .label-print { padding: 0 !important; }
+  .label-grid { gap: 3mm; }
+  .serial-label { break-inside: avoid; page-break-inside: avoid; }
+}

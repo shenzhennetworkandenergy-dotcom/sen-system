@@ -1,0 +1,16 @@
+/* eslint-disable @next/next/no-img-element, @next/next/no-html-link-for-pages */
+import Image from "next/image";
+import { requirePermission } from "@/lib/auth/permissions";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { createSerialLabelAssets } from "@/lib/inventory/labels";
+import { PrintButton } from "@/components/inventory/PrintButton";
+
+export const dynamic="force-dynamic";
+export default async function SerialPrintPage({searchParams}:{searchParams:Promise<{ids?:string;batch?:string;preset?:string}>}){
+  await requirePermission("serials.print"); const params=await searchParams; const ids=(params.ids??"").split(",").filter((id)=>/^[0-9a-f-]{36}$/i.test(id)).slice(0,500); const db=createSupabaseAdminClient();
+  let query=db.from("serial_numbers").select("id,sen_serial,manufacturer_serial,status,condition,product_id,products(name,model_number,brands(name))").not("sen_serial","is",null).limit(500);
+  if(params.batch)query=query.eq("generation_batch_id",params.batch);else if(ids.length)query=query.in("id",ids);else return <main className="p-8"><h1 className="text-2xl font-bold">No serials selected</h1><a href="/admin/serials">Return to Serial Tracking</a></main>;
+  const{data,error}=await query.order("created_at");if(error)throw new Error("Unable to load printable serials.");const labels=await Promise.all((data??[]).map(async(unit)=>({...unit,assets:await createSerialLabelAssets(unit.sen_serial!)})));
+  const preset=["50x30","60x40","a4"].includes(params.preset??"")?params.preset:"60x40";
+  return <main className={`label-print preset-${preset} min-h-screen bg-white p-6 text-black`}><div className="print:hidden mx-auto mb-6 flex max-w-5xl flex-wrap items-center gap-3"><a href="/admin/serials" className="rounded border px-4 py-2">Back</a><PrintButton/><span>{labels.length} label(s)</span><a href={`?${params.batch?`batch=${params.batch}`:`ids=${ids.join(",")}`}&preset=50x30`}>50×30</a><a href={`?${params.batch?`batch=${params.batch}`:`ids=${ids.join(",")}`}&preset=60x40`}>60×40</a><a href={`?${params.batch?`batch=${params.batch}`:`ids=${ids.join(",")}`}&preset=a4`}>A4</a></div><div className="label-grid mx-auto">{labels.map((unit)=>{const product=unit.products as unknown as {name:string;model_number:string|null;brands:{name:string}|null};return <article key={unit.id} className="serial-label relative break-inside-avoid border border-black bg-white p-2"><div className="flex items-center justify-between"><Image src="/brand/sen-official-logo.png" alt="SEN" width={50} height={50} className="h-8 w-8 object-contain"/><strong className="text-[10px]">{product?.brands?.name??"SEN"}</strong></div><h2 className="truncate text-[10px] font-bold">{product?.name}</h2><p className="text-[8px]">Model: {product?.model_number??"—"}</p><div className="mt-1" dangerouslySetInnerHTML={{__html:unit.assets.barcodeSvg}}/><p className="break-all text-center font-mono text-[7px] font-bold">{unit.sen_serial}</p><div className="mt-1 flex items-end justify-between gap-1"><img src={unit.assets.qrDataUrl} alt={`QR for ${unit.sen_serial}`} className="h-12 w-12"/><div className="text-right text-[7px]"><p>{unit.manufacturer_serial?`MFR: ${unit.manufacturer_serial}`:"Manufacturer serial not provided"}</p><p>{unit.condition} · {unit.status}</p></div></div></article>})}</div></main>;
+}
