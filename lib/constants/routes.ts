@@ -17,6 +17,8 @@ export const routes = {
   adminUsers: "/admin/users",
   adminPermissions: "/admin/permissions",
   adminActivity: "/admin/activity",
+  adminOrders: "/admin/orders",
+  adminShipments: "/admin/shipments",
   adminProducts: "/admin/products",
   adminCategories: "/admin/categories",
   adminBrands: "/admin/brands",
@@ -30,6 +32,8 @@ export const routes = {
   adminTrackingStatuses: "/admin/tracking-statuses",
   employeeProfile: "/employee/profile",
   employeeActivity: "/employee/activity",
+  accountAddresses: "/account/addresses",
+  accountOrders: "/account/orders",
   environmentCheck: "/environment-check",
 } as const;
 
