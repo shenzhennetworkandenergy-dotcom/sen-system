@@ -15,17 +15,17 @@ export function DashboardShell({ title, subtitle, children, admin = false, emplo
   const navigation = admin ? adminNavigation : employeePermissions ? visibleEmployeeNavigation(employeePermissions) : [];
 
   return <div className="sen-dashboard-shell min-h-screen">
-    <header className="sen-dashboard-header sticky top-0 z-30 border-b shadow-lg backdrop-blur">
+    <header className="sen-dashboard-header sticky top-0 z-30 border-b bg-[#07152f] text-white shadow-lg backdrop-blur">
       <div className="mx-auto flex h-14 max-w-[100rem] items-center justify-between gap-4 px-3 sm:px-5">
         <a href={routes.home} className="flex min-w-0 items-center gap-2.5 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
           <span className="grid h-9 w-9 shrink-0 overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm">
             <Image src="/brand/sen-official-logo.png" alt="SEN logo" width={144} height={144} className="h-full w-full object-contain" priority />
           </span>
-          <span className="min-w-0"><strong className="block truncate text-sm leading-4">SEN Control Center</strong><span className="hidden text-[11px] text-slate-300 sm:block">Operations dashboard</span></span>
+          <span className="min-w-0"><strong className="block truncate text-sm leading-4 text-white">SEN Control Center</strong><span className="hidden text-[11px] text-slate-300 sm:block">Operations dashboard</span></span>
         </a>
         <nav aria-label="Account navigation" className="flex shrink-0 items-center gap-1 text-xs font-semibold sm:gap-2 sm:text-sm">
-          <a href={routes.home} className="rounded-lg px-2.5 py-2 text-slate-100 hover:bg-white/10 sm:px-3">Public website</a>
-          <a href={routes.logout} className="rounded-lg border border-white/20 bg-white/5 px-2.5 py-1.5 text-white hover:bg-white/15 sm:px-3">Logout</a>
+          <a href={routes.home} className="rounded-lg px-2.5 py-2 !text-slate-100 hover:bg-white/10 hover:!text-white sm:px-3">Public website</a>
+          <a href={routes.logout} className="rounded-lg border border-white/20 bg-white/5 px-2.5 py-1.5 !text-white hover:bg-white/15 hover:!text-white sm:px-3">Logout</a>
         </nav>
       </div>
     </header>
