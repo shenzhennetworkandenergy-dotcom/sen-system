@@ -2,6 +2,7 @@ import "server-only";
 
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { quantity } from "@/lib/inventory/stock";
+import { sanitizeProductHtml } from "@/lib/inventory/html";
 
 const staticImages: Record<string, string> = {
   "dell-poweredge-r630-e5-2680-v4": "/products/servers/dell-r630.png",
@@ -52,7 +53,7 @@ export async function getPublicProducts(params: CatalogueParams = {}) {
 
 export async function getPublicProduct(slug: string) {
   const db = createSupabaseAdminClient();
-  const { data: product, error } = await db.from("products").select("id,name,slug,sku,barcode,manufacturer_part_number,product_type,short_description,description,specifications,warranty_information,datasheet_url,regular_price,sale_price,currency,weight,length,width,height,country_of_origin,stock_status,allow_backorders,serial_tracking_required,sen_business_category,brand_id,updated_at").eq("slug", slug).eq("status", "active").eq("public_catalogue_visible", true).maybeSingle();
+  const { data: product, error } = await db.from("products").select("id,name,slug,sku,model_number,barcode,manufacturer_part_number,product_type,short_description,description,specifications,warranty_information,datasheet_url,regular_price,sale_price,currency,weight,length,width,height,country_of_origin,stock_status,allow_backorders,serial_tracking_required,sen_business_category,brand_id,updated_at").eq("slug", slug).eq("status", "active").eq("public_catalogue_visible", true).maybeSingle();
   if (error) throw new Error("Unable to load this product.");
   if (!product) return null;
   const [{ data: brand }, { data: assignments }, { data: media }, { data: variations }, { data: balances }] = await Promise.all([
@@ -67,5 +68,5 @@ export async function getPublicProduct(slug: string) {
   if (!images.length && staticImages[product.slug]) images.push({ id: "static", url: staticImages[product.slug], alt: product.name, primary: true });
   const available = (balances ?? []).reduce((sum, balance) => sum + quantity(balance.available), 0);
   const incoming = (balances ?? []).reduce((sum, balance) => sum + quantity(balance.incoming), 0);
-  return { ...product, brand, categories: (assignments ?? []).map((item) => item.product_categories as unknown as { name: string; slug: string }).filter(Boolean), images, variations: variations ?? [], available, incoming };
+  return { ...product, short_description:sanitizeProductHtml(product.short_description),description:sanitizeProductHtml(product.description), brand, categories: (assignments ?? []).map((item) => item.product_categories as unknown as { name: string; slug: string }).filter(Boolean), images, variations: variations ?? [], available, incoming };
 }
