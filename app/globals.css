@@ -235,3 +235,10 @@ html { scroll-behavior: smooth; }
   .label-grid { gap: 3mm; }
   .serial-label { break-inside: avoid; page-break-inside: avoid; }
 }
+
+@keyframes shipment-dash { to { stroke-dashoffset: -28; } }
+.shipment-route-line { animation: shipment-dash 3.5s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .shipment-route-line { animation: none; }
+  .shipment-marker { display: none; }
+}
