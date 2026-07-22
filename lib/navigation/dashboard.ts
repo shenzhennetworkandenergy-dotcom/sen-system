@@ -16,6 +16,8 @@ export const adminNavigation: DashboardNavigationItem[] = [
   {key:"inventory",label:"Inventory",route:"/admin/inventory",group:"Inventory and Logistics",iconKey:"inventory",requiredPermission:"inventory.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"warehouses",label:"Warehouses",route:"/admin/warehouses",group:"Inventory and Logistics",iconKey:"warehouses",requiredPermission:"warehouses.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"serials",label:"Serial Tracking",route:"/admin/serials",group:"Inventory and Logistics",iconKey:"serials",requiredPermission:"serials.view",implemented:true,adminVisible:true,employeeVisible:true},
+  {key:"work-locations",label:"Work Locations",route:routes.adminWorkLocations,group:"Inventory and Logistics",iconKey:"warehouses",requiredPermission:"locations.view",implemented:true,adminVisible:true,employeeVisible:true},
+  {key:"tracking-statuses",label:"Tracking Statuses",route:routes.adminTrackingStatuses,group:"Inventory and Logistics",iconKey:"activity",requiredPermission:"tracking_statuses.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"shipments",label:"Shipments",route:null,group:"Inventory and Logistics",iconKey:"shipments",requiredPermission:"shipments.view",implemented:false,adminVisible:true,employeeVisible:false},
   {key:"purchasing",label:"Purchasing",route:null,group:"Procurement and Finance",iconKey:"purchasing",requiredPermission:"purchasing.view",implemented:false,adminVisible:true,employeeVisible:false},
   {key:"suppliers",label:"Suppliers",route:null,group:"Procurement and Finance",iconKey:"suppliers",requiredPermission:"suppliers.view",implemented:false,adminVisible:true,employeeVisible:false},
@@ -31,6 +33,7 @@ export const adminNavigation: DashboardNavigationItem[] = [
 
 export const employeeNavigation: DashboardNavigationItem[] = [
   {key:"employee-dashboard",label:"Employee Dashboard",route:routes.employee,group:"Workspace",iconKey:"dashboard",requiredPermission:"dashboard.view",implemented:true,adminVisible:false,employeeVisible:true},
+  {key:"employee-profile",label:"My workplace",route:routes.employeeProfile,group:"Workspace",iconKey:"employees",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
   {key:"employee-activity",label:"My Activity",route:routes.employeeActivity,group:"Workspace",iconKey:"activity",requiredPermission:"activity.view_own",implemented:true,adminVisible:false,employeeVisible:true},
   ...adminNavigation.filter((item)=>item.employeeVisible),
 ];
