@@ -61,3 +61,9 @@
 - Added pre-receipt SEN serial batches, optional normalized manufacturer serials, controlled regeneration history, Code 128/QR labels, CSV export, scan/search, and unit trace pages.
 - Added work locations, employee primary workplace assignment, immutable event-location snapshots, and configurable tracking statuses.
 - Added atomic serialized receipt, adjustment, and transfer RPCs with permission, balance, unit-count, history, and audit enforcement.
+# 2026-07-22
+
+### Fixed
+- Qualified the employee actor in the Phase 3 location-recording RPC after rollback testing exposed an ambiguous PostgreSQL reference.
+- Required `shipments.view` before employees can read customer-safe shipment location projections.
+- Added a rollback-only Phase 3 database acceptance test covering product identity, serialized receiving, and location sessions.

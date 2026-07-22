@@ -27,3 +27,5 @@ Customers poll their own safe shipment projection every 45 seconds while viewing
 ## Offline verification
 
 Apply migrations only to disposable local Supabase, then run all project verification scripts, TypeScript, lint, and production build. Test product creation, duplicate detection, atomic stock receipt, serial pages, image upload, location consent/session controls, customer freshness labels, and all Phase 1/2 regressions locally. GitHub, hosted Supabase, and Vercel remain deferred until explicit approval.
+
+The rollback-only database acceptance test is `supabase/tests/phase3_frontend_completion.sql`. It proves active brand/model duplicate rejection, atomic serialized receipt, balance and serial state updates, order/shipment setup, and the complete start/record/pause/resume/stop location-session lifecycle without retaining any test data. Migration `202607220006_phase3_location_function_repair.sql` safely repairs an ambiguous PostgreSQL argument/column reference discovered by that transactional test.

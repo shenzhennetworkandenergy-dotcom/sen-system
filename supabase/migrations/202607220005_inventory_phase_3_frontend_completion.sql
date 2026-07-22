@@ -148,7 +148,12 @@ create or replace function public.phase3_record_location(actor_profile_id uuid, 
 returns uuid language plpgsql security definer set search_path='' as $$
 declare session_row public.delivery_location_sessions%rowtype; update_id uuid:=gen_random_uuid();
 begin
-  select * into session_row from public.delivery_location_sessions where id=requested_session_id and actor_profile_id=actor_profile_id and status='active' for update;
+  select location_session.* into session_row
+    from public.delivery_location_sessions location_session
+    where location_session.id=requested_session_id
+      and location_session.actor_profile_id=phase3_record_location.actor_profile_id
+      and location_session.status='active'
+    for update;
   if session_row.id is null then raise exception 'Active location session required'; end if;
   if exists(select 1 from public.delivery_location_updates where session_id=requested_session_id and recorded_at > now()-interval '55 seconds') then return null; end if;
   insert into public.delivery_location_updates(id,session_id,shipment_id,actor_profile_id,latitude,longitude,accuracy,heading,speed)
