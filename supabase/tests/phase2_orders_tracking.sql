@@ -1,5 +1,7 @@
 -- Transactional local acceptance test for Phase 2. All test changes are rolled back.
 begin;
+-- Match the service-role execution context used by the server-only Next.js clients.
+select set_config('request.jwt.claim.role', 'service_role', true);
 do $$
 declare
   actor uuid; customer uuid; product uuid; warehouse uuid; reason uuid;
