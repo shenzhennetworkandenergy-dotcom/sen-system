@@ -60,6 +60,8 @@ Phase 2 connects customer orders to physical-unit inventory. Order confirmation 
 
 Commercial, product, address, route, and transport details are snapshotted so historical records remain stable. Customer routes filter by authenticated profile and expose only safe serial identity, explicitly customer-visible events, and restricted warranty/invoice documents. Operational maps are estimates built from recorded points, not live GPS.
 
+Phase 3 adds explicit foreground delivery-location sessions rather than hidden employee tracking. High-frequency coordinates live in dedicated session/update tables; audit logs record only meaningful session transitions. Customer pages receive a filtered shipment projection with centralized freshness labels.
+
 - GitHub is the source of truth for source control and review.
 - Vercel is the deployment infrastructure for the Next.js application.
 - Supabase is the backend infrastructure for database and future authentication capabilities.

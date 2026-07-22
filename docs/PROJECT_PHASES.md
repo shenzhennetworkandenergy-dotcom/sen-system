@@ -35,6 +35,10 @@ Product model numbers, rich descriptions, classified media, individually generat
 
 Future routes must use the Phase 3B permission catalogue and server guards before accessing operational data.
 
+## Offline review checkpoint — Inventory modernization Phase 3
+
+Automatic SKU/model identity, duplicate prevention, product-specific serialized receiving, Serial Operations, visible product-image management, and explicit foreground shipment-location sharing are implemented locally. The user must approve the offline frontend before any GitHub release or hosted migration.
+
 ## Offline review checkpoint — Inventory modernization Phase 2
 
 Customer addresses, staff-created customer orders, reservations, exact serial allocation, packing, multiple partial shipments, dispatch, recorded tracking checkpoints, delivery, restricted documents, and the customer Order Centre are implemented on the offline Phase 2 branch. Local migrations and the rollback-only order-to-delivery database workflow pass. GitHub, hosted Supabase, and Vercel remain unchanged pending user review.
