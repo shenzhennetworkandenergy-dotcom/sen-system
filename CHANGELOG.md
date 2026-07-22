@@ -67,3 +67,4 @@
 - Qualified the employee actor in the Phase 3 location-recording RPC after rollback testing exposed an ambiguous PostgreSQL reference.
 - Required `shipments.view` before employees can read customer-safe shipment location projections.
 - Added a rollback-only Phase 3 database acceptance test covering product identity, serialized receiving, and location sessions.
+- Backfilled missing model identifiers for legacy serial-tracked catalogue products without changing their protected SKUs.
