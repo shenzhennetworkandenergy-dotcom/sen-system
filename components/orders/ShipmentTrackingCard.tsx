@@ -1,9 +1,40 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 import { AnimatedShipmentMap } from "@/components/orders/AnimatedShipmentMap";
 import { dateTime, label, type RoutePoint } from "@/lib/orders/types";
 
-type Event = { id: string; occurred_at: string; customer_visible_title: string | null; customer_visible_message: string | null; internal_note?: string | null; event_visibility: string; location_snapshot: Record<string, unknown>; tracking_status_definitions: { name: string; color: string | null } | null };
-export function ShipmentTrackingCard({ shipment, events, points, internal = false }: { shipment: { shipment_number: string; status: string; transport_mode: string; latest_location_snapshot: Record<string, unknown> | null; estimated_arrival_at: string | null }; events: Event[]; points: RoutePoint[]; internal?: boolean }) {
-  const latest = shipment.latest_location_snapshot, latestLabel = latest && (String(latest.label ?? latest.name ?? latest.city ?? "") || null);
-  return <div className="grid gap-5 xl:grid-cols-[1.2fr_.8fr]"><AnimatedShipmentMap points={points} latestLabel={latestLabel} transportMode={shipment.transport_mode} delivered={shipment.status === "delivered"}/><section className="rounded-2xl border bg-[var(--surface)] p-5"><div className="flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wider text-[var(--muted-text)]">{shipment.shipment_number}</p><h3 className="mt-1 text-lg font-semibold">Tracking timeline</h3></div><span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-800">{label(shipment.status)}</span></div><p className="mt-2 text-sm text-[var(--muted-text)]">Estimated arrival: {dateTime(shipment.estimated_arrival_at)}</p><ol className="mt-5 space-y-4">{events.length ? events.map((event, index) => <li key={event.id} className="relative pl-6 before:absolute before:left-[5px] before:top-2 before:h-2.5 before:w-2.5 before:rounded-full before:bg-[var(--primary)] after:absolute after:left-[9px] after:top-5 after:h-[calc(100%+1rem)] after:w-px after:bg-[var(--border)] last:after:hidden"><p className="font-semibold">{event.customer_visible_title || event.tracking_status_definitions?.name || "Shipment update"}</p>{event.customer_visible_message ? <p className="mt-1 text-sm text-[var(--muted-text)]">{event.customer_visible_message}</p> : null}{internal && event.internal_note ? <p className="mt-1 rounded bg-amber-50 p-2 text-xs text-amber-900">Internal: {event.internal_note}</p> : null}<time className="mt-1 block text-xs text-[var(--muted-text)]">{dateTime(event.occurred_at)}</time></li>) : <li className="text-sm text-[var(--muted-text)]">No tracking events recorded yet.</li>}</ol></section></div>;
+type Event = {
+  id: string;
+  occurred_at: string;
+  customer_visible_title: string | null;
+  customer_visible_message: string | null;
+  internal_note?: string | null;
+  event_visibility: string;
+  location_snapshot: Record<string, unknown>;
+  tracking_status_definitions: { name: string; color: string | null } | null;
+};
+
+export function ShipmentTrackingCard({ shipment, events, points, internal = false }: {
+  shipment: { shipment_number: string; status: string; transport_mode: string; latest_location_snapshot: Record<string, unknown> | null; estimated_arrival_at: string | null };
+  events: Event[];
+  points: RoutePoint[];
+  internal?: boolean;
+}) {
+  const latest = shipment.latest_location_snapshot;
+  const latestLabel = latest && (String(latest.label ?? latest.name ?? latest.city ?? "") || null);
+
+  return <div className="grid gap-5 xl:grid-cols-[1.2fr_.8fr]">
+    <AnimatedShipmentMap points={points} latestLabel={latestLabel} transportMode={shipment.transport_mode} delivered={shipment.status === "delivered"}/>
+    <section className="rounded-2xl border bg-[var(--surface)] p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div><p className="text-xs font-bold uppercase tracking-wider text-[var(--muted-text)]">{shipment.shipment_number}</p><h3 className="mt-1 text-lg font-semibold">Tracking timeline</h3></div>
+        <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-800">{label(shipment.status)}</span>
+      </div>
+      <p className="mt-2 text-sm text-[var(--muted-text)]">Estimated arrival: {dateTime(shipment.estimated_arrival_at)}. Locations are recorded checkpoints, not live GPS.</p>
+      <ol className="mt-5 space-y-4">{events.length ? events.map((event) => <li key={event.id} className="relative pl-6 before:absolute before:left-[5px] before:top-2 before:h-2.5 before:w-2.5 before:rounded-full before:bg-[var(--primary)] after:absolute after:left-[9px] after:top-5 after:h-[calc(100%+1rem)] after:w-px after:bg-[var(--border)] last:after:hidden">
+        <p className="font-semibold">{event.customer_visible_title || event.tracking_status_definitions?.name || "Shipment update"}</p>
+        {event.customer_visible_message ? <p className="mt-1 text-sm text-[var(--muted-text)]">{event.customer_visible_message}</p> : null}
+        {internal && event.internal_note ? <p className="mt-1 rounded bg-amber-50 p-2 text-xs text-amber-900">Internal: {event.internal_note}</p> : null}
+        <time className="mt-1 block text-xs text-[var(--muted-text)]">{dateTime(event.occurred_at)}</time>
+      </li>) : <li className="text-sm text-[var(--muted-text)]">No tracking events recorded yet.</li>}</ol>
+    </section>
+  </div>;
 }
