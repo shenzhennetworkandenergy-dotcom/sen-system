@@ -22,7 +22,7 @@ export async function getProductList(params: ProductListParams) {
     allowedIds = (data ?? []).map((item) => item.product_id);
     if (!allowedIds.length) return { products: [], count: 0, page, size };
   }
-  let query = db.from("products").select("id,name,slug,sku,product_type,status,brand_id,regular_price,sale_price,currency,stock_status,low_stock_threshold,allow_backorders,updated_at", { count: "exact" });
+  let query = db.from("products").select("id,name,slug,sku,product_type,status,public_catalogue_visible,brand_id,regular_price,sale_price,currency,stock_status,low_stock_threshold,allow_backorders,updated_at", { count: "exact" });
   if (params.q) query = query.or(`name.ilike.%${params.q.slice(0, 80)}%,sku.ilike.%${params.q.slice(0, 80)}%`);
   if (params.brand) query = query.eq("brand_id", params.brand);
   if (params.type && ["simple", "variable"].includes(params.type)) query = query.eq("product_type", params.type);

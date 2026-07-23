@@ -21,18 +21,20 @@ export async function generateSerialBatchAction(productId: string, form: FormDat
 export async function receiveExpectedSerialBatchAction(form: FormData) {
   const { profile } = await requirePermission("inventory.receive");
   const batchId = uuidOrNull(form.get("batch_id"));
-  if (!batchId) redirect(`/admin/serials/batches?error=${encodeURIComponent("Choose a valid serial batch.")}`);
+  const returnProduct = uuidOrNull(form.get("return_product"));
+  const batchDestination = (type: "success" | "error", message: string, productId = returnProduct) => `/admin/serials/batches?${productId ? `product=${encodeURIComponent(productId)}&` : ""}${type}=${encodeURIComponent(message)}`;
+  if (!batchId) redirect(batchDestination("error", "Choose a valid serial batch."));
   const db = createSupabaseAdminClient();
   const { data: batch, error: batchError } = await db.from("serial_generation_batches").select("id,product_id,variation_id,expected_warehouse_id,status").eq("id", batchId).maybeSingle();
-  if (batchError || !batch || !batch.expected_warehouse_id || batch.status === "received") {
-    redirect(`/admin/serials/batches?error=${encodeURIComponent("This serial batch cannot be received.")}`);
+  if (batchError || !batch || !batch.expected_warehouse_id || !["generated", "partially_received"].includes(batch.status)) {
+    redirect(batchDestination("error", "This serial batch cannot be received."));
   }
   const [{ data: units, error: unitsError }, { data: reason, error: reasonError }] = await Promise.all([
     db.from("serial_numbers").select("id").eq("generation_batch_id", batchId).eq("status", "expected").order("created_at"),
     db.from("stock_adjustment_reasons").select("id").eq("is_active", true).in("direction", ["increase", "both"]).order("sort_order").limit(1).maybeSingle(),
   ]);
   if (unitsError || reasonError || !reason || !units?.length) {
-    redirect(`/admin/serials/batches?error=${encodeURIComponent("No receivable expected units or active stock receipt reason was found.")}`);
+    redirect(batchDestination("error", "No receivable expected units or active stock receipt reason was found.", batch.product_id));
   }
   const { error } = await db.rpc("admin_adjust_serialized_inventory", {
     actor_profile_id: profile.id,
@@ -47,7 +49,7 @@ export async function receiveExpectedSerialBatchAction(form: FormData) {
   });
   if (error) {
     console.error("Expected serial batch receipt failed", { code: error.code, message: error.message, batchId });
-    redirect(`/admin/serials/batches?error=${encodeURIComponent(safeSerialError(error.message))}`);
+    redirect(batchDestination("error", safeSerialError(error.message), batch.product_id));
   }
   await db.from("serial_generation_batches").update({ status: "received" }).eq("id", batchId);
   revalidatePath("/admin/inventory");
@@ -56,7 +58,7 @@ export async function receiveExpectedSerialBatchAction(form: FormData) {
   revalidatePath("/admin/serials");
   revalidatePath("/admin/serials/batches");
   revalidatePath("/products");
-  redirect(`/admin/serials/batches?success=${encodeURIComponent(`${units.length} expected serialized unit(s) received into stock.`)}`);
+  redirect(batchDestination("success", `${units.length} expected serialized unit(s) received into stock.`, batch.product_id));
 }
 
 export async function regenerateSerialAction(form: FormData) {
