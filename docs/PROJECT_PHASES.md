@@ -29,11 +29,15 @@ Product model numbers, rich descriptions, classified media, individually generat
 
 1. Validated product/inventory CSV import and public product catalogue.
 2. Suppliers, purchasing and China-to-Bangladesh logistics.
-3. Sales, CRM and quotations.
+3. CRM and quotations. The minimal Sales workflow is implemented locally for offline review.
 4. Customer e-commerce, orders and service workflows.
 5. Accounting, HR, manufacturing, projects, support and reporting.
 
 Future routes must use the Phase 3B permission catalogue and server guards before accessing operational data.
+
+## Offline review checkpoint — Minimal Sales
+
+The local Sales module now connects customer profiles, products, warehouse availability, reservations, serial allocation, payments, immutable printable documents and customer history. Its static checks, migration execution, transactional database workflow and authenticated browser matrix must pass before any GitHub or hosted release.
 
 ## Offline review checkpoint — Inventory modernization Phase 3
 

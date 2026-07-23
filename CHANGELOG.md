@@ -74,3 +74,12 @@
 - Linked inventory summary metrics to detailed product, quantity, location and serial-status views.
 - Added guarded permanent deletion for unused products, brands, attributes and users.
 - Expanded administrator user details with safe Supabase Auth information and temporary-password reset without exposing stored credentials.
+# 2026-07-23
+
+## Added
+
+- Offline-first minimal Sales dashboard, sale builder and detailed sale workspace.
+- Atomic BDT sale creation with price-change reasons, inventory reservation and cancellation release.
+- Partial/full payment tracking and immutable printable invoice/challan snapshots.
+- Customer and administrator sales-history views.
+- Granular Sales permissions, local database regression test and Sales documentation.

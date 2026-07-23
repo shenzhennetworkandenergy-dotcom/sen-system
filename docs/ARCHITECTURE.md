@@ -62,6 +62,12 @@ Commercial, product, address, route, and transport details are snapshotted so hi
 
 Phase 3 adds explicit foreground delivery-location sessions rather than hidden employee tracking. High-frequency coordinates live in dedicated session/update tables; audit logs record only meaningful session transitions. Customer pages receive a filtered shipment projection with centralized freshness labels.
 
+## Sales
+
+The minimal Sales module is a commercial interface over the existing Phase 2 order and fulfilment source of truth. `sales_orders` is not duplicated. `create_minimal_sale` atomically creates the order, BDT totals, billing/delivery snapshots and auditable price adjustments. Confirmation and cancellation reuse existing inventory reservation functions; serial allocation, packing and shipments reuse the existing exact-unit workflow.
+
+Payment and document records are append-oriented. Payment totals and statuses are recalculated in fixed-search-path server RPCs. Invoice and delivery-challan rows contain immutable snapshots so later catalogue or profile edits do not change issued records. Administrators can view all sales; employees are restricted by granular `sales.*` permissions and own/all scope; customers see only their own history.
+
 - GitHub is the source of truth for source control and review.
 - Vercel is the deployment infrastructure for the Next.js application.
 - Supabase is the backend infrastructure for database and future authentication capabilities.

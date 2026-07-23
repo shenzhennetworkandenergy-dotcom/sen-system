@@ -1,7 +1,7 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requirePermission } from "@/lib/auth/permissions";
+import { requireAnyPermission, requirePermission } from "@/lib/auth/permissions";
 import { writeAuditLog } from "@/lib/audit/log";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { addressFromForm, jsonArray, optionalString, uuid } from "@/lib/orders/validation";
@@ -51,7 +51,7 @@ export async function cancelOrderAction(orderId: string, form: FormData) {
 }
 
 export async function allocateSerialsAction(orderId: string, orderItemId: string, form: FormData) {
-  const { profile } = await requirePermission("orders.allocate"); const serialIds = [...new Set(form.getAll("serial_id").map(String))], method = ["manual", "scan", "auto", "replacement"].includes(String(form.get("method"))) ? String(form.get("method")) : "manual", db = createSupabaseAdminClient();
+  const { profile } = await requireAnyPermission(["orders.allocate", "sales.allocate_serials"]); const serialIds = [...new Set(form.getAll("serial_id").map(String))], method = ["manual", "scan", "auto", "replacement"].includes(String(form.get("method"))) ? String(form.get("method")) : "manual", db = createSupabaseAdminClient();
   const { error } = await db.rpc("allocate_order_serials", { actor_profile_id: profile.id, requested_order_item_id: orderItemId, requested_serial_ids: serialIds, requested_method: method });
   if (error) redirect(orderTarget(orderId, "error", safeMessage(new Error(error.message), "Unable to allocate serials.")));
   await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "order.serials_allocated", module: "orders", entityType: "sales_order_item", entityId: orderItemId, description: "Serialized units allocated to order item.", newValues: { serial_count: serialIds.length, method } });
@@ -59,14 +59,14 @@ export async function allocateSerialsAction(orderId: string, orderItemId: string
 }
 
 export async function autoAllocateSerialsAction(orderId: string, orderItemId: string) {
-  const { profile } = await requirePermission("orders.allocate"); const db = createSupabaseAdminClient(); const { data, error } = await db.rpc("auto_allocate_order_serials", { actor_profile_id: profile.id, requested_order_item_id: orderItemId });
+  const { profile } = await requireAnyPermission(["orders.allocate", "sales.allocate_serials"]); const db = createSupabaseAdminClient(); const { data, error } = await db.rpc("auto_allocate_order_serials", { actor_profile_id: profile.id, requested_order_item_id: orderItemId });
   if (error) redirect(orderTarget(orderId, "error", safeMessage(new Error(error.message), "Unable to auto-allocate serials.")));
   await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "order.serials_auto_allocated", module: "orders", entityType: "sales_order_item", entityId: orderItemId, description: "Eligible serialized units were automatically allocated.", newValues: { count: data } });
   revalidatePath(`/admin/orders/${orderId}`); redirect(orderTarget(orderId, "success", `${data ?? 0} serial(s) auto-allocated.`));
 }
 
 export async function releaseAllocationAction(orderId: string, allocationId: string, form: FormData) {
-  const { profile } = await requirePermission("orders.allocate"); const reason = optionalString(form, "reason", 1000) ?? "Released for replacement", db = createSupabaseAdminClient();
+  const { profile } = await requireAnyPermission(["orders.allocate", "sales.allocate_serials"]); const reason = optionalString(form, "reason", 1000) ?? "Released for replacement", db = createSupabaseAdminClient();
   const { error } = await db.rpc("release_order_serial_allocation", { actor_profile_id: profile.id, requested_allocation_id: allocationId, requested_reason: reason });
   if (error) redirect(orderTarget(orderId, "error", safeMessage(new Error(error.message), "Unable to release allocation.")));
   await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "order.serial_released", module: "orders", entityType: "order_serial_allocation", entityId: allocationId, description: "Serial allocation released.", newValues: { reason } });
@@ -74,7 +74,7 @@ export async function releaseAllocationAction(orderId: string, allocationId: str
 }
 
 export async function savePackingAction(orderId: string, form: FormData) {
-  const { profile } = await requirePermission("orders.pack"); const db = createSupabaseAdminClient();
+  const { profile } = await requireAnyPermission(["orders.pack", "sales.edit"]); const db = createSupabaseAdminClient();
   let dimensions: Record<string, number> = {}; try { dimensions = JSON.parse(String(form.get("dimensions") ?? "{}")); } catch { redirect(orderTarget(orderId, "error", "Package dimensions are invalid.")); }
   const allocations = [...new Set(form.getAll("allocation_id").map(String))], nonserialized = jsonArray(form, "nonserialized_items");
   const { data, error } = await db.rpc("save_order_packing", { actor_profile_id: profile.id, requested_order_id: orderId, requested_package_reference: String(form.get("package_reference") ?? "").trim(), requested_allocation_ids: allocations, requested_nonserialized: nonserialized, requested_complete: form.get("complete") === "on", requested_weight: Number(form.get("weight") || 0) || null, requested_dimensions: dimensions, requested_notes: optionalString(form, "notes", 1000) });
