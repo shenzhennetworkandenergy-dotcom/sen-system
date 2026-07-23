@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-07-22 — Inventory Modernization Phase 3 (offline)
+
+- Added authoritative automatic SKU previews and validation, active brand/model duplicate detection, and identifier history.
+- Added product-specific atomic serialized receiving and a prominent Serial Operations Centre with generator, regeneration, printing, scanning, batches, and export routes.
+- Added visible main/gallery image upload and management through the existing secured product-media architecture.
+- Added explicit foreground employee shipment location sessions and customer-safe freshness-aware tracking refresh.
+- Added the Phase 3 local migration and verification suite. No GitHub push, hosted database migration, or Vercel deployment was performed.
+
+## 2026-07-22 — Inventory Modernization Phase 2
+
+- Added customer addresses, staff-created orders, immutable commercial snapshots, stock reservations, exact serial allocation, packing, multiple partial shipments, dispatch, delivery, and customer-safe tracking.
+- Added responsive staff order/shipment workspaces and the customer Order Centre with safe serial and restricted-document visibility.
+- Added estimated China-to-Bangladesh route visualization with recorded checkpoints, explicit non-live-GPS language, reduced-motion support, and no paid map dependency.
+- Added additive database migrations, service-role-only operational RPCs, granular permissions, RLS, audit events, static verification, and a rollback-only end-to-end local SQL test.
+- Repaired packing and work-location snapshot defects discovered by the transactional local acceptance test.
+
 ## 2026-07-11
 
 ### Added
@@ -45,3 +61,16 @@
 - Added pre-receipt SEN serial batches, optional normalized manufacturer serials, controlled regeneration history, Code 128/QR labels, CSV export, scan/search, and unit trace pages.
 - Added work locations, employee primary workplace assignment, immutable event-location snapshots, and configurable tracking statuses.
 - Added atomic serialized receipt, adjustment, and transfer RPCs with permission, balance, unit-count, history, and audit enforcement.
+# 2026-07-22
+
+### Fixed
+- Qualified the employee actor in the Phase 3 location-recording RPC after rollback testing exposed an ambiguous PostgreSQL reference.
+- Required `shipments.view` before employees can read customer-safe shipment location projections.
+- Added a rollback-only Phase 3 database acceptance test covering product identity, serialized receiving, and location sessions.
+- Backfilled missing model identifiers for legacy serial-tracked catalogue products without changing their protected SKUs.
+
+### Added
+- Standardized the existing SEN catalogue with BDT pricing, complete identity/specification data, default warehouses and traceable demonstration inventory.
+- Linked inventory summary metrics to detailed product, quantity, location and serial-status views.
+- Added guarded permanent deletion for unused products, brands, attributes and users.
+- Expanded administrator user details with safe Supabase Auth information and temporary-password reset without exposing stored credentials.

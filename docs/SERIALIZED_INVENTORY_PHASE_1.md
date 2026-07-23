@@ -27,3 +27,5 @@ Product descriptions accept a bounded rich-text allowlist and are sanitized on w
 ## Deployment
 
 Apply `202607220001_inventory_serial_phase_1.sql` only after a recoverable backup and review. Run the existing Phase 3B/inventory suites plus `npm run test:inventory-phase1`, lint, and production build. After applying the migration to an approved environment, exercise the authenticated role, RLS, generation, regeneration, receipt, adjustment, transfer, print, export, search, and audit matrix before release.
+
+Phase 3 exposes these foundations through the top-level Serial Operations Centre and product-specific atomic stock receiver. The physical SEN serial format remains unchanged and is never replaced by the catalogue SKU.

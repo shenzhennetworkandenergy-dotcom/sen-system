@@ -13,7 +13,10 @@
     "supabase:stop": "supabase stop",
     "test:phase3b": "node scripts/verify-phase3b.mjs",
     "test:inventory": "node scripts/verify-inventory.mjs",
-    "test:inventory-phase1": "node scripts/verify-inventory-phase1.mjs"
+    "test:inventory-phase1": "node scripts/verify-inventory-phase1.mjs",
+    "test:inventory-phase2": "node scripts/verify-inventory-phase2.mjs",
+    "test:inventory-phase3": "node scripts/verify-inventory-phase3.mjs",
+    "test:inventory-admin-controls": "node scripts/verify-inventory-admin-controls.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",
