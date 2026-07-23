@@ -40,6 +40,7 @@ async function validateProductStockModel(productId: string | null, data: ReturnT
 }
 async function saveProduct(actorId: string, productId: string | null, form: FormData, canManageIdentifiers: boolean) {
   const data = payload(form); await validateProductStockModel(productId, data);
+  if (!productId) data.public_catalogue_visible = true;
   const db = createSupabaseAdminClient();
   const { data: brand } = data.brand_id ? await db.from("brands").select("name").eq("id", data.brand_id).eq("is_active", true).maybeSingle() : { data: null };
   if (!brand || !data.model_number) throw new Error("An active brand and model number are required.");
