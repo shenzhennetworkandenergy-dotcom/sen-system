@@ -10,6 +10,7 @@ import { sanitizeProductHtml } from "@/lib/inventory/html";
 import { automaticSku, normalizeIdentifier } from "@/lib/inventory/identifiers";
 
 function target(id?: string, type: "success" | "error" = "success", message = "Saved") { return id ? `/admin/products/${id}?${type}=${encodeURIComponent(message)}` : `/admin/products?${type}=${encodeURIComponent(message)}`; }
+function createErrorTarget(message: string) { return `/admin/products/new?error=${encodeURIComponent(message)}`; }
 function payload(form: FormData) {
   const name = requiredText(form, "name"), sku = requiredText(form, "sku", 100), product_type = String(form.get("product_type")), status = String(form.get("status")), sen_business_category = String(form.get("sen_business_category")), regular_price = optionalNumber(form, "regular_price"), sale_price = optionalNumber(form, "sale_price"), stock_status = String(form.get("stock_status") ?? "in_stock");
   if (!productTypes.includes(product_type as never) || !productStatuses.includes(status as never) || !businessCategories.includes(sen_business_category as never) || !["in_stock", "out_of_stock", "on_backorder"].includes(stock_status)) throw new Error("Invalid product type, status, business category, or stock status.");
@@ -39,6 +40,7 @@ async function validateProductStockModel(productId: string | null, data: ReturnT
 }
 async function saveProduct(actorId: string, productId: string | null, form: FormData, canManageIdentifiers: boolean) {
   const data = payload(form); await validateProductStockModel(productId, data);
+  if (!productId) data.public_catalogue_visible = true;
   const db = createSupabaseAdminClient();
   const { data: brand } = data.brand_id ? await db.from("brands").select("name").eq("id", data.brand_id).eq("is_active", true).maybeSingle() : { data: null };
   if (!brand || !data.model_number) throw new Error("An active brand and model number are required.");
@@ -59,13 +61,13 @@ async function uploadFormImages(productId:string,actorId:string,form:FormData){c
 export async function createProductAction(form: FormData) {
   const { profile, permissions } = await requirePermission("products.create");
   let savedId: string;
-  try { savedId = await saveProduct(profile.id, null, form, profile.role==="admin"||permissions.has("products.manage_identifiers")); } catch (error) { const message = error instanceof Error ? error.message : "Unknown"; console.error("Product create failed", { message }); redirect(target(undefined, "error", /required|Invalid|price|JSON|Currency|already exists|Permission/i.test(message) ? message : safeProductError(message))); }
-  const failures=await uploadFormImages(savedId,profile.id,form); revalidatePath("/admin/products"); if(form.get("submit_intent")==="save_generate") redirect(`/admin/products/${savedId}/serials/new`); redirect(target(savedId, failures.length?"error":"success", failures.length?`Product created, but ${failures.length} image(s) failed to upload.`:"Product created."));
+  try { savedId = await saveProduct(profile.id, null, form, profile.role==="admin"||permissions.has("products.manage_identifiers")); } catch (error) { const message = error instanceof Error ? error.message : "Unknown"; console.error("Product create failed", { message }); redirect(createErrorTarget(/required|Invalid|price|JSON|Currency|already exists|Permission/i.test(message) ? message : safeProductError(message))); }
+  const failures=await uploadFormImages(savedId,profile.id,form); revalidatePath("/admin/products"); revalidatePath("/products"); if(form.get("submit_intent")==="save_generate") redirect(`/admin/products/${savedId}/serials/new`); redirect(target(savedId, failures.length?"error":"success", failures.length?`Product created, but ${failures.length} image(s) failed to upload.`:"Product created and is now visible in the product administration list."));
 }
 export async function updateProductAction(productId: string, form: FormData) {
   const { profile, permissions } = await requirePermission("products.edit");
   try { await saveProduct(profile.id, productId, form, profile.role==="admin"||permissions.has("products.manage_identifiers")); } catch (error) { const message = error instanceof Error ? error.message : "Unknown"; console.error("Product update failed", { message }); redirect(target(productId, "error", /required|Invalid|price|JSON|Currency|variations|already exists|Permission/i.test(message) ? message : safeProductError(message))); }
-  const failures=await uploadFormImages(productId,profile.id,form); revalidatePath(`/admin/products/${productId}`); revalidatePath("/admin/products"); if(form.get("submit_intent")==="save_generate") redirect(`/admin/products/${productId}/serials/new`); redirect(target(productId, failures.length?"error":"success", failures.length?`Product updated, but ${failures.length} image(s) failed to upload.`:"Product updated."));
+  const failures=await uploadFormImages(productId,profile.id,form); revalidatePath(`/admin/products/${productId}`); revalidatePath("/admin/products"); revalidatePath("/products"); if(form.get("submit_intent")==="save_generate") redirect(`/admin/products/${productId}/serials/new`); redirect(target(productId, failures.length?"error":"success", failures.length?`Product updated, but ${failures.length} image(s) failed to upload.`:"Product updated."));
 }
 export async function archiveProductAction(form: FormData) { const { profile } = await requirePermission("products.archive"); const ids = [...new Set(form.getAll("productIds").map(String))].filter((item) => /^[0-9a-f-]{36}$/i.test(item)).slice(0, 100); if (!ids.length) redirect(target(undefined, "error", "Select at least one product.")); const db = createSupabaseAdminClient(); const { error } = await db.from("products").update({ status: "archived", updated_by: profile.id, updated_at: new Date().toISOString() }).in("id", ids); if (error) redirect(target(undefined, "error", "Unable to archive products.")); await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "product.archived", module: "products", entityType: "product", description: "Products archived.", newValues: { product_ids: ids, count: ids.length } }); revalidatePath("/admin/products"); redirect(target(undefined, "success", `${ids.length} product(s) archived.`)); }
 export async function deleteProductAction(productId: string) {

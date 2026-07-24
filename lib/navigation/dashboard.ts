@@ -12,7 +12,7 @@ export const adminNavigation: DashboardNavigationItem[] = [
   {key:"crm",label:"CRM",route:null,group:"Commerce and Customers",iconKey:"crm",requiredPermission:"crm.view",implemented:false,adminVisible:true,employeeVisible:false},
   {key:"products",label:"Products",route:"/admin/products",group:"Commerce and Customers",iconKey:"products",requiredPermission:"products.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"orders",label:"Orders",route:routes.adminOrders,group:"Commerce and Customers",iconKey:"sales",requiredPermission:"orders.view",implemented:true,adminVisible:true,employeeVisible:true},
-  {key:"sales",label:"Sales",route:null,group:"Commerce and Customers",iconKey:"sales",requiredPermission:"sales.view",implemented:false,adminVisible:true,employeeVisible:false},
+  {key:"sales",label:"Sales",route:routes.adminSales,group:"Commerce and Customers",iconKey:"sales",requiredPermission:"sales.view_own",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"quotations",label:"Quotations",route:null,group:"Commerce and Customers",iconKey:"quotations",requiredPermission:"quotations.view",implemented:false,adminVisible:true,employeeVisible:false},
   {key:"inventory",label:"Inventory",route:"/admin/inventory",group:"Inventory and Logistics",iconKey:"inventory",requiredPermission:"inventory.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"warehouses",label:"Warehouses",route:"/admin/warehouses",group:"Inventory and Logistics",iconKey:"warehouses",requiredPermission:"warehouses.view",implemented:true,adminVisible:true,employeeVisible:true},

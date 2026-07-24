@@ -4,9 +4,9 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { routes } from "@/lib/constants/routes";
 import { activityLabel, formatActivityTime } from "@/lib/audit/format";
 
-const plannedModules = ["CRM", "Sales", "Quotations", "Purchasing", "Suppliers", "Accounting", "HR", "Manufacturing", "Projects", "Support", "Reports", "AI Assistant", "Settings"];
+const plannedModules = ["CRM", "Quotations", "Purchasing", "Suppliers", "Accounting", "HR", "Manufacturing", "Projects", "Support", "Reports", "AI Assistant", "Settings"];
 const operationalModules = [
-  ["Products", routes.adminProducts], ["Orders", routes.adminOrders], ["Inventory", routes.adminInventory],
+  ["Products", routes.adminProducts], ["Orders", routes.adminOrders], ["Sales", routes.adminSales], ["Inventory", routes.adminInventory],
   ["Warehouses", routes.adminWarehouses], ["Serials", routes.adminSerials], ["Shipments", routes.adminShipments],
 ] as const;
 
