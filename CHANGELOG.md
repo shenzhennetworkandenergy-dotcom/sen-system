@@ -83,3 +83,10 @@
 - Partial/full payment tracking and immutable printable invoice/challan snapshots.
 - Customer and administrator sales-history views.
 - Granular Sales permissions, local database regression test and Sales documentation.
+# 2026-07-24 — Purchasing and supplier administration
+
+- Added a database-backed supplier master and complete purchase-order lifecycle.
+- Added draft editing, approval, ordering, cancellation, closure, partial/full receipts, CSV export, status history, and receipt history.
+- Connected ordered quantities to incoming inventory and receipts to balances, movements, serial tracking, permissions, and audit history.
+- Added responsive Purchasing and Suppliers routes for administrators and authorized employees.
+- Added an offline-only integration verifier that refuses to mutate cloud databases.

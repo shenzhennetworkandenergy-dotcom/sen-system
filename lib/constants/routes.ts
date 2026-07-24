@@ -20,6 +20,8 @@ export const routes = {
   adminOrders: "/admin/orders",
   adminSales: "/admin/sales",
   adminShipments: "/admin/shipments",
+  adminPurchasing: "/admin/purchasing",
+  adminSuppliers: "/admin/suppliers",
   adminProducts: "/admin/products",
   adminCategories: "/admin/categories",
   adminBrands: "/admin/brands",
