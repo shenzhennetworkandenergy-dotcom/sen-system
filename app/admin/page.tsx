@@ -4,10 +4,12 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { routes } from "@/lib/constants/routes";
 import { activityLabel, formatActivityTime } from "@/lib/audit/format";
 
-const plannedModules = ["CRM", "Quotations", "Purchasing", "Suppliers", "Accounting", "HR", "Manufacturing", "Projects", "Support", "Reports", "AI Assistant", "Settings"];
+const plannedModules = ["Quotations", "Manufacturing", "Projects", "Support", "Reports", "AI Assistant", "Settings"];
 const operationalModules = [
   ["Products", routes.adminProducts], ["Orders", routes.adminOrders], ["Sales", routes.adminSales], ["Inventory", routes.adminInventory],
   ["Warehouses", routes.adminWarehouses], ["Serials", routes.adminSerials], ["Shipments", routes.adminShipments],
+  ["Purchasing", routes.adminPurchasing], ["Suppliers", routes.adminSuppliers],
+  ["CRM", routes.adminCrm], ["Accounting", routes.adminAccounting], ["HR", routes.adminHr],
 ] as const;
 
 const statStyles = ["border-l-blue-500", "border-l-cyan-500", "border-l-violet-500", "border-l-indigo-500", "border-l-emerald-500", "border-l-amber-500", "border-l-teal-500", "border-l-orange-500"];

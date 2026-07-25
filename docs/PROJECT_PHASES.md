@@ -28,7 +28,7 @@ Product model numbers, rich descriptions, classified media, individually generat
 ## Future phases
 
 1. Validated product/inventory CSV import and public product catalogue.
-2. Suppliers, purchasing and China-to-Bangladesh logistics.
+2. China-to-Bangladesh shipment planning and customs workflow. Supplier administration, purchase orders, approval, incoming stock, partial/full receipts, and serialized receiving are now implemented.
 3. CRM and quotations. The minimal Sales workflow is implemented locally for offline review.
 4. Customer e-commerce, orders and service workflows.
 5. Accounting, HR, manufacturing, projects, support and reporting.
