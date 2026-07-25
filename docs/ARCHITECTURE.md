@@ -16,7 +16,7 @@ The customer portal will eventually own authenticated customer workflows such as
 
 ### ERP
 
-The ERP boundary now owns private product and inventory administration. Purchasing, suppliers, CRM, sales, delivery and reporting remain planned. ERP pages are separate from public marketing routes and use the Phase 3B server permission guards.
+The ERP boundary owns private product, inventory, sales, purchasing, supplier, CRM, accounting and HR administration. Delivery, reporting and other roadmap modules remain planned. ERP pages are separate from public marketing routes and use the Phase 3B server permission guards.
 
 ## Shared Application Foundations
 
@@ -53,6 +53,16 @@ The private `product-media` Storage bucket accepts bounded JPG, PNG, WebP, and P
 Serialized inventory uses a durable unit identity independent of changing product display data. SEN identifiers are generated only in privileged database functions, issued identifiers are never edited in place, and regeneration reserves the previous value in append-only history. Serialized stock operations update unit state, aggregate balance, movement, history, workplace snapshot, and audit data atomically. Product descriptions are sanitized against an explicit allowlist before storage and again before public rendering.
 
 ## Infrastructure
+
+## Accounting and HR
+
+Accounting uses balanced journal entries and journal lines as the general-ledger source of truth. Draft creation and posting are separate permission boundaries, and posted entries retain optional links to sales, purchases, payments, payroll and adjustments.
+
+HR extends the existing profile identity with a one-to-one employee record. Departments, work locations, managers, leave and attendance reference that durable employee identity. HR does not duplicate authentication accounts or employee profiles.
+
+## CRM
+
+CRM manages companies, contacts, leads, ownership and follow-up activities. It reuses existing customer and staff profiles where appropriate, applies the canonical CRM permissions, records mutations in the shared audit log, and keeps opportunity values in BDT.
 
 ## Order fulfilment and shipment tracking
 

@@ -90,3 +90,14 @@
 - Connected ordered quantities to incoming inventory and receipts to balances, movements, serial tracking, permissions, and audit history.
 - Added responsive Purchasing and Suppliers routes for administrators and authorized employees.
 - Added an offline-only integration verifier that refuses to mutate cloud databases.
+# Accounting and HR modules
+
+- Added a double-entry accounting foundation with chart of accounts, balanced journals, controlled posting, RLS, permissions and audit history.
+- Added HR departments, employee master records linked to existing profiles, leave review and attendance foundations.
+- Added staff interfaces, navigation, documentation and module verification for Accounting and HR.
+
+# Basic CRM module
+
+- Added database-backed companies, contacts, leads and activity timelines.
+- Added canonical CRM permission guards, RLS read policies, server-only mutation RPCs and shared audit logging.
+- Added responsive CRM dashboard, creation workflows, lead stages, assignment, CSV export and documentation.
