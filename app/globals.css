@@ -370,6 +370,40 @@ html { scroll-behavior: smooth; }
 .sen-catalogue-card { overflow: hidden; border: 1px solid #dce4f5; border-radius: 1.5rem; padding: 1rem; background: white; box-shadow: 0 12px 36px rgb(32 53 112 / .08); transition: transform .35s ease, border-color .35s ease, box-shadow .35s ease; }
 .sen-catalogue-card:hover { transform: translateY(-7px); border-color: rgb(37 184 255 / .5); box-shadow: 0 24px 52px rgb(32 53 112 / .15); }
 .sen-detail-media { position: relative; display: grid; min-height: 28rem; place-items: center; overflow: hidden; border: 1px solid #dce4f5; border-radius: 1.75rem; background: radial-gradient(circle at 50% 42%,white,#eaf1ff); box-shadow: 0 20px 55px rgb(32 53 112 / .09); }
+.catalogue-theme { --theme-primary:#245fc8;--theme-surface:#f4f8ff;--theme-panel:#fff; }
+.catalogue-theme-networking { --theme-primary:#00bde8;--theme-surface:#040b1d;--theme-panel:#0b1730;color:#e7f7ff; }
+.catalogue-theme-energy { --theme-primary:#0a9d62;--theme-surface:#f3fbef;--theme-panel:#fffdf4;color:#183323; }
+.catalogue-theme-medical { --theme-primary:#007f9e;--theme-surface:#eefcff;--theme-panel:#fff;color:#123143; }
+.catalogue-theme-others { --theme-primary:#e96d23;--theme-surface:#242526;--theme-panel:#343536;color:#fff5e8; }
+.catalogue-theme-surface { background:var(--theme-surface);transition:background .45s ease,color .45s ease; }
+.catalogue-theme-panel { background:var(--theme-panel);color:inherit;border-color:color-mix(in srgb,var(--theme-primary) 30%,#dce4f5); }
+.catalogue-theme-networking .catalogue-theme-panel h1,
+.catalogue-theme-networking .catalogue-theme-panel h2,
+.catalogue-theme-others .catalogue-theme-panel h1,
+.catalogue-theme-others .catalogue-theme-panel h2 { color:inherit; }
+.catalogue-theme-tagline { color:var(--theme-primary); }
+.catalogue-theme-networking .sen-detail-media { background-color:#071225;background-image:linear-gradient(rgb(0 189 232/.09) 1px,transparent 1px),linear-gradient(90deg,rgb(0 189 232/.09) 1px,transparent 1px);background-size:28px 28px; }
+.catalogue-theme-energy .sen-detail-media { background:radial-gradient(circle at 40% 30%,#fff7ba,#dff6d7); }
+.catalogue-theme-medical .sen-detail-media { background:linear-gradient(145deg,#fff,#e6fbff); }
+.catalogue-theme-others .sen-detail-media { background:linear-gradient(135deg,#383b40,#17191c); }
+.catalogue-card-networking { border-top:4px solid #00bde8;background:linear-gradient(160deg,#fff,#edfaff); }
+.catalogue-card-energy { border-top:4px solid #26a65b;background:linear-gradient(160deg,#fff,#f2fbe9); }
+.catalogue-card-medical { border-top:4px solid #18aabc;background:linear-gradient(160deg,#fff,#edfcff); }
+.catalogue-card-others { border-top:4px solid #e96d23;background:linear-gradient(160deg,#fff,#fff5e9); }
+.catalogue-category-hero { color:inherit;background:linear-gradient(135deg,var(--theme-panel),var(--theme-surface));transition:background .45s ease,color .45s ease; }
+.catalogue-theme-networking .catalogue-category-hero { background:radial-gradient(circle at 75% 10%,#103e61,#040b1d 60%); }
+.catalogue-theme-energy .catalogue-category-hero { background:radial-gradient(circle at 80% 0,#fff2a3,#e4f8dc 45%,#f3fbef); }
+.catalogue-theme-medical .catalogue-category-hero { background:linear-gradient(135deg,#fff 15%,#dffaff 65%,#e8f7fb); }
+.catalogue-theme-others .catalogue-category-hero { background:radial-gradient(circle at 75% 10%,#6b3a21,#242526 58%); }
+.catalogue-category-switch { display:flex;min-height:8rem;flex-direction:column;justify-content:space-between;border:1px solid color-mix(in srgb,var(--theme-primary) 38%,transparent);border-radius:1.25rem;padding:1.1rem;color:#10152f;background:rgb(255 255 255/.92);box-shadow:0 12px 28px rgb(0 0 0/.08);transition:transform .3s ease,box-shadow .3s ease,border-color .3s ease; }
+.catalogue-category-switch:hover,.catalogue-category-switch.is-active { transform:translateY(-5px);border-color:var(--theme-primary);box-shadow:0 20px 38px color-mix(in srgb,var(--theme-primary) 22%,transparent); }
+.catalogue-category-switch span { font-size:1.15rem;font-weight:800; }
+.catalogue-category-switch small { line-height:1.45;color:#526071; }
+.catalogue-category-switch-networking { border-top:5px solid #00bde8;background:linear-gradient(150deg,#eafbff,#fff); }
+.catalogue-category-switch-energy { border-top:5px solid #26a65b;background:linear-gradient(150deg,#f2fbe9,#fff); }
+.catalogue-category-switch-medical { border-top:5px solid #18aabc;background:linear-gradient(150deg,#edfcff,#fff); }
+.catalogue-category-switch-others { border-top:5px solid #e96d23;background:linear-gradient(150deg,#fff5e9,#fff); }
+.catalogue-theme-networking .catalogue-theme-panel,.catalogue-theme-others .catalogue-theme-panel { box-shadow:0 16px 38px rgb(0 0 0/.2); }
 .sen-catalogue-cta { position: relative; overflow: hidden; background: radial-gradient(circle at 50% 0,#25206c 0,#0b1034 42%,#05071d 100%); }
 .sen-catalogue-cta::before { content: ""; position: absolute; inset: 0; opacity: .22; background-image: linear-gradient(rgb(92 200 255 / .22) 1px,transparent 1px),linear-gradient(90deg,rgb(92 200 255 / .22) 1px,transparent 1px); background-size: 54px 54px; animation: sen-grid-drift 18s linear infinite; }
 
@@ -439,4 +473,79 @@ html { scroll-behavior: smooth; }
 @media (prefers-reduced-motion: reduce) {
   .shipment-route-line { animation: none; }
   .shipment-marker { display: none; }
+}
+.sen-header {
+  background: linear-gradient(115deg, rgba(5, 12, 42, .98), rgba(27, 35, 82, .97) 58%, rgba(6, 74, 102, .96));
+  box-shadow: 0 12px 35px rgba(3, 8, 32, .2);
+}
+.sen-nav-link {
+  position: relative;
+  transition: color .2s ease, transform .2s ease;
+}
+.sen-nav-link::after {
+  position: absolute;
+  right: 0;
+  bottom: -.4rem;
+  left: 0;
+  height: 2px;
+  content: "";
+  background: linear-gradient(90deg, #22d3ee, #818cf8);
+  transform: scaleX(0);
+  transition: transform .2s ease;
+}
+.sen-nav-link:hover { color: #67e8f9; transform: translateY(-1px); }
+.sen-nav-link:hover::after { transform: scaleX(1); }
+.sen-cart-link {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  border-radius: .75rem;
+  padding: .45rem .65rem;
+  color: white;
+  font-weight: 700;
+  transition: transform .2s ease, background .2s ease;
+}
+.sen-cart-link:hover { transform: translateY(-1px); background: rgba(255,255,255,.1); }
+.sen-cart-link.has-items { background: #dc2626; box-shadow: 0 0 0 3px rgba(248,113,113,.2); }
+.sen-cart-link span { min-width: 1.25rem; border-radius: 999px; background: white; padding: .1rem .35rem; color: #b91c1c; text-align: center; font-size: .7rem; }
+.sen-floating-chat { position: fixed; right: 1rem; bottom: 1rem; z-index: 60; }
+.sen-chat-trigger { display: flex; align-items: center; gap: .45rem; border-radius: 999px; background: linear-gradient(135deg,#0891b2,#2563eb); padding: .8rem 1rem; color: white; font-weight: 800; box-shadow: 0 14px 35px rgba(2,132,199,.35); transition: transform .2s ease, box-shadow .2s ease; }
+.sen-chat-trigger:hover { transform: translateY(-3px) scale(1.02); box-shadow: 0 18px 40px rgba(37,99,235,.45); }
+.sen-chat-panel { position: absolute; right: 0; bottom: 3.75rem; width: min(23rem, calc(100vw - 2rem)); overflow: hidden; border: 1px solid #cbd5e1; border-radius: 1.25rem; background: white; color: #0f172a; box-shadow: 0 24px 60px rgba(15,23,42,.28); animation: sen-chat-in .2s ease-out; }
+.sen-messenger-window { position: absolute; right: 0; bottom: 4rem; display: flex; width: min(24rem, calc(100vw - 1.5rem)); max-height: min(39rem, calc(100vh - 7rem)); flex-direction: column; overflow: hidden; border: 1px solid #dbe3ef; border-radius: 1.25rem; background: white; color: #0f172a; box-shadow: 0 28px 75px rgba(15,23,42,.3); animation: sen-chat-in .2s ease-out; }
+.sen-messenger-header { display: flex; align-items: center; gap: .75rem; border-bottom: 1px solid #e2e8f0; padding: .85rem 1rem; background: rgba(255,255,255,.96); }
+.sen-messenger-avatar,.sen-chat-person-avatar { display: grid; width: 2.6rem; height: 2.6rem; flex: 0 0 auto; place-items: center; border-radius: 999px; background: linear-gradient(135deg,#0ea5e9,#2563eb 58%,#7c3aed); color: white; font-weight: 800; box-shadow: 0 5px 15px rgba(37,99,235,.22); }
+.sen-messenger-icon-button { display: grid; width: 2rem; height: 2rem; place-items: center; border-radius: 999px; background: #eef2ff; color: #2563eb; font-size: 1.25rem; font-weight: 800; }
+.sen-messenger-messages { min-height: 14rem; flex: 1; overflow-y: auto; padding: 1rem; background: linear-gradient(180deg,#fff,#f8fafc); }
+.sen-messenger-row { display: flex; margin-top: .55rem; flex-direction: column; align-items: flex-start; }
+.sen-messenger-row.is-customer { align-items: flex-end; }
+.sen-messenger-bubble { max-width: 84%; border-radius: 1.1rem 1.1rem 1.1rem .3rem; background: #e9eef6; padding: .65rem .85rem; font-size: .9rem; line-height: 1.35; overflow-wrap: anywhere; }
+.sen-messenger-row.is-customer .sen-messenger-bubble { border-bottom-right-radius: .3rem; border-bottom-left-radius: 1.1rem; background: linear-gradient(135deg,#1688f8,#5168f5); color: white; }
+.sen-messenger-row time { margin-top: .2rem; padding-inline: .35rem; color: #94a3b8; font-size: .65rem; }
+.sen-messenger-composer { display: flex; align-items: flex-end; gap: .55rem; border-top: 1px solid #e2e8f0; padding: .65rem .75rem; }
+.sen-messenger-composer textarea { min-height: 2.6rem; max-height: 7rem; flex: 1; resize: vertical; border: 0; border-radius: 1.25rem; background: #f1f5f9; padding: .7rem .9rem; outline: none; }
+.sen-messenger-composer > button { display: grid; width: 2.55rem; height: 2.55rem; place-items: center; border-radius: 999px; background: #1877f2; color: white; font-size: 1rem; }
+.sen-messenger-attachment { display: grid; width: 2.45rem; height: 2.45rem; flex: 0 0 auto; cursor: pointer; place-items: center; border-radius: 999px; color: #1877f2; font-size: 1.4rem; font-weight: 800; }
+.sen-messenger-attachment input,.sen-messenger-attachment span { display: none; }
+.sen-admin-messenger { display: grid; min-height: min(46rem, calc(100vh - 14rem)); grid-template-columns: minmax(14rem,.68fr) minmax(25rem,1.75fr) minmax(13rem,.62fr); overflow: hidden; border: 1px solid #dbe3ef; border-radius: 1.25rem; background: white; box-shadow: 0 16px 45px rgba(15,23,42,.09); }
+.sen-admin-chat-list { overflow-y: auto; border-right: 1px solid #e2e8f0; }
+.sen-admin-chat-person { display: flex; align-items: center; gap: .7rem; margin: .25rem .5rem; border-radius: .9rem; padding: .7rem; transition: background .16s ease,transform .16s ease; }
+.sen-admin-chat-person:hover,.sen-admin-chat-person.is-active { background: #eaf3ff; transform: translateX(2px); }
+.sen-admin-chat-thread { display: flex; min-width: 0; flex-direction: column; background: linear-gradient(180deg,#fff,#f8fafc); }
+.sen-admin-chat-messages { min-height: 20rem; flex: 1; overflow-y: auto; padding: 1rem 1.25rem; }
+.sen-admin-message-row { display: flex; margin-top: .65rem; flex-direction: column; align-items: flex-start; }
+.sen-admin-message-row.is-staff { align-items: flex-end; }
+.sen-admin-message-bubble { max-width: 76%; border-radius: 1.1rem 1.1rem 1.1rem .3rem; background: #e9eef6; padding: .7rem .9rem; overflow-wrap: anywhere; }
+.sen-admin-message-row.is-staff .sen-admin-message-bubble { border-bottom-right-radius: .3rem; border-bottom-left-radius: 1.1rem; background: #1877f2; color: white; }
+.sen-admin-message-row time { margin-top: .2rem; color: #94a3b8; font-size: .68rem; }
+.sen-admin-chat-composer { display: grid; grid-template-columns: minmax(8rem,.5fr) minmax(12rem,1fr) auto; align-items: end; gap: .65rem; border-top: 1px solid #e2e8f0; padding: .8rem; background: white; }
+.sen-admin-chat-composer textarea { min-height: 2.8rem; resize: vertical; border: 1px solid #dbe3ef; border-radius: 1.25rem; background: #f1f5f9; padding: .75rem 1rem; }
+.sen-admin-chat-composer button { border-radius: 999px; background: #1877f2; padding: .78rem 1.2rem; color: white; font-weight: 800; }
+.sen-admin-chat-info { border-left: 1px solid #e2e8f0; padding: 1.5rem 1rem; }
+@media (max-width: 1100px) { .sen-admin-messenger { grid-template-columns: minmax(13rem,.7fr) minmax(0,1.8fr); }.sen-admin-chat-info { display:none; } }
+@media (max-width: 760px) { .sen-admin-messenger { grid-template-columns: 1fr; }.sen-admin-chat-list { max-height: 17rem; border-right: 0; border-bottom: 1px solid #e2e8f0; }.sen-admin-chat-thread { min-height: 32rem; }.sen-admin-chat-composer { grid-template-columns: auto 1fr auto; }.sen-admin-chat-composer label span { display:none; } }
+@keyframes sen-chat-in { from { opacity: 0; transform: translateY(10px) scale(.97); } }
+@media (prefers-reduced-motion: reduce) {
+  .sen-nav-link,.sen-nav-link::after,.sen-cart-link,.sen-chat-trigger { transition: none; }
+  .sen-chat-panel,.sen-messenger-window { animation: none; }
 }

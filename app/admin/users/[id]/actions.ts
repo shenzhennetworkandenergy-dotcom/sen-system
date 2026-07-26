@@ -88,6 +88,21 @@ export async function deleteUserAction(userId: string) {
     if (countError || (count ?? 0) <= 1) redirect(destination(userId, "error", "The final active administrator cannot be deleted."));
   }
   const snapshot = { email: target.email, full_name: target.full_name, role: target.role, status: target.status };
+  const dependencyChecks = await Promise.all([
+    supabase.from("sales_orders").select("id",{count:"exact",head:true}).or(`customer_profile_id.eq.${userId},created_by.eq.${userId},updated_by.eq.${userId}`),
+    supabase.from("products").select("id",{count:"exact",head:true}).or(`created_by.eq.${userId},updated_by.eq.${userId}`),
+    supabase.from("inventory_movements").select("id",{count:"exact",head:true}).eq("initiated_by",userId),
+    supabase.from("purchase_orders").select("id",{count:"exact",head:true}).or(`created_by.eq.${userId},updated_by.eq.${userId}`),
+    supabase.from("journal_entries").select("id",{count:"exact",head:true}).or(`created_by.eq.${userId},posted_by.eq.${userId}`),
+    supabase.from("audit_logs").select("id",{count:"exact",head:true}).or(`actor_id.eq.${userId},target_profile_id.eq.${userId}`),
+  ]);
+  if (dependencyChecks.some(result=>result.error||(result.count??0)>0)) {
+    const {error:archiveError}=await supabase.from("profiles").update({status:"disabled",archived_at:new Date().toISOString(),archived_by:profile.id,archive_reason:"Protected business or audit history",updated_at:new Date().toISOString()}).eq("id",userId);
+    if (archiveError) redirect(destination(userId,"error","Unable to archive this account."));
+    await writeAuditLog({actorId:profile.id,actorRole:profile.role,targetProfileId:userId,action:"account.archived_by_admin",module:"users",entityType:"profile",entityId:userId,description:"Account archived because protected business history exists.",oldValues:snapshot});
+    revalidatePath("/admin/users"); revalidatePath("/admin");
+    redirect("/admin/users?success=Account%20archived%20and%20sign-in%20disabled.%20Business%20history%20was%20preserved.");
+  }
   const { error } = await supabase.auth.admin.deleteUser(userId, false);
   if (error) {
     console.error("Admin account deletion failed", { message: error.message, status: error.status });

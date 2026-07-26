@@ -14,6 +14,9 @@ const staticImages: Record<string, string> = {
   "dell-poweredge-r760": "/products/servers/dell-r760.png",
   "supermicro-sys-2028tp-httr-4-node": "/products/servers/supermicro-sys-2028tp-httr.png",
   "supermicro-sys-2029gp-tr": "/products/servers/supermicro-sys-2029gp-tr.png",
+  "siemens-simatic-s7-1200-cpu-1214c": "/products/seed/siemens-s7-1200.svg",
+  "contec-cms8000-patient-monitor": "/products/seed/contec-cms8000.svg",
+  "sen-build-pvdf-acp-4mm": "/products/seed/sen-build-acp.svg",
 };
 
 export type CatalogueParams = { q?: string; category?: string; sort?: string };

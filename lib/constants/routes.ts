@@ -41,6 +41,13 @@ export const routes = {
   accountAddresses: "/account/addresses",
   accountOrders: "/account/orders",
   accountSales: "/account/sales",
+  accountProfile: "/account/profile",
+  accountMessages: "/account/messages",
+  accountQuotations: "/account/quotations",
+  cart: "/cart",
+  adminQuotations: "/admin/quotations",
+  adminSupport: "/admin/messages",
+  adminPaymentSettings: "/admin/settings/payments",
   environmentCheck: "/environment-check",
 } as const;
 

@@ -43,7 +43,7 @@ export async function getOrder(orderId: string, customerProfileId?: string) {
     db.from("order_packages").select("*").eq("order_id", orderId).order("created_at"),
     db.from("order_packed_items").select("*,order_packages!inner(order_id)").eq("order_packages.order_id", orderId).order("packed_at"),
     db.from("shipments").select("*").eq("order_id", orderId).order("created_at", { ascending: false }),
-    db.from("shipment_tracking_events").select("*,tracking_status_definitions(key,name,color)").eq("order_id", orderId).order("occurred_at", { ascending: false }),
+    db.from("shipment_tracking_events").select("*,tracking_status_definitions(key,name)").eq("order_id", orderId).order("occurred_at", { ascending: false }),
     db.from("shipment_documents").select("*").eq("order_id", orderId).order("created_at", { ascending: false }),
   ]);
   for (const [name, result] of Object.entries({ items, reservations, allocations, packages, packed, shipments, tracking, documents })) fail(`Unable to load order ${name}.`, result.error);
@@ -58,9 +58,9 @@ export async function getShipment(shipmentId: string, customerProfileId?: string
   const [items, serials, events, points, statuses, workplaces, documents, availableDocuments] = await Promise.all([
     db.from("shipment_items").select("*,sales_order_items(product_id,product_name_snapshot,sku_snapshot,quantity)").eq("shipment_id", shipmentId),
     db.from("shipment_serials").select("*,serial_numbers(sen_serial,manufacturer_serial),shipment_items!inner(shipment_id)").eq("shipment_items.shipment_id", shipmentId),
-    db.from("shipment_tracking_events").select("*,tracking_status_definitions(key,name,color)").eq("shipment_id", shipmentId).order("occurred_at", { ascending: false }),
+    db.from("shipment_tracking_events").select("*,tracking_status_definitions(key,name)").eq("shipment_id", shipmentId).order("occurred_at", { ascending: false }),
     db.from("shipment_route_points").select("*").eq("shipment_id", shipmentId).order("version", { ascending: false }).order("point_order"),
-    db.from("tracking_status_definitions").select("id,key,name,description,color,customer_visible_default,sort_order").eq("is_active", true).order("sort_order"),
+    db.from("tracking_status_definitions").select("id,key,name,description,customer_visible_default,sort_order").eq("is_active", true).order("sort_order"),
     db.from("work_locations").select("id,name,location_type,country_code,city,latitude,longitude").eq("is_active", true).order("name"),
     db.from("shipment_documents").select("*").eq("shipment_id", shipmentId).order("created_at", { ascending: false }),
     db.from("product_media").select("id,product_id,storage_path,original_file_name,media_purpose,visibility").eq("media_type", "document").limit(100),

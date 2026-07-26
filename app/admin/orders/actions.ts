@@ -38,8 +38,35 @@ export async function confirmOrderAction(orderId: string) {
   const { profile } = await requirePermission("orders.confirm"); const db = createSupabaseAdminClient();
   const { error } = await db.rpc("confirm_sales_order", { actor_profile_id: profile.id, requested_order_id: orderId });
   if (error) redirect(orderTarget(orderId, "error", safeMessage(new Error(error.message), "Unable to confirm order.")));
+  const customerStatus = await db.rpc("set_customer_order_status", {
+    actor_profile_id: profile.id,
+    requested_order_id: orderId,
+    requested_status: "confirmed",
+    requested_note: null,
+  });
+  if (customerStatus.error) redirect(orderTarget(orderId, "error", "Order was confirmed, but the customer notification could not be created."));
   await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "order.confirmed", module: "orders", entityType: "sales_order", entityId: orderId, description: "Order confirmed and inventory reserved." });
   revalidatePath(`/admin/orders/${orderId}`); redirect(orderTarget(orderId, "success", "Order confirmed and stock reserved."));
+}
+
+export async function updateCustomerOrderStatusAction(orderId: string, form: FormData) {
+  const { profile } = await requirePermission("orders.confirm");
+  const requestedStatus = String(form.get("customer_status") ?? "");
+  if (!["confirmed", "preparing_delivery", "on_the_way", "delivered", "received"].includes(requestedStatus)) {
+    redirect(orderTarget(orderId, "error", "Choose a valid order stage."));
+  }
+  const { error } = await createSupabaseAdminClient().rpc("set_customer_order_status", {
+    actor_profile_id: profile.id,
+    requested_order_id: orderId,
+    requested_status: requestedStatus,
+    requested_note: optionalString(form, "customer_note", 500),
+  });
+  if (error) redirect(orderTarget(orderId, "error", safeMessage(new Error(error.message), "Unable to update the customer order status.")));
+  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "order.customer_status_updated", module: "orders", entityType: "sales_order", entityId: orderId, description: "Customer-facing order status updated.", newValues: { customer_status: requestedStatus } });
+  revalidatePath(`/admin/orders/${orderId}`);
+  revalidatePath(`/account/orders/${orderId}`);
+  revalidatePath("/account/notifications");
+  redirect(orderTarget(orderId, "success", "Order progress updated and the customer was notified."));
 }
 
 export async function cancelOrderAction(orderId: string, form: FormData) {
@@ -48,6 +75,17 @@ export async function cancelOrderAction(orderId: string, form: FormData) {
   if (error) redirect(orderTarget(orderId, "error", safeMessage(new Error(error.message), "Unable to cancel order.")));
   await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "order.cancelled", module: "orders", entityType: "sales_order", entityId: orderId, description: "Order cancelled and eligible reservations released.", newValues: { reason } });
   revalidatePath(`/admin/orders/${orderId}`); redirect(orderTarget(orderId, "success", "Order cancelled."));
+}
+
+export async function reactivateOrderAction(orderId: string, form: FormData) {
+  const { profile } = await requirePermission("orders.confirm");
+  const note = optionalString(form, "note", 1000) ?? "Cancelled order reactivated for review";
+  const db = createSupabaseAdminClient();
+  const { error } = await db.rpc("reactivate_cancelled_sales_order", { actor_profile_id: profile.id, requested_order_id: orderId, requested_note: note });
+  if (error) redirect(orderTarget(orderId, "error", safeMessage(new Error(error.message), "Unable to reactivate order.")));
+  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "order.reactivated", module: "orders", entityType: "sales_order", entityId: orderId, description: "Cancelled order reactivated as a draft.", newValues: { note } });
+  revalidatePath(`/admin/orders/${orderId}`); revalidatePath("/admin/orders");
+  redirect(orderTarget(orderId, "success", "Order reactivated as a draft. Review and confirm it to reserve stock again."));
 }
 
 export async function allocateSerialsAction(orderId: string, orderItemId: string, form: FormData) {

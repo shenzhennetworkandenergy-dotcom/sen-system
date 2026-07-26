@@ -13,7 +13,7 @@ export const adminNavigation: DashboardNavigationItem[] = [
   {key:"products",label:"Products",route:"/admin/products",group:"Commerce and Customers",iconKey:"products",requiredPermission:"products.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"orders",label:"Orders",route:routes.adminOrders,group:"Commerce and Customers",iconKey:"sales",requiredPermission:"orders.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"sales",label:"Sales",route:routes.adminSales,group:"Commerce and Customers",iconKey:"sales",requiredPermission:"sales.view_own",implemented:true,adminVisible:true,employeeVisible:true},
-  {key:"quotations",label:"Quotations",route:null,group:"Commerce and Customers",iconKey:"quotations",requiredPermission:"quotations.view",implemented:false,adminVisible:true,employeeVisible:false},
+  {key:"quotations",label:"Quotations",route:routes.adminQuotations,group:"Commerce and Customers",iconKey:"quotations",requiredPermission:"quotations.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"inventory",label:"Inventory",route:"/admin/inventory",group:"Inventory and Logistics",iconKey:"inventory",requiredPermission:"inventory.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"warehouses",label:"Warehouses",route:"/admin/warehouses",group:"Inventory and Logistics",iconKey:"warehouses",requiredPermission:"warehouses.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"serials",label:"Serial Tracking",route:"/admin/serials",group:"Inventory and Logistics",iconKey:"serials",requiredPermission:"serials.view",implemented:true,adminVisible:true,employeeVisible:true},
@@ -26,10 +26,10 @@ export const adminNavigation: DashboardNavigationItem[] = [
   {key:"hr",label:"HR",route:routes.adminHr,group:"Organization",iconKey:"hr",requiredPermission:"hr.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"manufacturing",label:"Manufacturing",route:null,group:"Organization",iconKey:"manufacturing",requiredPermission:"manufacturing.view",implemented:false,adminVisible:true,employeeVisible:false},
   {key:"projects",label:"Projects",route:null,group:"Organization",iconKey:"projects",requiredPermission:"projects.view",implemented:false,adminVisible:true,employeeVisible:false},
-  {key:"support",label:"Support",route:null,group:"Organization",iconKey:"support",requiredPermission:"support.view",implemented:false,adminVisible:true,employeeVisible:false},
+  {key:"support",label:"Support",route:routes.adminSupport,group:"Organization",iconKey:"support",requiredPermission:"support.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"reports",label:"Reports",route:null,group:"Insights and System",iconKey:"reports",requiredPermission:"reports.view",implemented:false,adminVisible:true,employeeVisible:false},
   {key:"ai",label:"AI Assistant",route:null,group:"Insights and System",iconKey:"ai",requiredPermission:"ai.use",implemented:false,adminVisible:true,employeeVisible:false},
-  {key:"settings",label:"Settings",route:null,group:"Insights and System",iconKey:"settings",requiredPermission:"settings.view",implemented:false,adminVisible:true,employeeVisible:false},
+  {key:"settings",label:"Settings",route:routes.adminPaymentSettings,group:"Insights and System",iconKey:"settings",requiredPermission:"settings.view",implemented:true,adminVisible:true,employeeVisible:false},
 ];
 
 export const employeeNavigation: DashboardNavigationItem[] = [

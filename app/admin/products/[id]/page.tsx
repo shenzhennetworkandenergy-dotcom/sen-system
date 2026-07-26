@@ -164,9 +164,9 @@ export default async function ProductDetailPage({
     </section>
 
     {profile.role === "admin" ? <section className="mt-6 rounded-xl border border-red-300 bg-red-50 p-6 text-red-950">
-      <h2 className="text-xl font-semibold">Delete product</h2>
-      <p className="mt-2 text-sm">Permanent deletion is allowed only for unused products without stock, serials, variations, movements, reservations, or orders. Products with business history must be archived.</p>
-      <form action={deleteProductAction.bind(null, id)}><ConfirmSubmitButton confirmation={`Permanently delete ${product.name}? This cannot be undone.`} className="mt-4 rounded border border-red-700 px-4 py-2 font-semibold text-red-800">Delete unused product</ConfirmSubmitButton></form>
+      <h2 className="text-xl font-semibold">Remove product</h2>
+      <p className="mt-2 text-sm">Unused products are deleted permanently. Products connected to stock, serials, orders, or finance are archived automatically so their business history remains intact.</p>
+      <form action={deleteProductAction.bind(null, id)}><ConfirmSubmitButton confirmation={`Remove ${product.name}? Protected business history will be archived automatically.`} className="mt-4 rounded border border-red-700 px-4 py-2 font-semibold text-red-800">Delete or archive product</ConfirmSubmitButton></form>
     </section> : null}
   </DashboardShell>;
 }
