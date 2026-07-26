@@ -7,6 +7,9 @@ import { PublicFooter } from "@/components/layout/PublicFooter";
 import { PublicHeader } from "@/components/layout/PublicHeader";
 import { Container } from "@/components/ui/Container";
 import { getPublicProduct } from "@/lib/catalog/products";
+import { catalogueTheme } from "@/lib/catalog/themes";
+import { addToCartAction, orderNowAction } from "@/app/cart/actions";
+import { startConversationAction } from "@/app/account/messages/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -27,12 +30,14 @@ function money(amount: number | null, currency: string) {
   return amount === null ? null : new Intl.NumberFormat("en", { style: "currency", currency, maximumFractionDigits: 0 }).format(amount);
 }
 
-export default async function PublicProductDetailPage({ params }: { params: Promise<{ slug: string }> }) {
+export default async function PublicProductDetailPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams:Promise<{success?:string;error?:string}> }) {
   await connection();
+  const notice=await searchParams;
   const product = await getPublicProduct((await params).slug);
   if (!product) notFound();
   const primaryImage = product.images.find((image) => image.primary) ?? product.images[0] ?? null;
   const price = product.sale_price ?? product.regular_price;
+  const theme = catalogueTheme(product.sen_business_category);
   const specifications = product.specifications && typeof product.specifications === "object" && !Array.isArray(product.specifications)
     ? Object.entries(product.specifications as Record<string, unknown>)
     : [];
@@ -46,21 +51,24 @@ export default async function PublicProductDetailPage({ params }: { params: Prom
     ["Serial tracking", product.serial_tracking_required ? "Required" : "Not required"],
   ];
 
-  return <div className="public-experience">
+  return <div className={`public-experience catalogue-theme catalogue-theme-${theme.key}`}>
     <PublicHeader />
-    <main className="bg-[#f6f8fe]">
+    <main className="catalogue-theme-surface">
       <Container className="py-6"><nav className="text-sm text-slate-500" aria-label="Breadcrumb"><a href="/">Home</a><span className="mx-2">/</span><a href="/products">Products</a><span className="mx-2">/</span><span className="text-slate-800">{product.name}</span></nav></Container>
       <section className="pb-14"><Container><div className="grid gap-8 lg:grid-cols-[1.05fr_.95fr]">
         <div><div className="sen-detail-media">{primaryImage ? <img src={primaryImage.url} alt={primaryImage.alt} className="h-full w-full object-contain p-6 sm:p-10" /> : <div className="text-slate-500">Product image coming soon</div>}<span className="absolute left-4 top-4 rounded-full bg-[#07102f] px-3 py-1 text-xs font-semibold text-cyan-200">{product.sen_business_category}</span></div>
           {product.images.length > 1 ? <div className="mt-4 grid grid-cols-4 gap-3">{product.images.map((image) => <div key={image.id} className="aspect-square overflow-hidden rounded-xl border bg-white"><img src={image.url} alt={image.alt} className="h-full w-full object-contain p-2" /></div>)}</div> : null}
         </div>
-        <div className="rounded-3xl border bg-white p-6 shadow-sm sm:p-8">
+        <div className="catalogue-theme-panel rounded-3xl border p-6 shadow-sm sm:p-8">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-700">{product.brand?.name ?? "SEN sourced technology"}</p>
           <h1 className="mt-3 text-3xl font-semibold tracking-tight text-[#10152f] sm:text-5xl">{product.name}</h1>
           {product.short_description ? <div className="product-rich-content mt-5 text-base leading-7 text-slate-600 sm:text-lg" dangerouslySetInnerHTML={{ __html: product.short_description }} /> : <p className="mt-5 text-slate-600">Enterprise-grade equipment sourced, verified and supported through SEN.</p>}
           <div className="mt-6 flex flex-wrap gap-3"><span className={`rounded-full px-4 py-2 text-sm font-semibold ${product.available > 0 ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900"}`}>{product.available > 0 ? `${product.available} available` : product.incoming > 0 ? `${product.incoming} incoming` : "Contact for availability"}</span><span className="rounded-full bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700">SKU: {product.sku}</span>{product.model_number ? <span className="rounded-full bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-800">Model: {product.model_number}</span> : null}</div>
           <div className="mt-7 border-y py-6">{price ? <div className="flex items-end gap-3"><strong className="text-3xl text-[#10152f]">{money(price, product.currency)}</strong>{product.sale_price && product.regular_price ? <span className="pb-1 text-lg text-slate-400 line-through">{money(product.regular_price, product.currency)}</span> : null}</div> : <strong className="text-2xl text-[#10152f]">Price on request</strong>}<p className="mt-2 text-sm text-slate-500">Final pricing may vary by configuration, quantity, delivery and project requirements.</p></div>
-          <div className="mt-7 grid gap-3 sm:grid-cols-2"><a href={`/request-quote?product=${encodeURIComponent(product.slug)}`} className="sen-button-glow inline-flex min-h-12 items-center justify-center rounded-xl px-5 font-semibold">Request quotation</a><a href="/contact" className="inline-flex min-h-12 items-center justify-center rounded-xl border border-slate-300 px-5 font-semibold text-[#10152f]">Talk to SEN</a></div>
+          <p className="catalogue-theme-tagline mt-5 text-sm font-semibold">{theme.tagline}</p>
+          {notice.success?<p className="mt-5 rounded-xl bg-emerald-50 p-3 text-sm font-semibold text-emerald-800">{notice.success}</p>:null}
+          {notice.error?<p className="mt-5 rounded-xl bg-red-50 p-3 text-sm font-semibold text-red-800">{notice.error}</p>:null}
+          {product.available > 0 ? <div className="mt-7 grid gap-3 sm:grid-cols-[7rem_1fr_1fr]"><label className="text-sm font-semibold">Quantity<input form="add-cart-form" name="quantity" type="number" min="1" max={Math.max(1,Math.floor(product.available))} defaultValue="1" className="mt-1 w-full rounded-xl border p-3 text-slate-950"/></label><form id="add-cart-form" action={addToCartAction.bind(null, product.id,product.slug)} className="self-end"><button className="min-h-12 w-full rounded-xl border-2 border-cyan-700 bg-white px-5 font-semibold text-cyan-900 transition hover:-translate-y-0.5 hover:bg-cyan-50">Add to cart</button></form><form action={orderNowAction.bind(null,product.id)} className="self-end"><input name="quantity" type="hidden" value="1"/><button className="sen-button-glow min-h-12 w-full rounded-xl px-5 font-semibold">Order now</button></form></div> : <div className="mt-7 grid gap-3 sm:grid-cols-2"><a href={`/request-quote?product=${encodeURIComponent(product.slug)}`} className="sen-button-glow inline-flex min-h-12 items-center justify-center rounded-xl px-5 font-semibold">Request quotation</a><form action={startConversationAction.bind(null, product.id)}><input type="hidden" name="message" value={`I would like to discuss availability and sourcing for ${product.name}.`}/><button className="h-full min-h-12 w-full rounded-xl border border-slate-300 bg-white px-5 font-semibold text-[#10152f]">Talk to SEN</button></form></div>}
         </div>
       </div></Container></section>
       <section className="border-y bg-white py-14"><Container><div className="grid gap-10 lg:grid-cols-[1.35fr_.65fr]">

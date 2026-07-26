@@ -84,7 +84,13 @@ export async function deleteProductAction(productId: string) {
     db.from("sales_order_items").select("id", { count: "exact", head: true }).eq("product_id", productId),
     db.from("product_variations").select("id", { count: "exact", head: true }).eq("product_id", productId),
   ]);
-  if (checks.some((result) => result.error || (result.count ?? 0) > 0)) redirect(target(productId, "error", "This product has inventory, serial, variation, movement, reservation, or order history. Archive it instead so business records remain intact."));
+  if (checks.some((result) => result.error || (result.count ?? 0) > 0)) {
+    const {error:archiveError}=await db.from("products").update({status:"archived",public_catalogue_visible:false,archived_at:new Date().toISOString(),archived_by:profile.id,archive_reason:"Protected inventory, serial, order, or financial history",updated_by:profile.id,updated_at:new Date().toISOString()}).eq("id",productId);
+    if(archiveError) redirect(target(productId,"error","Unable to archive this product."));
+    await writeAuditLog({actorId:profile.id,actorRole:profile.role,action:"product.archived",module:"products",entityType:"product",entityId:productId,description:"Product archived because protected operational history exists.",oldValues:{name:product.name,sku:product.sku}});
+    revalidatePath("/admin/products"); revalidatePath("/products");
+    redirect(target(undefined,"success","Product archived. Inventory and business history were preserved."));
+  }
   const { data: media } = await db.from("product_media").select("storage_path").eq("product_id", productId);
   const cleanupResults = await Promise.all([
     db.from("product_identifier_history").delete().eq("product_id", productId),
@@ -99,6 +105,18 @@ export async function deleteProductAction(productId: string) {
   revalidatePath("/admin/products"); revalidatePath("/admin/inventory"); revalidatePath("/products");
   redirect(target(undefined, "success", "Unused product permanently deleted."));
 }
+export async function quickUpdateProductAction(productId:string,form:FormData){
+  const {profile}=await requirePermission("products.edit"),db=createSupabaseAdminClient();
+  const status=String(form.get("status")??""),stock_status=String(form.get("stock_status")??""),regular_price=optionalNumber(form,"regular_price"),sale_price=optionalNumber(form,"sale_price");
+  if(!productStatuses.includes(status as never)||!["in_stock","out_of_stock","on_backorder"].includes(stock_status))redirect(target(undefined,"error","Invalid quick-edit values."));
+  if(sale_price!==null&&regular_price!==null&&sale_price>regular_price)redirect(target(undefined,"error","Sale price cannot exceed regular price."));
+  const changes={status,stock_status,regular_price,sale_price,featured:checked(form,"featured"),public_catalogue_visible:checked(form,"public_catalogue_visible"),updated_by:profile.id,updated_at:new Date().toISOString()};
+  const{error}=await db.from("products").update(changes).eq("id",productId);
+  if(error)redirect(target(undefined,"error","Unable to quick-edit product."));
+  await writeAuditLog({actorId:profile.id,actorRole:profile.role,action:"product.quick_updated",module:"products",entityType:"product",entityId:productId,description:"Product listing fields updated.",newValues:changes});
+  revalidatePath("/admin/products");revalidatePath("/products");redirect(target(undefined,"success","Product updated."));
+}
+
 export async function createVariationAction(productId: string, form: FormData) {
   const { profile } = await requirePermission("products.edit"); const db = createSupabaseAdminClient();
   const { data: parent, error: parentError } = await db.from("products").select("product_type,manage_stock").eq("id", productId).maybeSingle();

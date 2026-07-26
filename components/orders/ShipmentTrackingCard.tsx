@@ -10,7 +10,7 @@ type Event = {
   internal_note?: string | null;
   event_visibility: string;
   location_snapshot: Record<string, unknown>;
-  tracking_status_definitions: { name: string; color: string | null } | null;
+  tracking_status_definitions: { name: string } | null;
 };
 
 export function ShipmentTrackingCard({ shipment, events, points, internal = false }: {

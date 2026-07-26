@@ -40,8 +40,6 @@ export const siteConfig = {
   routes,
   navigation: [
     { label: "Products", href: routes.products },
-    { label: "Solutions", href: routes.solutions },
-    { label: "Industries", href: routes.industries },
     { label: "About", href: routes.about },
     { label: "Contact", href: routes.contact },
   ],
@@ -52,10 +50,10 @@ export const siteConfig = {
     learnAbout: { label: "Learn About SEN", href: routes.about },
   },
   businessCategories: [
-    { slug: "networking", label: "Networking", href: "/products/networking", accent: "blue", description: "Enterprise connectivity, data center and ISP infrastructure sourced for reliable project delivery.", examples: ["Enterprise networking", "Servers and data center", "Fiber-optic equipment", "Switching and routing", "ISP infrastructure"] },
-    { slug: "energy", label: "Energy", href: "/products/energy", accent: "green", description: "Power continuity, renewable energy and industrial electrical systems for business-critical facilities.", examples: ["Solar and renewable energy", "UPS and backup power", "Batteries and inverters", "Industrial power systems", "Energy infrastructure"] },
-    { slug: "medical-equipment", label: "Medical Equipment", href: "/products/medical-equipment", accent: "teal", description: "Healthcare and laboratory technologies supported through structured sourcing and quotation workflows.", examples: ["Diagnostic equipment", "Hospital technology", "Laboratory systems", "Patient monitoring", "Healthcare solutions"] },
-    { slug: "others", label: "Others", href: "/products/others", accent: "slate", description: "Specialized industrial, electronics and project equipment procurement for custom requirements.", examples: ["Industrial automation", "Electronics", "Custom sourcing", "Project equipment", "Specialized procurement"] },
+    { slug: "networking", label: "Networking", href: "/products?category=Networking", accent: "blue", description: "Enterprise connectivity, data center and ISP infrastructure sourced for reliable project delivery.", examples: ["Enterprise networking", "Servers and data center", "Fiber-optic equipment", "Switching and routing", "ISP infrastructure"] },
+    { slug: "energy", label: "Energy", href: "/products?category=Energy", accent: "green", description: "Power continuity, renewable energy and industrial electrical systems for business-critical facilities.", examples: ["Solar and renewable energy", "UPS and backup power", "Batteries and inverters", "Industrial power systems", "Energy infrastructure"] },
+    { slug: "medical-equipment", label: "Medical Equipment", href: "/products?category=Medical%20Equipment", accent: "teal", description: "Healthcare and laboratory technologies supported through structured sourcing and quotation workflows.", examples: ["Diagnostic equipment", "Hospital technology", "Laboratory systems", "Patient monitoring", "Healthcare solutions"] },
+    { slug: "others", label: "Others", href: "/products?category=Others", accent: "slate", description: "Specialized industrial, electronics and project equipment procurement for custom requirements.", examples: ["Industrial automation", "Electronics", "Custom sourcing", "Project equipment", "Specialized procurement"] },
   ],
   solutionAreas: [
     { label: "Enterprise Network Infrastructure", href: "/solutions/enterprise-network", description: "Switching, routing, fiber and wireless foundations for resilient business connectivity.", useCase: "Corporate networks, ISPs and campus infrastructure" },

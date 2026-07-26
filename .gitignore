@@ -29,6 +29,10 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+/.codex-logs/
+
+# local duplicate source asset (the tracked copy lives in public/brand)
+/SEN Logo (2).png
 
 # env files (can opt-in for committing if needed)
 .env*
