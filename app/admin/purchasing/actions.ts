@@ -18,6 +18,7 @@ const safeMessage = (message: string | undefined, fallback: string) =>
 function purchasePayload(form: FormData) {
   const items = jsonArray(form, "items");
   if (!items.length) throw new Error("At least one purchase item is required.");
+  if (items.some((item) => !Number.isSafeInteger(Number(item.quantity)) || Number(item.quantity) < 1)) throw new Error("Purchase quantity must be a positive whole number.");
   return {
     requested_supplier_id: uuid(form.get("supplier_id"), "Supplier"),
     requested_warehouse_id: uuid(form.get("warehouse_id"), "Warehouse"),

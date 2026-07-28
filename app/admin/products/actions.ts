@@ -38,6 +38,45 @@ async function validateProductStockModel(productId: string | null, data: ReturnT
   if (data.product_type === "simple" && variations?.length) throw new Error("A product with variations cannot be changed to a simple product.");
   if (data.product_type === "variable" && data.manage_stock && variations?.length) throw new Error("Stock cannot be managed by both a variable parent and its variations.");
 }
+type SubmittedAttribute = { name?: string; values?: string; universal?: boolean; variation?: boolean };
+async function saveSubmittedAttributes(productId: string, form: FormData) {
+  const raw = String(form.get("product_attributes_json") ?? "[]");
+  let submitted: SubmittedAttribute[] = [];
+  try { submitted = JSON.parse(raw); } catch { throw new Error("Product attributes are invalid."); }
+  if (!Array.isArray(submitted) || submitted.length > 30) throw new Error("Product attributes are invalid.");
+  const rows = submitted.map((row) => ({
+    name: String(row.name ?? "").trim().slice(0, 120),
+    values: [...new Set(String(row.values ?? "").split(",").map((value) => value.trim().slice(0, 120)).filter(Boolean))].slice(0, 100),
+    universal: Boolean(row.universal),
+    variation: Boolean(row.variation),
+  })).filter((row) => row.name && row.values.length);
+  if (!rows.length) return;
+  const db = createSupabaseAdminClient();
+  for (const [index, row] of rows.entries()) {
+    let attributeId: string | null = null;
+    if (row.universal) {
+      const { data } = await db.from("attributes").select("id").eq("scope", "universal").ilike("name", row.name).maybeSingle();
+      attributeId = data?.id ?? null;
+    }
+    if (!attributeId) {
+      const baseSlug = slugify(row.name);
+      const { data, error } = await db.from("attributes").insert({
+        name: row.name,
+        slug: row.universal ? baseSlug : `${baseSlug}-${productId.slice(0, 8)}`,
+        scope: row.universal ? "universal" : "product",
+        owner_product_id: row.universal ? null : productId,
+        sort_order: index,
+      }).select("id").single();
+      if (error || !data) throw new Error(`Unable to create the ${row.name} attribute.`);
+      attributeId = data.id;
+    }
+    const valueRows = row.values.map((value, valueIndex) => ({ attribute_id: attributeId, value, slug: slugify(value), sort_order: valueIndex }));
+    const { error: valueError } = await db.from("attribute_values").upsert(valueRows, { onConflict: "attribute_id,slug", ignoreDuplicates: true });
+    if (valueError) throw new Error(`Unable to save values for ${row.name}.`);
+    const { error: assignmentError } = await db.from("product_attributes").upsert({ product_id: productId, attribute_id: attributeId, is_variation: row.variation, is_visible: true, sort_order: index }, { onConflict: "product_id,attribute_id" });
+    if (assignmentError) throw new Error(`Unable to assign ${row.name} to this product.`);
+  }
+}
 async function saveProduct(actorId: string, productId: string | null, form: FormData, canManageIdentifiers: boolean) {
   const data = payload(form); await validateProductStockModel(productId, data);
   if (!productId) data.public_catalogue_visible = true;
@@ -53,6 +92,7 @@ async function saveProduct(actorId: string, productId: string | null, form: Form
   if (duplicate) throw new Error(`This product model already exists as ${duplicate.name} (${duplicate.sku}).`);
   const { data: savedId, error } = await db.rpc("admin_save_product", { actor_profile_id: actorId, requested_product_id: productId, requested_product: data, requested_category_id: uuidOrNull(form.get("category_id")) });
   if (error || !savedId) throw new Error(error?.message ?? "Product save failed");
+  await saveSubmittedAttributes(String(savedId), form);
   return String(savedId);
 }
 
@@ -115,6 +155,70 @@ export async function quickUpdateProductAction(productId:string,form:FormData){
   if(error)redirect(target(undefined,"error","Unable to quick-edit product."));
   await writeAuditLog({actorId:profile.id,actorRole:profile.role,action:"product.quick_updated",module:"products",entityType:"product",entityId:productId,description:"Product listing fields updated.",newValues:changes});
   revalidatePath("/admin/products");revalidatePath("/products");redirect(target(undefined,"success","Product updated."));
+}
+
+function parseCsv(text: string) {
+  const rows: string[][] = []; let row: string[] = [], cell = "", quoted = false;
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+    if (char === '"' && quoted && text[index + 1] === '"') { cell += '"'; index++; }
+    else if (char === '"') quoted = !quoted;
+    else if (char === "," && !quoted) { row.push(cell); cell = ""; }
+    else if ((char === "\n" || char === "\r") && !quoted) {
+      if (char === "\r" && text[index + 1] === "\n") index++;
+      row.push(cell); if (row.some((value) => value.trim())) rows.push(row); row = []; cell = "";
+    } else cell += char;
+  }
+  row.push(cell); if (row.some((value) => value.trim())) rows.push(row);
+  const headers = (rows.shift() ?? []).map((value) => value.trim().toLowerCase());
+  return rows.map((values) => Object.fromEntries(headers.map((header, index) => [header, (values[index] ?? "").trim()])));
+}
+
+export async function importProductsCsvAction(form: FormData) {
+  const { profile, permissions } = await requirePermission("products.create");
+  const csv = form.get("csv");
+  if (!(csv instanceof File) || !csv.size || csv.size > 2_000_000) redirect("/admin/products/import?error=Choose%20a%20CSV%20file%20up%20to%202%20MB.");
+  const records = parseCsv(await csv.text()).slice(0, 500);
+  if (!records.length) redirect("/admin/products/import?error=The%20CSV%20contains%20no%20product%20rows.");
+  const db = createSupabaseAdminClient(), images = new Map(form.getAll("images").filter((item): item is File => item instanceof File && item.size > 0).map((file) => [file.name.toLowerCase(), file]));
+  let imported = 0; const failures: string[] = [];
+  for (const [index, record] of records.entries()) {
+    try {
+      if (!record.name || !record.model || !record.brand || !record.category) throw new Error("name, model, brand and category are required");
+      let { data: brand } = await db.from("brands").select("id").ilike("name", record.brand).maybeSingle();
+      if (!brand) {
+        const result = await db.from("brands").insert({ name: record.brand.slice(0, 120), slug: `${slugify(record.brand)}-${crypto.randomUUID().slice(0, 6)}` }).select("id").single();
+        if (result.error || !result.data) throw new Error("brand could not be created"); brand = result.data;
+      }
+      let { data: category } = await db.from("product_categories").select("id").ilike("name", record.category).maybeSingle();
+      if (!category) {
+        const business = businessCategories.includes(record.business_category as never) ? record.business_category : "Others";
+        const result = await db.from("product_categories").insert({ name: record.category.slice(0, 120), slug: `${slugify(record.category)}-${crypto.randomUUID().slice(0, 6)}`, sen_business_category: business }).select("id").single();
+        if (result.error || !result.data) throw new Error("category could not be created"); category = result.data;
+      }
+      const productForm = new FormData();
+      const fields: Record<string, string> = {
+        name: record.name, model_number: record.model, sku: record.sku || automaticSku(record.brand, record.model), brand_id: brand.id, category_id: category.id,
+        product_type: ["simple", "variable"].includes(record.product_type) ? record.product_type : "simple",
+        status: ["draft", "active"].includes(record.status) ? record.status : "draft",
+        sen_business_category: businessCategories.includes(record.business_category as never) ? record.business_category : "Others",
+        currency: "BDT", stock_status: ["in_stock", "out_of_stock", "on_backorder"].includes(record.stock_status) ? record.stock_status : "out_of_stock",
+        purchase_cost: record.purchase_cost ?? "", regular_price: record.regular_price ?? "", sale_price: record.sale_price ?? "",
+        short_description: record.short_description ?? "", description: record.description ?? "", specifications: record.specifications || "{}",
+        low_stock_threshold: record.low_stock_threshold || "0",
+      };
+      Object.entries(fields).forEach(([key, value]) => productForm.set(key, value));
+      if (record.public_catalogue_visible?.toLowerCase() === "true") productForm.set("public_catalogue_visible", "on");
+      if (record.manage_stock?.toLowerCase() !== "false") productForm.set("manage_stock", "on");
+      const image = images.get((record.image_file ?? "").toLowerCase()); if (image) productForm.set("main_image", image);
+      const productId = await saveProduct(profile.id, null, productForm, profile.role === "admin" || permissions.has("products.manage_identifiers"));
+      const imageFailures = await uploadFormImages(productId, profile.id, productForm); if (imageFailures.length) failures.push(`row ${index + 2}: product saved, image failed`);
+      imported++;
+    } catch (error) { failures.push(`row ${index + 2}: ${error instanceof Error ? error.message : "import failed"}`); }
+  }
+  revalidatePath("/admin/products"); revalidatePath("/products");
+  const summary = `${imported} product(s) imported.${failures.length ? ` ${failures.length} row(s) need attention: ${failures.slice(0, 3).join("; ")}` : ""}`;
+  redirect(`/admin/products/import?${failures.length ? "error" : "success"}=${encodeURIComponent(summary)}`);
 }
 
 export async function createVariationAction(productId: string, form: FormData) {

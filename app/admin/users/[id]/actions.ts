@@ -27,9 +27,12 @@ export async function updateUserAction(userId: string, formData: FormData) {
   const { profile } = await requireProfile(["admin"]);
   const role = String(formData.get("role") ?? "");
   const status = String(formData.get("status") ?? "");
-  const templateId = String(formData.get("templateId") ?? "") || null;
+  const requestedTemplateId = String(formData.get("templateId") ?? "") || null;
   if (!isAccountRole(role) || !isAccountStatus(status)) redirect(destination(userId, "error", "Invalid role or status."));
   try {
+    // A permission template only applies to employees. Passing a stale template
+    // when changing an employee into a customer used to block that role change.
+    const templateId = role === "employee" ? requestedTemplateId : null;
     const selection = role === "employee" && templateId ? await validatedSelection(formData, templateId) : null;
     await updateAccountAccess(profile.id, userId, role, status, templateId);
     if (selection && templateId) await updatePermissionOverrides(profile.id, userId, templateId, selection.allowKeys, selection.denyKeys);

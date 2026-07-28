@@ -1,6 +1,6 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 function isInternalNavigation(event: MouseEvent, anchor: HTMLAnchorElement) {
@@ -20,22 +20,28 @@ function isInternalNavigation(event: MouseEvent, anchor: HTMLAnchorElement) {
 
 export function NavigationProgress() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const query = searchParams.toString();
   const [visible, setVisible] = useState(false);
   const [progress, setProgress] = useState(0);
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timer = useRef<number | null>(null);
+  const safetyTimer = useRef<number | null>(null);
 
   useEffect(() => {
     const stop = () => {
       if (timer.current) clearInterval(timer.current);
+      if (safetyTimer.current) clearTimeout(safetyTimer.current);
       timer.current = null;
+      safetyTimer.current = null;
       setProgress(100);
       window.setTimeout(() => {
         setVisible(false);
         setProgress(0);
+        delete document.documentElement.dataset.navigationState;
       }, 180);
     };
     stop();
-  }, [pathname]);
+  }, [pathname, query]);
 
   useEffect(() => {
     const start = (label = "Loading page") => {
@@ -43,9 +49,21 @@ export function NavigationProgress() {
       setVisible(true);
       setProgress(8);
       document.documentElement.dataset.navigationState = label;
-      timer.current = setInterval(() => {
+      timer.current = window.setInterval(() => {
         setProgress((current) => current >= 92 ? current : current + Math.max(1, Math.round((92 - current) / 7)));
       }, 180);
+      if (safetyTimer.current) clearTimeout(safetyTimer.current);
+      safetyTimer.current = window.setTimeout(() => {
+        if (timer.current) clearInterval(timer.current);
+        timer.current = null;
+        safetyTimer.current = null;
+        setProgress(100);
+        window.setTimeout(() => {
+          setVisible(false);
+          setProgress(0);
+          delete document.documentElement.dataset.navigationState;
+        }, 180);
+      }, 8000);
     };
     const click = (event: MouseEvent) => {
       const anchor = (event.target as Element | null)?.closest("a[href]") as HTMLAnchorElement | null;
@@ -58,7 +76,9 @@ export function NavigationProgress() {
     };
     const restore = () => {
       if (timer.current) clearInterval(timer.current);
+      if (safetyTimer.current) clearTimeout(safetyTimer.current);
       timer.current = null;
+      safetyTimer.current = null;
       setVisible(false);
       setProgress(0);
       delete document.documentElement.dataset.navigationState;
@@ -66,11 +86,16 @@ export function NavigationProgress() {
     document.addEventListener("click", click, true);
     document.addEventListener("submit", submit, true);
     window.addEventListener("pageshow", restore);
+    window.addEventListener("popstate", restore);
+    window.addEventListener("focus", restore);
     return () => {
       document.removeEventListener("click", click, true);
       document.removeEventListener("submit", submit, true);
       window.removeEventListener("pageshow", restore);
+      window.removeEventListener("popstate", restore);
+      window.removeEventListener("focus", restore);
       if (timer.current) clearInterval(timer.current);
+      if (safetyTimer.current) clearTimeout(safetyTimer.current);
     };
   }, []);
 

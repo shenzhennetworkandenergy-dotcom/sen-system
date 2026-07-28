@@ -21,6 +21,7 @@ export default async function ProductsPage({searchParams}:{searchParams:Promise<
       <a href="/admin/products/new" className="rounded-lg bg-[var(--primary)] px-4 py-2.5 font-semibold text-[var(--primary-foreground)]">Add product</a>
       {["Categories","Brands","Attributes"].map((label)=><a key={label} href={`/admin/${label.toLowerCase()}`} className="rounded-lg border px-4 py-2.5 font-semibold">{label}</a>)}
       <a href="/admin/inventory/export" className="rounded-lg border px-4 py-2.5 font-semibold">Export inventory CSV</a>
+      <a href="/admin/products/import" className="rounded-lg border px-4 py-2.5 font-semibold">Import products CSV</a>
     </div>
     <form className="mb-4 grid gap-2 rounded-xl border bg-[var(--surface)] p-3 sm:grid-cols-2 lg:grid-cols-4">
       <input name="q" aria-label="Search products" placeholder="Search name or SKU" defaultValue={params.q} className="rounded-lg border p-2.5"/>

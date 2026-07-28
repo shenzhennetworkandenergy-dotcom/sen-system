@@ -75,6 +75,7 @@ export async function PublicHeader() {
   }
 
   return (
+    <>
     <header className="sen-header sticky top-0 z-40">
       <div className="sen-announcement">
         <Container className="flex items-center justify-between gap-4 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] sm:text-xs">
@@ -163,10 +164,11 @@ export async function PublicHeader() {
       <Container className="pb-3 lg:hidden">
         <ProductSearch compact />
       </Container>
-      <FloatingChat
-        authenticated={Boolean(user)}
-        conversation={floatingConversation}
-      />
     </header>
+    <FloatingChat
+      authenticated={Boolean(user)}
+      conversation={floatingConversation}
+    />
+    </>
   );
 }

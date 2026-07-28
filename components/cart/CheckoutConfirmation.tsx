@@ -135,7 +135,7 @@ export function CheckoutConfirmation({
         onClick={openReview}
         className="w-full rounded-xl bg-slate-950 px-5 py-3 font-bold text-white disabled:opacity-40"
       >
-        Review billing information
+        Confirm Cash On Delivery Order
       </button>
 
       <dialog
@@ -229,7 +229,7 @@ export function CheckoutConfirmation({
               Go back
             </button>
             <button className="rounded-xl bg-slate-950 px-6 py-3 font-bold text-white">
-              Confirm COD order
+              Confirm
             </button>
           </div>
         </form>
