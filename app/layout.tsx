@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 
 import { siteConfig } from "@/config/site";
 import { NavigationProgress } from "@/components/ui/NavigationProgress";
@@ -15,5 +16,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en" className="h-full antialiased" data-scroll-behavior="smooth"><body suppressHydrationWarning className="min-h-full flex flex-col"><NavigationProgress/>{children}</body></html>;
+  return <html lang="en" className="h-full antialiased" data-scroll-behavior="smooth"><body suppressHydrationWarning className="min-h-full flex flex-col"><Suspense fallback={null}><NavigationProgress/></Suspense>{children}</body></html>;
 }

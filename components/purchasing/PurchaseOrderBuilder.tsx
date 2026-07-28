@@ -28,10 +28,12 @@ export function PurchaseOrderBuilder({
   const [items, setItems] = useState<PurchaseBuilderItem[]>(initialItems);
   const [productId, setProductId] = useState("");
   const [variationId, setVariationId] = useState("");
+  const [productQuery, setProductQuery] = useState("");
+  const [supplierId, setSupplierId] = useState(defaults.supplier_id ?? "");
   const product = products.find((item) => item.id === productId);
   const productVariations = variations.filter((item) => item.product_id === productId);
   const totals = useMemo(() => items.reduce((sum, item) => sum + Math.max(item.quantity * item.unit_cost - item.discount_amount + item.tax_amount, 0), 0), [items]);
-  const supplier = suppliers.find((item) => item.id === defaults.supplier_id);
+  const supplier = suppliers.find((item) => item.id === supplierId);
   const today = new Date().toISOString().slice(0, 10);
 
   function addItem() {
@@ -63,7 +65,7 @@ export function PurchaseOrderBuilder({
   return <form action={action} className="space-y-4">
     <section className="grid gap-3 rounded-2xl border bg-[var(--surface)] p-4 shadow-sm md:grid-cols-2 xl:grid-cols-4">
       <label className="text-sm font-semibold">Supplier *
-        <select name="supplier_id" required defaultValue={defaults.supplier_id ?? ""} className="mt-1 w-full rounded-xl border px-3 py-2.5">
+        <select name="supplier_id" required value={supplierId} onChange={(event)=>setSupplierId(event.target.value)} className="mt-1 w-full rounded-xl border px-3 py-2.5">
           <option value="">Select supplier</option>{suppliers.map((item) => <option key={item.id} value={item.id}>{item.name} ({item.code})</option>)}
         </select>
       </label>
@@ -79,10 +81,10 @@ export function PurchaseOrderBuilder({
         <input name="expected_delivery_date" type="date" defaultValue={defaults.expected_delivery_date ?? ""} className="mt-1 w-full rounded-xl border px-3 py-2.5" />
       </label>
       <label className="text-sm font-semibold">Currency *
-        <input name="currency" required maxLength={3} defaultValue={defaults.currency ?? supplier?.default_currency ?? "BDT"} className="mt-1 w-full rounded-xl border px-3 py-2.5 uppercase" />
+        <input key={`${supplierId}:currency`} name="currency" required maxLength={3} defaultValue={defaults.currency ?? supplier?.default_currency ?? "BDT"} className="mt-1 w-full rounded-xl border px-3 py-2.5 uppercase" />
       </label>
       <label className="text-sm font-semibold">Payment terms (days)
-        <input name="payment_terms_days" type="number" min="0" max="365" defaultValue={defaults.payment_terms_days ?? supplier?.payment_terms_days ?? 0} className="mt-1 w-full rounded-xl border px-3 py-2.5" />
+        <input key={`${supplierId}:terms`} name="payment_terms_days" type="number" min="0" max="365" step="1" defaultValue={defaults.payment_terms_days ?? supplier?.payment_terms_days ?? 0} className="mt-1 w-full rounded-xl border px-3 py-2.5" />
       </label>
       <label className="text-sm font-semibold md:col-span-2">Supplier quotation / reference
         <input name="supplier_reference" maxLength={200} defaultValue={defaults.supplier_reference ?? ""} className="mt-1 w-full rounded-xl border px-3 py-2.5" />
@@ -91,6 +93,26 @@ export function PurchaseOrderBuilder({
 
     <section className="rounded-2xl border bg-[var(--surface)] p-4 shadow-sm">
       <div className="flex flex-wrap items-end gap-3">
+        <label className="min-w-64 flex-1 text-sm font-semibold">Find product by name or SKU
+          <input
+            value={productQuery}
+            list="purchase-product-search"
+            onChange={(event) => {
+              const value = event.target.value;
+              setProductQuery(value);
+              const selected = products.find((item) => `${item.name} — ${item.sku}` === value);
+              if (selected) {
+                setProductId(selected.id);
+                setVariationId("");
+              }
+            }}
+            placeholder="Start typing a product name or SKU"
+            className="mt-1 w-full rounded-xl border px-3 py-2.5"
+          />
+          <datalist id="purchase-product-search">
+            {products.map((item) => <option key={item.id} value={`${item.name} — ${item.sku}`} />)}
+          </datalist>
+        </label>
         <label className="min-w-64 flex-1 text-sm font-semibold">Add product
           <select value={productId} onChange={(event) => { setProductId(event.target.value); setVariationId(""); }} className="mt-1 w-full rounded-xl border px-3 py-2.5">
             <option value="">Choose product</option>{products.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.sku}</option>)}
@@ -103,6 +125,7 @@ export function PurchaseOrderBuilder({
         </label> : null}
         <button type="button" onClick={addItem} disabled={!product || (product.product_type === "variable" && !variationId)} className="rounded-xl bg-slate-900 px-5 py-2.5 font-bold text-white disabled:opacity-40">Add line</button>
       </div>
+      {product ? <div className="mt-3 grid gap-2 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm sm:grid-cols-4"><span><b>Product</b><br/>{product.name}</span><span><b>SKU</b><br/>{product.sku}</span><span><b>Type</b><br/>{product.product_type}</span><span><b>Purchase cost</b><br/>{Number(product.purchase_cost ?? 0).toFixed(2)}</span></div> : null}
 
       <input type="hidden" name="items" value={JSON.stringify(items)} />
       <div className="mt-4 overflow-x-auto">
@@ -111,7 +134,7 @@ export function PurchaseOrderBuilder({
           <tbody>{items.map((item, index) => <tr key={`${item.product_id}:${item.variation_id ?? ""}`} className="border-t align-top">
             <td className="p-3"><strong>{item.name}</strong>{item.serial_tracking_required ? <span className="mt-1 block text-xs text-cyan-700">Serialized units</span> : null}<input aria-label={`Description for ${item.name}`} value={item.description} onChange={(event) => updateItem(index, { description: event.target.value })} placeholder="Optional line note" className="mt-2 w-full rounded-lg border px-2 py-1.5" /></td>
             <td className="p-3 font-mono text-xs">{item.sku}</td>
-            <td className="p-3"><input aria-label={`Quantity for ${item.name}`} type="number" min="0.0001" step={item.serial_tracking_required ? "1" : "0.0001"} required value={item.quantity} onChange={(event) => updateItem(index, { quantity: Number(event.target.value) })} className="w-28 rounded-lg border px-2 py-1.5" /></td>
+            <td className="p-3"><input aria-label={`Quantity for ${item.name}`} type="number" min="1" step="1" required value={item.quantity} onChange={(event) => updateItem(index, { quantity: Math.max(1, Math.trunc(Number(event.target.value) || 1)) })} className="w-28 rounded-lg border px-2 py-1.5" /></td>
             <td className="p-3"><input aria-label={`Unit cost for ${item.name}`} type="number" min="0" step="0.0001" required value={item.unit_cost} onChange={(event) => updateItem(index, { unit_cost: Number(event.target.value) })} className="w-32 rounded-lg border px-2 py-1.5" /></td>
             <td className="p-3"><input aria-label={`Discount for ${item.name}`} type="number" min="0" step="0.0001" value={item.discount_amount} onChange={(event) => updateItem(index, { discount_amount: Number(event.target.value) })} className="w-28 rounded-lg border px-2 py-1.5" /></td>
             <td className="p-3"><input aria-label={`Tax for ${item.name}`} type="number" min="0" step="0.0001" value={item.tax_amount} onChange={(event) => updateItem(index, { tax_amount: Number(event.target.value) })} className="w-28 rounded-lg border px-2 py-1.5" /></td>

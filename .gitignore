@@ -30,6 +30,9 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 /.codex-logs/
+/.next-dev.log
+/.next-dev-error.log
+/.next-dev.pid
 
 # local duplicate source asset (the tracked copy lives in public/brand)
 /SEN Logo (2).png

@@ -33,7 +33,7 @@ export const adminNavigation: DashboardNavigationItem[] = [
 ];
 
 export const employeeNavigation: DashboardNavigationItem[] = [
-  {key:"employee-dashboard",label:"Employee Dashboard",route:routes.employee,group:"Workspace",iconKey:"dashboard",requiredPermission:"dashboard.view",implemented:true,adminVisible:false,employeeVisible:true},
+  {key:"employee-dashboard",label:"Employee Dashboard",route:routes.employee,group:"Workspace",iconKey:"dashboard",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
   {key:"employee-profile",label:"My workplace",route:routes.employeeProfile,group:"Workspace",iconKey:"employees",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
   {key:"employee-activity",label:"My Activity",route:routes.employeeActivity,group:"Workspace",iconKey:"activity",requiredPermission:"activity.view_own",implemented:true,adminVisible:false,employeeVisible:true},
   ...adminNavigation.filter((item)=>item.employeeVisible),
