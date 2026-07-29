@@ -5,8 +5,6 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { requirePermission } from "@/lib/auth/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
-import { updateQuotationAction } from "./actions";
-
 export const dynamic = "force-dynamic";
 
 const statuses = [
@@ -15,6 +13,11 @@ const statuses = [
   "quoted",
   "accepted",
   "declined",
+  "additional_info_required",
+  "approved",
+  "rejected",
+  "expired",
+  "converted_to_invoice",
   "closed",
 ];
 
@@ -90,33 +93,20 @@ export default async function AdminQuotationsPage({
                   <b className="text-[var(--primary)]">
                     {quotation.reference}
                   </b>
-                  <h2 className="text-xl font-bold"><a href={`/admin/quotations/${quotation.id}`} className="hover:text-[var(--primary)]">{quotation.subject}</a></h2>
+                  <h2 className="text-xl font-bold"><a href={`/admin/quotations/${quotation.id}/manage`} className="hover:text-[var(--primary)]">{quotation.subject}</a></h2>
                   <p className="text-sm text-[var(--muted-text)]">
                     {customer?.full_name ?? "Customer"} · {customer?.email} ·{" "}
                     {customer?.phone ?? "No phone"}
                   </p>
                 </div>
-                <form
-                  action={updateQuotationAction.bind(null, quotation.id)}
-                  className="flex gap-2"
-                >
-                  <select
-                    name="status"
-                    defaultValue={quotation.status}
-                    className="rounded-lg border px-3 py-2"
-                  >
-                    {statuses.map((status) => (
-                      <option key={status} value={status}>
-                        {status.replaceAll("_", " ")}
-                      </option>
-                    ))}
-                  </select>
-                  <button className="rounded-lg bg-[var(--primary)] px-4 py-2 font-bold text-[var(--primary-foreground)]">
-                    Save
-                  </button>
-                </form>
+                <span className="rounded-full bg-[var(--muted-surface)] px-3 py-1.5 text-sm font-semibold capitalize">
+                  {quotation.status.replaceAll("_", " ")}
+                </span>
               </div>
-              <a href={`/admin/quotations/${quotation.id}`} className="mt-4 inline-flex rounded-lg border px-3 py-2 text-sm font-semibold">Open printable quotation</a>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <a href={`/admin/quotations/${quotation.id}/manage`} className="inline-flex rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-semibold text-[var(--primary-foreground)]">Manage quotation</a>
+                <a href={`/admin/quotations/${quotation.id}`} className="inline-flex rounded-lg border px-3 py-2 text-sm font-semibold">Print quotation</a>
+              </div>
               <p className="mt-3">{quotation.message || "No additional notes."}</p>
               <div className="mt-4 grid gap-2">
                 {quotation.quotation_request_items?.map(

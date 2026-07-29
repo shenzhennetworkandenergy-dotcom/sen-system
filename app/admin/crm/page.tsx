@@ -24,6 +24,7 @@ export default async function CrmPage({ searchParams }: { searchParams: Promise<
       <a href="/admin/crm/leads/new" className="rounded-lg bg-[var(--primary)] px-4 py-2 font-bold text-[var(--primary-foreground)]">New lead</a>
       <a href="/admin/crm/companies" className="rounded-lg border bg-[var(--surface)] px-4 py-2 font-bold">Companies</a>
       <a href="/admin/crm/contacts" className="rounded-lg border bg-[var(--surface)] px-4 py-2 font-bold">Contacts</a>
+      <a href="/admin/crm/chatbot" className="rounded-lg border bg-[var(--surface)] px-4 py-2 font-bold">Product Assistant inquiries</a>
       <a href="/admin/crm/export" className="rounded-lg border bg-[var(--surface)] px-4 py-2 font-bold">Export CSV</a>
     </div>
     <form className="grid gap-2 rounded-2xl border bg-[var(--surface)] p-3 md:grid-cols-3">

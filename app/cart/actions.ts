@@ -9,15 +9,31 @@ import { wholeNumberFromForm } from "@/lib/validation/numbers";
 const uuid=(value:unknown)=>{const id=String(value??"");if(!/^[0-9a-f-]{36}$/i.test(id))throw new Error("Invalid product.");return id;};
 async function addProductToCart(productId:string,form:FormData){
   const {profile}=await requireProfile(["customer","admin"]),db=createSupabaseAdminClient();let quantity:number;try{quantity=wholeNumberFromForm(form,"quantity","Quantity",{required:true,minimum:1,maximum:99})!;}catch(error){redirect(`/products?error=${encodeURIComponent(error instanceof Error?error.message:"Quantity is invalid.")}`);}
-  const {data:product}=await db.from("products").select("id,allow_backorders,status,public_catalogue_visible").eq("id",uuid(productId)).maybeSingle();
-  const {data:balance}=await db.from("inventory_balances").select("available").eq("product_id",productId);
-  const available=(balance??[]).reduce((sum,row)=>sum+Number(row.available),0);
+  const requestedVariation=String(form.get("variation_id")??"").trim();
+  const {data:product}=await db.from("products").select("id,product_type,allow_backorders,status,public_catalogue_visible").eq("id",uuid(productId)).maybeSingle();
   if(!product||product.status!=="active"||!product.public_catalogue_visible)redirect("/products?error=Product%20is%20not%20available.");
-  if(available<quantity&&!product.allow_backorders)redirect(`/products?error=${encodeURIComponent("This product is out of stock. Request a quotation instead.")}`);
+  let variationId:string|null=null;
+  let allowBackorders=product.allow_backorders;
+  if(product.product_type==="variable"){
+    if(!requestedVariation)redirect(`/products?error=${encodeURIComponent("Select a product configuration first.")}`);
+    const {data:variation}=await db.from("product_variations").select("id,allow_backorders,status").eq("id",uuid(requestedVariation)).eq("product_id",productId).eq("status","active").maybeSingle();
+    if(!variation)redirect(`/products?error=${encodeURIComponent("The selected configuration is not available.")}`);
+    variationId=variation.id;
+    allowBackorders=variation.allow_backorders;
+  }else if(requestedVariation){
+    redirect(`/products?error=${encodeURIComponent("This product does not use configurations.")}`);
+  }
+  let balanceQuery=db.from("inventory_balances").select("available").eq("product_id",productId);
+  balanceQuery=variationId?balanceQuery.eq("variation_id",variationId):balanceQuery.is("variation_id",null);
+  const {data:balance}=await balanceQuery;
+  const available=(balance??[]).reduce((sum,row)=>sum+Number(row.available),0);
+  if(available<quantity&&!allowBackorders)redirect(`/products?error=${encodeURIComponent("This configuration is out of stock. Request a quotation instead.")}`);
   let {data:cart}=await db.from("shopping_carts").select("id").eq("profile_id",profile.id).eq("status","active").maybeSingle();
   if(!cart){const created=await db.from("shopping_carts").insert({profile_id:profile.id,currency:"BDT"}).select("id").single();if(created.error||!created.data)redirect("/products?error=Unable%20to%20create%20cart.");cart=created.data;}
-  const {data:existing}=await db.from("shopping_cart_items").select("id,quantity").eq("cart_id",cart.id).eq("product_id",productId).is("variation_id",null).maybeSingle();
-  const result=existing?await db.from("shopping_cart_items").update({quantity:Math.min(99,Number(existing.quantity)+quantity),updated_at:new Date().toISOString()}).eq("id",existing.id):await db.from("shopping_cart_items").insert({cart_id:cart.id,product_id:productId,quantity});
+  let existingQuery=db.from("shopping_cart_items").select("id,quantity").eq("cart_id",cart.id).eq("product_id",productId);
+  existingQuery=variationId?existingQuery.eq("variation_id",variationId):existingQuery.is("variation_id",null);
+  const {data:existing}=await existingQuery.maybeSingle();
+  const result=existing?await db.from("shopping_cart_items").update({quantity:Math.min(99,Number(existing.quantity)+quantity),updated_at:new Date().toISOString()}).eq("id",existing.id):await db.from("shopping_cart_items").insert({cart_id:cart.id,product_id:productId,variation_id:variationId,quantity});
   if(result.error)redirect("/products?error=Unable%20to%20add%20this%20product.");
   revalidatePath("/cart");revalidatePath("/");
 }

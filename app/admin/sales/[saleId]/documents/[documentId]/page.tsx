@@ -1,9 +1,10 @@
 import Image from "next/image";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
+
 import { PrintDocumentButton } from "@/components/sales/PrintDocumentButton";
 import { requireAnyPermission } from "@/lib/auth/permissions";
-import { money, label, dateTime } from "@/lib/orders/types";
+import { dateTime, label, money } from "@/lib/orders/types";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +18,104 @@ type Snapshot = {
 };
 
 const text = (value: unknown, fallback = "") => String(value ?? fallback);
+const PAGE_SIZE = 10;
+
+function SenDocumentHeader({
+  title,
+  number,
+  createdAt,
+  page,
+  pages,
+  invoice,
+}: {
+  title: string;
+  number: string;
+  createdAt: string;
+  page: number;
+  pages: number;
+  invoice: boolean;
+}) {
+  return (
+    <header
+      className={`relative overflow-hidden bg-gradient-to-r ${
+        invoice
+          ? "from-slate-950 via-indigo-950 to-cyan-800"
+          : "from-slate-950 via-emerald-900 to-teal-700"
+      } px-6 py-5 text-white`}
+    >
+      <div className="absolute -right-14 -top-24 h-64 w-64 rounded-full border-[24px] border-white/5" />
+      <div className="relative flex items-start justify-between gap-5">
+        <div className="flex items-start gap-3">
+          <span className="rounded-xl bg-white p-1.5 shadow-lg">
+            <Image
+              src="/brand/sen-official-logo.png"
+              alt="SEN"
+              width={48}
+              height={48}
+            />
+          </span>
+          <div>
+            <h1 className="text-lg font-black tracking-tight">
+              SHENZHEN ENERGY AND NETWORKS
+            </h1>
+            <p className="mt-1 max-w-[390px] text-[10px] leading-4 text-white/85">
+              House- 67, Level-3, Laboratory Road, New Elephant Road
+              (Backside of Multiplan Center), Dhaka- 1205
+              <br />
+              Call/Whatsapp: +8801805226599 · sen.com.bd ·
+              szwaqia@vip.163.com
+            </p>
+          </div>
+        </div>
+        <div className="text-right">
+          <h2 className="text-2xl font-black tracking-[0.08em]">{title}</h2>
+          <p className="mt-1 font-mono text-xs">{number}</p>
+          <p className="mt-1 text-[10px] text-white/80">
+            Issue: {new Date(createdAt).toLocaleDateString("en-GB")}
+          </p>
+          {pages > 1 ? (
+            <p className="text-[10px] text-white/70">
+              Page {page} of {pages}
+            </p>
+          ) : null}
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function AddressBlock({
+  title,
+  name,
+  company,
+  email,
+  phone,
+  lines,
+}: {
+  title: string;
+  name: string;
+  company?: string;
+  email?: string;
+  phone?: string;
+  lines?: string[];
+}) {
+  return (
+    <div>
+      <p className="border-b border-slate-400 pb-1 text-[10px] font-black uppercase tracking-[0.16em] text-indigo-800">
+        {title}
+      </p>
+      <p className="mt-2 text-sm font-black">{name}</p>
+      {company ? <p className="text-xs">{company}</p> : null}
+      {lines?.filter(Boolean).map((line) => (
+        <p key={line} className="text-[11px] leading-4 text-slate-700">
+          {line}
+        </p>
+      ))}
+      {phone ? <p className="text-[11px] text-slate-700">{phone}</p> : null}
+      {email ? <p className="text-[11px] text-slate-700">{email}</p> : null}
+    </div>
+  );
+}
 
 export default async function SaleDocumentPage({
   params,
@@ -32,159 +131,301 @@ export default async function SaleDocumentPage({
     "sales.create_delivery_challan",
   ]);
   const { saleId, documentId } = await params;
-  const { data, error } = await createSupabaseAdminClient()
+  const db = createSupabaseAdminClient();
+  const { data, error } = await db
     .from("sale_documents")
     .select("*")
     .eq("id", documentId)
     .eq("order_id", saleId)
     .maybeSingle();
   if (error || !data) notFound();
+  const { data: payments, error: paymentsError } = await db
+    .from("sale_payments")
+    .select("id,amount,payment_date,method,reference_number,created_at")
+    .eq("order_id", saleId)
+    .eq("status", "received")
+    .order("created_at", { ascending: true });
+  if (paymentsError) throw new Error("Unable to load invoice payments.");
 
   const snapshot = data.snapshot as Snapshot;
   const order = snapshot.order;
   const customer = snapshot.customer;
-  const address = (order.shipping_address_snapshot ?? {}) as Record<string, unknown>;
+  const address = (order.shipping_address_snapshot ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const billing = (order.billing_address_snapshot ?? address) as Record<
+    string,
+    unknown
+  >;
   const isInvoice = data.document_type === "invoice";
-  const accent = isInvoice ? "from-indigo-700 to-cyan-600" : "from-emerald-700 to-teal-500";
-  const title = isInvoice ? "TAX INVOICE" : "DELIVERY CHALLAN";
+  const title = isInvoice ? "SALES INVOICE" : "DELIVERY CHALLAN";
   const currency = text(order.currency, "BDT");
+  const paidAmount = (payments ?? []).reduce(
+    (sum, payment) => sum + Number(payment.amount),
+    0,
+  );
+  const remainingBalance = Math.max(
+    Number(order.total_amount ?? 0) - paidAmount,
+    0,
+  );
+  const customerName = text(
+    customer.full_name ?? customer.company_name ?? customer.email,
+    "Customer",
+  );
+  const downloadName = `${customerName} - ${text(data.document_number)}`;
+  const pages = Array.from(
+    { length: Math.max(1, Math.ceil(snapshot.items.length / PAGE_SIZE)) },
+    (_, index) =>
+      snapshot.items.slice(index * PAGE_SIZE, (index + 1) * PAGE_SIZE),
+  );
+
+  const addressLines = (value: Record<string, unknown>) => [
+    [value.address_line_1, value.address_line_2]
+      .filter(Boolean)
+      .map((part) => text(part))
+      .join(", "),
+    [value.area, value.city, value.region, value.postal_code, value.country_code]
+      .filter(Boolean)
+      .map((part) => text(part))
+      .join(", "),
+  ];
 
   return (
     <>
       <style>{`
-        @page { size: A4 portrait; margin: 8mm; }
+        @page { size: A4 portrait; margin: 0; }
         @media print {
           html, body { background: white !important; }
           body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+          .document-page { box-shadow: none !important; margin: 0 !important; }
         }
       `}</style>
-      <main className="mx-auto min-h-[297mm] w-full max-w-[210mm] overflow-hidden bg-white text-slate-900 shadow-2xl print:min-h-0 print:max-w-none print:shadow-none">
-        <header className={`bg-gradient-to-r ${accent} px-8 py-7 text-white`}>
-          <div className="flex items-start justify-between gap-5">
-            <div className="flex items-center gap-4">
-              <span className="rounded-2xl bg-white p-2 shadow-lg">
-                <Image src="/brand/sen-official-logo.png" alt="SEN" width={66} height={66} />
-              </span>
-              <div>
-                <h1 className="text-2xl font-black tracking-tight">Shenzhen Energy &amp; Networks</h1>
-                <p className="mt-1 text-sm text-white/85">Enterprise technology, energy and infrastructure</p>
-              </div>
-            </div>
-            <div className="text-right">
-              <h2 className="text-3xl font-black tracking-wide">{title}</h2>
-              <p className="mt-2 rounded-full bg-white/15 px-3 py-1 font-mono text-sm">{text(data.document_number)}</p>
-              <p className="mt-2 text-xs text-white/80">{dateTime(data.created_at)}</p>
-            </div>
-          </div>
-        </header>
 
-        <section className="grid grid-cols-2 gap-5 border-b border-slate-200 bg-slate-50 px-8 py-6">
-          <div className="rounded-2xl border border-slate-200 bg-white p-4">
-            <p className="text-xs font-bold uppercase tracking-[0.18em] text-indigo-700">Bill to</p>
-            <h3 className="mt-2 text-lg font-bold">{text(customer.full_name ?? customer.email, "Customer")}</h3>
-            {customer.company_name ? <p>{text(customer.company_name)}</p> : null}
-            <p className="mt-2 text-sm text-slate-600">{text(customer.email)}</p>
-            <p className="text-sm text-slate-600">{text(customer.phone)}</p>
-          </div>
-          <div className="rounded-2xl border border-slate-200 bg-white p-4">
-            <p className="text-xs font-bold uppercase tracking-[0.18em] text-cyan-700">Deliver to</p>
-            <h3 className="mt-2 text-lg font-bold">{text(address.recipient_name, "Customer")}</h3>
-            <p className="text-sm text-slate-700">{text(address.address_line_1)}</p>
-            {address.address_line_2 ? <p className="text-sm text-slate-700">{text(address.address_line_2)}</p> : null}
-            <p className="text-sm text-slate-700">
-              {[address.area, address.city, address.region, address.postal_code, address.country_code]
-                .filter(Boolean)
-                .map((value) => text(value))
-                .join(", ")}
-            </p>
-            {address.phone ? <p className="mt-1 text-sm text-slate-600">{text(address.phone)}</p> : null}
-          </div>
-        </section>
+      <div className="bg-slate-200 py-5 print:bg-white print:py-0">
+        {pages.map((items, pageIndex) => {
+          const lastPage = pageIndex === pages.length - 1;
+          return (
+            <main
+              key={pageIndex}
+              className="document-page mx-auto mb-5 flex min-h-[297mm] w-[210mm] flex-col overflow-hidden bg-white text-slate-900 shadow-2xl break-after-page last:mb-0 last:break-after-auto print:shadow-none"
+            >
+              <SenDocumentHeader
+                title={title}
+                number={text(data.document_number)}
+                createdAt={data.created_at}
+                page={pageIndex + 1}
+                pages={pages.length}
+                invoice={isInvoice}
+              />
 
-        <section className="px-8 py-6">
-          <div className="overflow-hidden rounded-2xl border border-slate-200">
-            <table className="w-full table-fixed text-left text-sm">
-              <thead className="bg-slate-900 text-white">
-                <tr>
-                  <th className="w-[43%] px-4 py-3">Product</th>
-                  <th className="w-[12%] px-3 py-3 text-center">Qty</th>
-                  {isInvoice ? <th className="w-[20%] px-3 py-3 text-right">Unit price</th> : null}
-                  {isInvoice ? <th className="w-[25%] px-4 py-3 text-right">Line total</th> : <th className="px-4 py-3">Remarks</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {snapshot.items.map((item, index) => (
-                  <tr key={text(item.id, String(index))} className="border-t border-slate-200 even:bg-slate-50">
-                    <td className="px-4 py-4 align-top">
-                      <b className="block">{text(item.product_name_snapshot)}</b>
-                      <span className="mt-1 block font-mono text-xs text-slate-500">SKU {text(item.sku_snapshot)}</span>
-                      <span className="text-xs text-slate-500">
-                        {[item.brand_snapshot, item.model_number_snapshot].filter(Boolean).map((value) => text(value)).join(" · ")}
-                      </span>
-                    </td>
-                    <td className="px-3 py-4 text-center align-top font-bold">{text(item.quantity)}</td>
-                    {isInvoice ? <td className="px-3 py-4 text-right align-top">{money(item.unit_price as number, currency)}</td> : null}
-                    {isInvoice ? (
-                      <td className="px-4 py-4 text-right align-top font-bold">{money(item.line_total as number, currency)}</td>
-                    ) : (
-                      <td className="px-4 py-4 text-slate-500">Checked and packed</td>
+              {pageIndex === 0 ? (
+                <section className="grid grid-cols-2 gap-8 px-6 py-4">
+                  <AddressBlock
+                    title="Billed to"
+                    name={text(
+                      billing.recipient_name ??
+                        customer.full_name ??
+                        customer.email,
+                      "Customer",
                     )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {isInvoice ? (
-            <div className="ml-auto mt-5 w-[48%] rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm">
-              {[
-                ["Subtotal", order.subtotal],
-                ["Discount", order.discount_amount],
-                ["Shipping", order.shipping_amount],
-                ["Service", order.service_amount],
-                ["VAT / tax", order.tax_amount],
-              ].map(([name, amount]) => (
-                <p key={text(name)} className="flex justify-between gap-4 py-1">
-                  <span className="text-slate-600">{text(name)}</span>
-                  <span>{money(amount as number, currency)}</span>
+                    company={text(customer.company_name)}
+                    email={text(customer.email)}
+                    phone={text(billing.phone ?? customer.phone)}
+                    lines={addressLines(billing)}
+                  />
+                  <AddressBlock
+                    title="Ship to"
+                    name={text(address.recipient_name, "Customer")}
+                    phone={text(address.phone)}
+                    lines={addressLines(address)}
+                  />
+                </section>
+              ) : (
+                <p className="px-6 py-3 text-xs font-semibold text-slate-600">
+                  Continued from page {pageIndex}
                 </p>
-              ))}
-              <p className={`mt-3 flex justify-between gap-4 rounded-xl bg-gradient-to-r ${accent} px-4 py-3 text-lg font-black text-white`}>
-                <span>Total</span><span>{money(order.total_amount as number, currency)}</span>
-              </p>
-              <p className="mt-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Payment: {label(text(order.payment_status))}
-              </p>
-            </div>
-          ) : null}
+              )}
 
-          {snapshot.serials.length ? (
-            <section className="mt-6 rounded-2xl border border-slate-200 p-4">
-              <h3 className="font-bold">Assigned serial numbers</h3>
-              <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-                {snapshot.serials.map((serial, index) => (
-                  <p key={`${text(serial.sen_serial)}-${index}`} className="rounded-lg bg-slate-50 p-2 font-mono">
-                    SEN: {text(serial.sen_serial)}
-                    {serial.manufacturer_serial ? <><br />MFR: {text(serial.manufacturer_serial)}</> : null}
-                  </p>
-                ))}
-              </div>
-            </section>
-          ) : null}
+              <section className="px-6">
+                <div className="overflow-hidden border border-slate-300">
+                  <table className="w-full table-fixed text-left text-[11px]">
+                    <thead className="bg-slate-900 text-white">
+                      <tr>
+                        <th className="w-[7%] px-2 py-2 text-center">No.</th>
+                        <th className="w-[43%] px-2 py-2">Description</th>
+                        <th className="w-[12%] px-2 py-2 text-center">Qty</th>
+                        {isInvoice ? (
+                          <th className="w-[18%] px-2 py-2 text-right">
+                            Unit price
+                          </th>
+                        ) : null}
+                        <th className="px-2 py-2 text-right">
+                          {isInvoice ? "Amount" : "Remarks"}
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {items.map((item, index) => (
+                        <tr
+                          key={text(item.id, String(index))}
+                          className="border-t border-slate-200 even:bg-indigo-50/60"
+                        >
+                          <td className="px-2 py-2 text-center align-top">
+                            {pageIndex * PAGE_SIZE + index + 1}
+                          </td>
+                          <td className="px-2 py-2 align-top">
+                            <b>{text(item.product_name_snapshot)}</b>
+                            <span className="block font-mono text-[9px] text-slate-500">
+                              SKU {text(item.sku_snapshot, "—")}
+                              {[item.brand_snapshot, item.model_number_snapshot]
+                                .filter(Boolean)
+                                .map((value) => ` · ${text(value)}`)}
+                            </span>
+                          </td>
+                          <td className="px-2 py-2 text-center align-top font-bold">
+                            {text(item.quantity)}
+                          </td>
+                          {isInvoice ? (
+                            <td className="px-2 py-2 text-right align-top">
+                              {money(item.unit_price as number, currency)}
+                            </td>
+                          ) : null}
+                          <td className="px-2 py-2 text-right align-top font-bold">
+                            {isInvoice
+                              ? money(item.line_total as number, currency)
+                              : "Checked and packed"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
 
-          <section className="mt-12 grid grid-cols-2 gap-16 pt-8 text-center text-sm">
-            <p className="border-t-2 border-slate-400 pt-2 font-semibold">Authorized signature</p>
-            <p className="border-t-2 border-slate-400 pt-2 font-semibold">Customer signature</p>
-          </section>
-          <footer className="mt-8 border-t border-slate-200 pt-4 text-center text-xs text-slate-500">
-            Thank you for choosing SEN. This document was generated electronically on {dateTime(snapshot.generated_at)}.
-          </footer>
-          <div className="mt-6 flex gap-3 print:hidden">
-            <PrintDocumentButton />
-            <a href={`/admin/sales/${saleId}`} className="rounded-lg border px-4 py-2 font-semibold">Back to sale</a>
-          </div>
-        </section>
-      </main>
+              {lastPage ? (
+                <section className="px-6 pt-4">
+                  {isInvoice ? (
+                    <div className="ml-auto w-[46%] text-[11px]">
+                      {[
+                        ["Subtotal", order.subtotal],
+                        ["Discount", order.discount_amount],
+                        ["Shipping", order.shipping_amount],
+                        ["Service", order.service_amount],
+                        ["VAT / tax", order.tax_amount],
+                      ].map(([name, amount]) => (
+                        <p
+                          key={text(name)}
+                          className="flex justify-between border-b border-slate-200 px-2 py-1"
+                        >
+                          <span>{text(name)}</span>
+                          <span>{money(amount as number, currency)}</span>
+                        </p>
+                      ))}
+                      <p className="mt-1 flex justify-between bg-indigo-950 px-3 py-2 text-sm font-black text-white">
+                        <span>Total</span>
+                        <span>{money(order.total_amount as number, currency)}</span>
+                      </p>
+                      <p className="mt-1 flex justify-between bg-emerald-50 px-3 py-2 font-bold text-emerald-900">
+                        <span>Amount paid</span>
+                        <span>{money(paidAmount, currency)}</span>
+                      </p>
+                      <p className="flex justify-between bg-amber-50 px-3 py-2 font-bold text-amber-950">
+                        <span>Remaining balance</span>
+                        <span>{money(remainingBalance, currency)}</span>
+                      </p>
+                      <p className="mt-1 text-right text-[9px] font-semibold uppercase text-slate-500">
+                        Payment:{" "}
+                        {paidAmount === 0
+                          ? "Unpaid"
+                          : remainingBalance > 0
+                            ? "Partially paid"
+                            : "Paid"}
+                      </p>
+                    </div>
+                  ) : null}
+
+                  {isInvoice && payments?.length ? (
+                    <div className="mt-4">
+                      <p className="text-[10px] font-black uppercase tracking-wide text-indigo-900">
+                        Payment history
+                      </p>
+                      <table className="mt-1 w-full border-collapse text-[9px]">
+                        <thead className="bg-slate-100 text-slate-700">
+                          <tr>
+                            <th className="border px-2 py-1 text-left">Amount paid</th>
+                            <th className="border px-2 py-1 text-left">Payment method</th>
+                            <th className="border px-2 py-1 text-left">Date and time</th>
+                            <th className="border px-2 py-1 text-left">Reference</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {payments.map((payment) => (
+                            <tr key={payment.id}>
+                              <td className="border px-2 py-1 font-semibold">
+                                {money(payment.amount, currency)}
+                              </td>
+                              <td className="border px-2 py-1">
+                                {label(payment.method)}
+                              </td>
+                              <td className="border px-2 py-1">
+                                {dateTime(payment.created_at)}
+                              </td>
+                              <td className="border px-2 py-1">
+                                {payment.reference_number || "—"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : null}
+
+                  {snapshot.serials.length ? (
+                    <div className="mt-3 border-t border-slate-300 pt-2">
+                      <p className="text-[10px] font-black uppercase tracking-wide">
+                        Assigned serial numbers
+                      </p>
+                      <p className="mt-1 text-[9px] leading-4 text-slate-600">
+                        {snapshot.serials
+                          .map((serial) => text(serial.sen_serial))
+                          .join(" · ")}
+                      </p>
+                    </div>
+                  ) : null}
+
+                  <div className="mt-8 grid grid-cols-2 gap-16 text-center text-[10px]">
+                    <p className="border-t border-slate-500 pt-1 font-semibold">
+                      Authorized signature
+                    </p>
+                    <p className="border-t border-slate-500 pt-1 font-semibold">
+                      Customer signature
+                    </p>
+                  </div>
+                </section>
+              ) : null}
+
+              <footer className="mt-auto border-t border-slate-200 px-6 py-3 text-center text-[9px] text-slate-500">
+                Thank you for choosing SEN · +8801805226599 · sen.com.bd ·
+                szwaqia@vip.163.com
+                <span className="ml-2">
+                  Generated {dateTime(snapshot.generated_at)}
+                </span>
+              </footer>
+            </main>
+          );
+        })}
+
+        <div className="mx-auto mt-4 flex max-w-[210mm] gap-3 print:hidden">
+          <PrintDocumentButton fileName={downloadName} />
+          <a
+            href={`/admin/sales/${saleId}`}
+            className="rounded-lg border bg-white px-4 py-2 font-semibold"
+          >
+            Back to sale
+          </a>
+        </div>
+      </div>
     </>
   );
 }

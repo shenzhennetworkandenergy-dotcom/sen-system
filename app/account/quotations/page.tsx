@@ -15,10 +15,12 @@ export default async function QuotationsPage({
   await connection();
   const { profile } = await requireProfile(["customer", "admin"]);
   const notice = await searchParams;
-  const { data } = await createSupabaseAdminClient()
+  const db = createSupabaseAdminClient();
+  await db.rpc("queue_quotation_expiry_notifications");
+  const { data } = await db
     .from("quotation_requests")
     .select(
-      "id,reference,status,subject,message,created_at,quotation_request_items(product_name_snapshot,quantity)",
+      "id,reference,status,subject,message,total_amount,currency,expiration_date,converted_order_id,converted_invoice_id,created_at,quotation_request_items(product_name_snapshot,quantity)",
     )
     .eq("profile_id", profile.id)
     .order("created_at", { ascending: false });
@@ -51,12 +53,35 @@ export default async function QuotationsPage({
                 <h2 className="text-lg font-bold">{quotation.subject}</h2>
               </div>
               <span className="h-fit rounded-full bg-blue-50 px-3 py-1 text-sm font-bold text-blue-800">
-                {quotation.status}
+                {quotation.status.replaceAll("_", " ")}
               </span>
             </div>
             <p className="mt-2 text-sm text-[var(--muted-text)]">
               {quotation.message || "No additional requirements."}
             </p>
+            <div className="mt-3 flex flex-wrap items-center gap-4 text-sm">
+              <b>
+                {quotation.currency ?? "BDT"}{" "}
+                {Number(quotation.total_amount ?? 0).toLocaleString("en-BD", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}
+              </b>
+              {quotation.expiration_date ? (
+                <span>
+                  Valid until{" "}
+                  {new Date(quotation.expiration_date).toLocaleDateString("en-BD")}
+                </span>
+              ) : null}
+              {quotation.converted_order_id ? (
+                <Link
+                  href={`/account/orders/${quotation.converted_order_id}`}
+                  className="font-bold text-[var(--primary)]"
+                >
+                  Open converted order →
+                </Link>
+              ) : null}
+            </div>
           </article>
         ))}
         {!data?.length ? (

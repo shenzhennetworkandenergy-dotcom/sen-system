@@ -22,6 +22,14 @@ type CartProduct = {
   currency: string;
 };
 
+type CartVariation = {
+  id: string;
+  sku: string;
+  combination_key: string;
+  sale_price: number | null;
+  regular_price: number | null;
+};
+
 export default async function CartPage({
   searchParams,
 }: {
@@ -43,7 +51,7 @@ export default async function CartPage({
       ? db
           .from("shopping_cart_items")
           .select(
-            "id,quantity,products(id,name,slug,sku,sale_price,regular_price,currency)",
+            "id,quantity,products(id,name,slug,sku,sale_price,regular_price,currency),product_variations(id,sku,combination_key,sale_price,regular_price)",
           )
           .eq("cart_id", cart.id)
       : Promise.resolve({ data: [] }),
@@ -58,10 +66,17 @@ export default async function CartPage({
 
   const total = (items ?? []).reduce((sum, item) => {
     const product = item.products as unknown as CartProduct;
+    const variation = item.product_variations as unknown as CartVariation | null;
     return (
       sum +
       Number(item.quantity) *
-        Number(product.sale_price ?? product.regular_price ?? 0)
+        Number(
+          variation?.sale_price ??
+            variation?.regular_price ??
+            product.sale_price ??
+            product.regular_price ??
+            0,
+        )
     );
   }, 0);
 
@@ -85,8 +100,14 @@ export default async function CartPage({
             <section className="space-y-3">
               {(items ?? []).map((item) => {
                 const product = item.products as unknown as CartProduct;
+                const variation =
+                  item.product_variations as unknown as CartVariation | null;
                 const price = Number(
-                  product.sale_price ?? product.regular_price ?? 0,
+                  variation?.sale_price ??
+                    variation?.regular_price ??
+                    product.sale_price ??
+                    product.regular_price ??
+                    0,
                 );
                 return (
                   <article
@@ -100,7 +121,14 @@ export default async function CartPage({
                       >
                         {product.name}
                       </Link>
-                      <p className="text-sm text-slate-500">{product.sku}</p>
+                      {variation ? (
+                        <p className="mt-1 text-sm font-medium text-blue-700">
+                          {variation.combination_key}
+                        </p>
+                      ) : null}
+                      <p className="text-sm text-slate-500">
+                        {variation?.sku ?? product.sku}
+                      </p>
                     </div>
                     <form
                       action={updateCartAction}
