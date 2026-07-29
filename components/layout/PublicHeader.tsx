@@ -121,6 +121,7 @@ export async function PublicHeader() {
         <div className="hidden items-center gap-3 lg:flex">
           {dash ? (
             <>
+              {profile?.role === "customer" ? <Link href="/request-quote/general" className="sen-nav-link">Request a Quote</Link> : null}
               <Link href={routes.cart} className={`sen-cart-link ${cartCount > 0 ? "has-items" : ""}`}>
                 Cart {cartCount > 0 ? <span>{cartCount}</span> : null}
               </Link>

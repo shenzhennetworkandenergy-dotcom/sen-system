@@ -20,9 +20,8 @@ export function SaleBuilder({
 }: {
   customers:Customer[]; products:Product[]; variations:Variation[]; balances:Balance[]; warehouses:Warehouse[]; addresses:Address[];
 }) {
-  const firstCustomer = customers[0];
-  const [customerId, setCustomerId] = useState(firstCustomer?.id ?? "");
-  const [customerSearch, setCustomerSearch] = useState(firstCustomer ? customerLabel(firstCustomer) : "");
+  const [customerId, setCustomerId] = useState("");
+  const [customerSearch, setCustomerSearch] = useState("");
   const [warehouseId, setWarehouseId] = useState(warehouses[0]?.id ?? "");
   const [addressId, setAddressId] = useState("");
   const [search, setSearch] = useState("");
@@ -79,7 +78,11 @@ export function SaleBuilder({
           {customerChoices.map((item) => <button
             key={item.id}
             type="button"
-            onClick={() => { setCustomerId(item.id); setCustomerSearch(customerLabel(item)); setAddressId(""); }}
+            onClick={() => {
+              setCustomerId(item.id);
+              setCustomerSearch(customerLabel(item));
+              setAddressId(addresses.find((address) => address.profile_id === item.id && address.is_default_shipping)?.id ?? "");
+            }}
             className="block w-full rounded-lg px-3 py-2 text-left hover:bg-blue-50"
           >
             <b>{item.full_name || item.email}</b>
@@ -105,8 +108,8 @@ export function SaleBuilder({
     <section className="rounded-xl border bg-[var(--surface)] p-4">
       <div className="flex flex-wrap justify-between gap-3"><div><h2 className="font-bold">Products and pricing</h2><p className="text-sm text-[var(--muted-text)]">Search by product name, model or SKU. Product details and price fill automatically.</p></div><input value={search} onChange={(event)=>setSearch(event.target.value)} placeholder="Search products" className="rounded-lg border px-3 py-2"/></div>
       <div className="mt-3 space-y-3">{selected.map((row)=><article key={row.key} className="grid gap-2 rounded-xl border p-3 lg:grid-cols-[2fr_1fr_.6fr_.8fr_.7fr_.7fr_auto]">
-        <label className="text-xs font-semibold">Product<select value={row.product_id} onChange={(event)=>{const product=products.find((item)=>item.id===event.target.value),price=Number(product?.sale_price??product?.regular_price??0);update(row.key,{product_id:event.target.value,variation_id:"",unit_price:String(price),catalogue_price:price})}} className={field} required><option value="">Choose product</option>{productChoices.map((item)=><option key={item.id} value={item.id}>{item.name} · {item.sku}{item.serial_tracking_required?" · Serialized":""}</option>)}</select>{row.product?<span className="mt-1 block text-[var(--muted-text)]">SKU {row.product.sku}{row.product.model_number?` · Model ${row.product.model_number}`:""}</span>:null}</label>
-        <label className="text-xs font-semibold">Variation<select value={row.variation_id} onChange={(event)=>{const variation=variations.find((item)=>item.id===event.target.value),price=Number(variation?.sale_price??variation?.regular_price??row.catalogue_price);update(row.key,{variation_id:event.target.value,unit_price:String(price),catalogue_price:price})}} className={field}><option value="">None</option>{variations.filter((item)=>item.product_id===row.product_id).map((item)=><option key={item.id} value={item.id}>{item.name||item.sku}</option>)}</select></label>
+        <label className="text-xs font-semibold">Product<select value={row.product_id} onChange={(event)=>{const product=products.find((item)=>item.id===event.target.value),price=Math.round(Number(product?.sale_price??product?.regular_price??0)*100)/100;update(row.key,{product_id:event.target.value,variation_id:"",unit_price:String(price),catalogue_price:price})}} className={field} required><option value="">Choose product</option>{productChoices.map((item)=><option key={item.id} value={item.id}>{item.name} · {item.sku}{item.serial_tracking_required?" · Serialized":""}</option>)}</select>{row.product?<span className="mt-1 block text-[var(--muted-text)]">SKU {row.product.sku}{row.product.model_number?` · Model ${row.product.model_number}`:""}</span>:null}</label>
+        <label className="text-xs font-semibold">Variation<select value={row.variation_id} onChange={(event)=>{const variation=variations.find((item)=>item.id===event.target.value),price=Math.round(Number(variation?.sale_price??variation?.regular_price??row.catalogue_price)*100)/100;update(row.key,{variation_id:event.target.value,unit_price:String(price),catalogue_price:price})}} className={field}><option value="">None</option>{variations.filter((item)=>item.product_id===row.product_id).map((item)=><option key={item.id} value={item.id}>{item.name||item.sku}</option>)}</select></label>
         <label className="text-xs font-semibold">Qty<input type="number" min="1" max={row.available} step="1" value={row.quantity} onChange={(event)=>update(row.key,{quantity:String(Math.max(1,Math.trunc(Number(event.target.value)||1)))})} className={field}/><span className={Number(row.quantity)>row.available?"text-red-700":"text-[var(--muted-text)]"}>Available {row.available}</span></label>
         <label className="text-xs font-semibold">Unit BDT<input type="number" min="0" step=".01" value={row.unit_price} onChange={(event)=>update(row.key,{unit_price:event.target.value})} className={field}/></label>
         <label className="text-xs font-semibold">Discount %<input type="number" min="0" max="100" step=".01" value={row.discount_percent} onChange={(event)=>update(row.key,{discount_percent:event.target.value})} className={field}/></label>
