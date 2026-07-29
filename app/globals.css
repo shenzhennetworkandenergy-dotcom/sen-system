@@ -544,6 +544,9 @@ html { scroll-behavior: smooth; }
 .sen-admin-chat-info { border-left: 1px solid #e2e8f0; padding: 1.5rem 1rem; }
 @media (max-width: 1100px) { .sen-admin-messenger { grid-template-columns: minmax(13rem,.7fr) minmax(0,1.8fr); }.sen-admin-chat-info { display:none; } }
 @media (max-width: 760px) { .sen-admin-messenger { grid-template-columns: 1fr; }.sen-admin-chat-list { max-height: 17rem; border-right: 0; border-bottom: 1px solid #e2e8f0; }.sen-admin-chat-thread { min-height: 32rem; }.sen-admin-chat-composer { grid-template-columns: auto 1fr auto; }.sen-admin-chat-composer label span { display:none; } }
+@media (max-width: 480px) {
+  .sen-messenger-window { position: fixed; right: .75rem; bottom: 4.75rem; left: .75rem; width: auto; max-height: calc(100vh - 6rem); }
+}
 @keyframes sen-chat-in { from { opacity: 0; transform: translateY(10px) scale(.97); } }
 @media (prefers-reduced-motion: reduce) {
   .sen-nav-link,.sen-nav-link::after,.sen-cart-link,.sen-chat-trigger { transition: none; }

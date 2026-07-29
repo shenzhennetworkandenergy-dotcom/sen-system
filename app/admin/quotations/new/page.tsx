@@ -27,9 +27,16 @@ export default async function NewQuotationPage({ searchParams }: { searchParams:
         <label className="font-semibold">Additional product<select name="product_id" className="mt-1 w-full rounded-xl border px-3 py-3"><option value="">Optional product</option>{(products ?? []).map((product) => <option key={`additional-${product.id}`} value={product.id}>{product.name} - {product.sku}</option>)}</select></label>
         <label className="font-semibold">Additional quantity<input name="quantity" type="number" min="1" step="1" placeholder="Optional quantity" className="mt-1 w-full rounded-xl border px-3 py-3" /></label>
         <label className="font-semibold">Required by<input name="required_by" type="date" className="mt-1 w-full rounded-xl border px-3 py-3" /></label>
+        <label className="font-semibold">Quotation expires<input name="expiration_date" type="date" className="mt-1 w-full rounded-xl border px-3 py-3" /></label>
       </div>
       <label className="font-semibold">Quotation subject<input name="subject" placeholder="Quotation subject" className="mt-1 w-full rounded-xl border px-3 py-3" /></label>
-      <label className="font-semibold">Terms and notes<textarea name="message" rows={5} placeholder="Delivery terms, payment terms, warranty or customer notes" className="mt-1 w-full rounded-xl border px-3 py-3" /></label>
+      <div className="grid gap-4 md:grid-cols-2">
+        <label className="font-semibold">Payment terms<textarea name="payment_terms" rows={3} placeholder="For example: Cash on delivery or payment within 15 days" className="mt-1 w-full rounded-xl border px-3 py-3" /></label>
+        <label className="font-semibold">Delivery information<textarea name="delivery_information" rows={3} placeholder="Estimated delivery, transport or installation details" className="mt-1 w-full rounded-xl border px-3 py-3" /></label>
+      </div>
+      <label className="font-semibold">Terms and conditions<textarea name="terms_and_conditions" rows={4} placeholder="Validity, warranty, exclusions and commercial conditions" className="mt-1 w-full rounded-xl border px-3 py-3" /></label>
+      <label className="font-semibold">Customer notes<textarea name="message" rows={3} placeholder="Information shown to the customer" className="mt-1 w-full rounded-xl border px-3 py-3" /></label>
+      <label className="font-semibold">Internal notes<textarea name="internal_notes" rows={3} placeholder="Private staff notes; not shown on the quotation document" className="mt-1 w-full rounded-xl border px-3 py-3" /></label>
       <div className="flex justify-end"><button className="rounded-xl bg-[var(--primary)] px-5 py-3 font-bold text-[var(--primary-foreground)]">Generate quotation</button></div>
     </form>
   </DashboardShell>;

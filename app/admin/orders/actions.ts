@@ -5,6 +5,7 @@ import { requireAnyPermission, requirePermission } from "@/lib/auth/permissions"
 import { writeAuditLog } from "@/lib/audit/log";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { addressFromForm, jsonArray, optionalString, uuid } from "@/lib/orders/validation";
+import { moneyFromForm, parseMoney, parseWholeNumber } from "@/lib/validation/numbers";
 
 const orderTarget = (id: string | null, kind: "success" | "error", message: string) => `${id ? `/admin/orders/${id}` : "/admin/orders"}?${kind}=${encodeURIComponent(message)}`;
 const safeMessage = (error: unknown, fallback: string) => error instanceof Error && /required|invalid|quantity|stock|serial|draft|confirmed|eligible|address|customer|price|currency|reservation/i.test(error.message) ? error.message : fallback;
@@ -13,13 +14,18 @@ export async function createOrderAction(form: FormData) {
   const { profile } = await requirePermission("orders.create");
   try {
     const customerId = uuid(form.get("customer_id"), "Customer"), warehouseId = uuid(form.get("warehouse_id"), "Warehouse"), addressId = String(form.get("address_id") ?? "").trim();
-    const requestedAddress = addressId ? {} : addressFromForm(form), items = jsonArray(form, "items");
+    const requestedAddress = addressId ? {} : addressFromForm(form);
+    const items = jsonArray(form, "items").map((item, index) => ({
+      ...item,
+      quantity: parseWholeNumber(item.quantity, `Item ${index + 1} quantity`, { required: true, minimum: 1 }),
+      unit_price: parseMoney(item.unit_price, `Item ${index + 1} unit price`, { required: true }),
+    }));
     if (!items.length) throw new Error("At least one order item is required.");
     const db = createSupabaseAdminClient();
     const { data, error } = await db.rpc("create_sales_order", {
       actor_profile_id: profile.id, requested_customer_id: customerId, requested_address_id: addressId || null, requested_address: requestedAddress,
       requested_warehouse_id: warehouseId, requested_currency: String(form.get("currency") ?? "BDT").slice(0, 3).toUpperCase(),
-      requested_discount: Number(form.get("discount_amount") ?? 0), requested_shipping: Number(form.get("shipping_amount") ?? 0), requested_tax: Number(form.get("tax_amount") ?? 0),
+      requested_discount: moneyFromForm(form, "discount_amount", "Order discount") ?? 0, requested_shipping: moneyFromForm(form, "shipping_amount", "Shipping amount") ?? 0, requested_tax: moneyFromForm(form, "tax_amount", "Tax amount") ?? 0,
       requested_internal_notes: optionalString(form, "internal_notes", 2000), requested_customer_notes: optionalString(form, "customer_notes", 2000), requested_items: items,
     });
     if (error || !data) throw new Error(error?.message ?? "Unable to create order.");

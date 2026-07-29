@@ -62,14 +62,22 @@ export async function getPublicProduct(slug: string) {
   const [{ data: brand }, { data: assignments }, { data: media }, { data: variations }, { data: balances }] = await Promise.all([
     product.brand_id ? db.from("brands").select("name,description,website_url").eq("id", product.brand_id).maybeSingle() : Promise.resolve({ data: null }),
     db.from("product_category_assignments").select("is_primary,product_categories(name,slug)").eq("product_id", product.id),
-    db.from("product_media").select("id,storage_path,alt_text,is_primary,sort_order").eq("product_id", product.id).eq("media_type", "image").eq("visibility", "public").order("sort_order"),
+    db.from("product_media").select("id,storage_path,alt_text,is_primary,sort_order").eq("product_id", product.id).is("variation_id", null).eq("media_type", "image").eq("visibility", "public").order("sort_order"),
     db.from("product_variations").select("id,sku,combination_key,regular_price,sale_price,stock_status").eq("product_id", product.id).eq("status", "active").order("created_at"),
-    db.from("inventory_balances").select("available,incoming").eq("product_id", product.id),
+    db.from("inventory_balances").select("variation_id,available,incoming").eq("product_id", product.id),
   ]);
   const signed = await signedMediaMap((media ?? []).map((item) => item.storage_path));
   const images = (media ?? []).map((item) => ({ id: item.id, url: signed.get(item.storage_path) ?? staticImages[product.slug] ?? null, alt: item.alt_text ?? product.name, primary: item.is_primary })).filter((item): item is typeof item & { url: string } => Boolean(item.url));
   if (!images.length && staticImages[product.slug]) images.push({ id: "static", url: staticImages[product.slug], alt: product.name, primary: true });
   const available = (balances ?? []).reduce((sum, balance) => sum + quantity(balance.available), 0);
   const incoming = (balances ?? []).reduce((sum, balance) => sum + quantity(balance.incoming), 0);
-  return { ...product, short_description:sanitizeProductHtml(product.short_description),description:sanitizeProductHtml(product.description), brand, categories: (assignments ?? []).map((item) => item.product_categories as unknown as { name: string; slug: string }).filter(Boolean), images, variations: variations ?? [], available, incoming };
+  const variationsWithStock = (variations ?? []).map((variation) => {
+    const variationBalances = (balances ?? []).filter((balance) => balance.variation_id === variation.id);
+    return {
+      ...variation,
+      available: variationBalances.reduce((sum, balance) => sum + quantity(balance.available), 0),
+      incoming: variationBalances.reduce((sum, balance) => sum + quantity(balance.incoming), 0),
+    };
+  });
+  return { ...product, short_description:sanitizeProductHtml(product.short_description),description:sanitizeProductHtml(product.description), brand, categories: (assignments ?? []).map((item) => item.product_categories as unknown as { name: string; slug: string }).filter(Boolean), images, variations: variationsWithStock, available, incoming };
 }

@@ -29,6 +29,14 @@ for (const token of ["sales.create", "sales.reserve_stock", "sales.cancel", "sal
 }
 const navigation = read("lib/navigation/dashboard.ts");
 if (!/label:\s*"Sales"/.test(navigation) || !navigation.includes("routes.adminSales")) throw new Error("Sales navigation is not operational");
+const invoice = read("app/admin/sales/[saleId]/documents/[documentId]/page.tsx");
+for (const token of ["Amount paid", "Remaining balance", "Payment method", "Date and time", "sale_payments", "downloadName"]) {
+  if (!invoice.includes(token)) throw new Error(`Sales invoice is missing ${token}`);
+}
+const printButton = read("components/sales/PrintDocumentButton.tsx");
+for (const token of ["fileName", "document.title", "window.print()"]) {
+  if (!printButton.includes(token)) throw new Error(`Invoice download naming is missing ${token}`);
+}
 const packageJson = JSON.parse(read("package.json"));
 if (!packageJson.scripts["test:sales"]) throw new Error("Sales verification script is not registered");
 console.log("Minimal Sales static verification passed.");

@@ -20,7 +20,12 @@
     "test:sales": "node scripts/verify-sales.mjs",
     "test:purchasing": "node scripts/verify-purchasing.mjs",
     "test:accounting-hr": "node scripts/verify-accounting-hr.mjs",
-    "test:crm": "node scripts/verify-crm.mjs"
+    "test:crm": "node scripts/verify-crm.mjs",
+    "test:variable-products": "node scripts/verify-variable-products.mjs",
+    "test:chatbot": "node scripts/verify-chatbot.mjs",
+    "products:stage-woocommerce": "node scripts/import-woocommerce-products.mjs --stage",
+    "products:import-woocommerce": "node scripts/import-woocommerce-products.mjs --import",
+    "products:verify-woocommerce": "node scripts/import-woocommerce-products.mjs --verify"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

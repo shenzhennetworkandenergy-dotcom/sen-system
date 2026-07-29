@@ -19,7 +19,7 @@ export default async function NewAdjustmentPage({ searchParams }: { searchParams
         <label>Product<select name="product_id" required defaultValue={selectedProduct?.id ?? ""} className="mt-1 w-full rounded border p-3"><option value="">Select product</option>{productOptions}</select></label>
         <label>Variation (optional)<select name="variation_id" className="mt-1 w-full rounded border p-3"><option value="">Parent product</option>{options.variations.map((item) => <option key={item.id} value={item.id}>{item.sku} - {item.combination_key}</option>)}</select></label>
         <label>Reason<select name="reason_id" required className="mt-1 w-full rounded border p-3"><option value="">Select reason</option>{options.reasons.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-        <label>Quantity change<input name="quantity_change" type="number" step="0.0001" required placeholder="Use a negative value to decrease" className="mt-1 w-full rounded border p-3" /></label>
+        <label>Quantity change<input name="quantity_change" type="number" inputMode="numeric" step="1" required placeholder="Use a negative whole number to decrease" className="mt-1 w-full rounded border p-3" /></label>
         <label>Serial numbers<textarea name="serials" placeholder="One serial per line when serial tracking is enabled" className="mt-1 min-h-28 w-full rounded border p-3" /></label><label>Notes<textarea name="notes" className="mt-1 min-h-24 w-full rounded border p-3" /></label>
         <button className="min-h-12 rounded bg-[var(--primary)] px-5 py-3 font-semibold text-[var(--primary-foreground)]">Confirm adjustment</button>
       </form>
@@ -28,7 +28,7 @@ export default async function NewAdjustmentPage({ searchParams }: { searchParams
         <label>Destination warehouse<select name="destination_id" required className="mt-1 w-full rounded border p-3"><option value="">Select destination</option>{options.warehouses.map((item) => <option key={item.id} value={item.id}>{item.name} ({item.code})</option>)}</select></label>
         <label>Product<select name="product_id" required className="mt-1 w-full rounded border p-3"><option value="">Select product</option>{productOptions}</select></label>
         <label>Variation (optional)<select name="variation_id" className="mt-1 w-full rounded border p-3"><option value="">Parent product</option>{options.variations.map((item) => <option key={item.id} value={item.id}>{item.sku} - {item.combination_key}</option>)}</select></label>
-        <label>Quantity<input name="quantity" type="number" min="0.0001" step="0.0001" required className="mt-1 w-full rounded border p-3" /></label>
+        <label>Quantity<input name="quantity" type="number" inputMode="numeric" min="1" step="1" required className="mt-1 w-full rounded border p-3" /></label>
         <label>Serial numbers<textarea name="serials" placeholder="One serial per line for serialized products" className="mt-1 min-h-28 w-full rounded border p-3" /></label><label>Notes<textarea name="notes" className="mt-1 min-h-24 w-full rounded border p-3" /></label>
         <button className="min-h-12 rounded bg-[var(--primary)] px-5 py-3 font-semibold text-[var(--primary-foreground)]">Confirm transfer</button>
       </form>
