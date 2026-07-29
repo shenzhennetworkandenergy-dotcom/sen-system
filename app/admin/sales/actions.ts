@@ -85,7 +85,7 @@ export async function createBasicCustomerAction(form: FormData) {
   const created = await db.auth.admin.createUser({ email, email_confirm: true, user_metadata: { full_name: fullName, phone, role: "customer", status: "active" } });
   if (created.error || !created.data.user) redirect(`/admin/sales/new?error=${encodeURIComponent(safe(created.error?.message, "Unable to add customer."))}`);
   await db.from("profiles").update({ full_name: fullName, phone, role: "customer", status: "active" }).eq("id", created.data.user.id);
-  const {error:addressError}=await db.from("customer_addresses").insert({profile_id:created.data.user.id,label:"Primary",recipient_name:fullName,phone,address_line_1:addressLine1,city,country_code:countryCode,is_default_shipping:true,is_default_billing:true});
+  const {error:addressError}=await db.from("customer_addresses").insert({profile_id:created.data.user.id,recipient_name:fullName,phone,address_line_1:addressLine1,city,country_code:countryCode,is_default_shipping:true});
   if(addressError){await db.auth.admin.deleteUser(created.data.user.id);redirect("/admin/sales/new?error=Unable%20to%20save%20the%20customer%20address.");}
   await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "sale.customer_created", module: "sales", entityType: "profile", entityId: created.data.user.id, targetProfileId: created.data.user.id, description: "Basic customer created from Sales." });
   revalidatePath("/admin/sales/new"); redirect(`/admin/sales/new?success=${encodeURIComponent(`Customer ${fullName} added. They can use password recovery to set a password.`)}`);

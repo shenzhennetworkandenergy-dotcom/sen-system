@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { connection } from "next/server";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
@@ -54,6 +55,7 @@ export default async function AdminQuotationsPage({
           {params.error ?? "Unable to load quotations."}
         </p>
       ) : null}
+      <div className="mb-5 flex justify-end"><Link href="/admin/quotations/new" className="rounded-xl bg-[var(--primary)] px-4 py-3 font-semibold text-[var(--primary-foreground)]">Create quotation</Link></div>
       <form className="mb-5 flex flex-wrap gap-3 rounded-2xl border bg-[var(--surface)] p-4">
         <select
           name="status"
@@ -88,7 +90,7 @@ export default async function AdminQuotationsPage({
                   <b className="text-[var(--primary)]">
                     {quotation.reference}
                   </b>
-                  <h2 className="text-xl font-bold">{quotation.subject}</h2>
+                  <h2 className="text-xl font-bold"><a href={`/admin/quotations/${quotation.id}`} className="hover:text-[var(--primary)]">{quotation.subject}</a></h2>
                   <p className="text-sm text-[var(--muted-text)]">
                     {customer?.full_name ?? "Customer"} · {customer?.email} ·{" "}
                     {customer?.phone ?? "No phone"}
@@ -114,6 +116,7 @@ export default async function AdminQuotationsPage({
                   </button>
                 </form>
               </div>
+              <a href={`/admin/quotations/${quotation.id}`} className="mt-4 inline-flex rounded-lg border px-3 py-2 text-sm font-semibold">Open printable quotation</a>
               <p className="mt-3">{quotation.message || "No additional notes."}</p>
               <div className="mt-4 grid gap-2">
                 {quotation.quotation_request_items?.map(
