@@ -5,6 +5,7 @@ import { requirePermission } from "@/lib/auth/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
 import { addressFromForm, jsonArray, optionalString, uuid } from "@/lib/orders/validation";
+import { moneyFromForm, parseMoney, parseWholeNumber } from "@/lib/validation/numbers";
 
 const target = (id: string, kind: "success" | "error", message: string) => `/admin/sales/${id}?${kind}=${encodeURIComponent(message)}`;
 const safe = (message: string | undefined, fallback: string) => message && /sale|payment|amount|method|stock|draft|serial|document|permission|eligible/i.test(message) ? message : fallback;
@@ -12,19 +13,40 @@ const safe = (message: string | undefined, fallback: string) => message && /sale
 export async function createSaleAction(form: FormData) {
   const { profile, permissions } = await requirePermission("sales.create");
   const db = createSupabaseAdminClient(), customerId = uuid(form.get("customer_id"), "Customer"), warehouseId = uuid(form.get("warehouse_id"), "Warehouse");
-  const addressId = String(form.get("address_id") ?? "").trim(), items = jsonArray(form, "items");
+  const addressId = String(form.get("address_id") ?? "").trim();
+  let items;
+  try {
+    items = jsonArray(form, "items").map((item, index) => ({
+      ...item,
+      quantity: parseWholeNumber(item.quantity, `Item ${index + 1} quantity`, { required: true, minimum: 1 }),
+      unit_price: parseMoney(item.unit_price, `Item ${index + 1} unit price`, { required: true }),
+      catalogue_price: parseMoney(item.catalogue_price ?? item.unit_price, `Item ${index + 1} catalogue price`, { required: true }),
+      line_discount: parseMoney(item.line_discount ?? 0, `Item ${index + 1} discount`, { required: true }),
+    }));
+  } catch (error) {
+    redirect(`/admin/sales/new?error=${encodeURIComponent(error instanceof Error ? error.message : "Sale items are invalid.")}`);
+  }
   if (!items.length) redirect("/admin/sales/new?error=At%20least%20one%20product%20is%20required.");
   const hasPriceOverride = items.some((item) => Boolean(item.price_overridden));
   const hasDiscount = items.some((item) => Number(item.line_discount) > 0) || Number(form.get("discount_amount")) > 0;
   if (profile.role !== "admin" && hasPriceOverride && !permissions.has("sales.change_price")) redirect("/admin/sales/new?error=Price%20override%20permission%20is%20required.");
   if (profile.role !== "admin" && hasDiscount && !permissions.has("sales.apply_discount")) redirect("/admin/sales/new?error=Discount%20permission%20is%20required.");
-  const address = addressId ? {} : addressFromForm(form), serviceAmount = Math.max(0, Number(form.get("service_amount") ?? 0));
+  const address = addressId ? {} : addressFromForm(form);
+  let serviceAmount: number, discountAmount: number, shippingAmount: number, taxAmount: number;
+  try {
+    serviceAmount = moneyFromForm(form, "service_amount", "Installation / service") ?? 0;
+    discountAmount = moneyFromForm(form, "discount_amount", "Order discount") ?? 0;
+    shippingAmount = moneyFromForm(form, "shipping_amount", "Shipping charge") ?? 0;
+    taxAmount = moneyFromForm(form, "tax_amount", "VAT / tax") ?? 0;
+  } catch (error) {
+    redirect(`/admin/sales/new?error=${encodeURIComponent(error instanceof Error ? error.message : "Sale totals are invalid.")}`);
+  }
   const adjustments = items.filter((item) => item.price_overridden || Number(item.line_discount) > 0).map((item) => ({
     order_item_id: null, adjustment_type: item.price_overridden ? "manual_unit_price" : "fixed_line_discount",
     previous_value: Number(item.catalogue_price ?? 0), new_value: item.price_overridden ? Number(item.unit_price) : Number(item.line_discount),
     reason: String(item.adjustment_reason || "Sales price adjustment").slice(0, 500),
   }));
-  if (Number(form.get("discount_amount")) > 0) adjustments.push({ order_item_id: null, adjustment_type: "order_discount", previous_value: 0, new_value: Number(form.get("discount_amount")), reason: String(form.get("discount_reason") || "Order discount").slice(0, 500) });
+  if (discountAmount > 0) adjustments.push({ order_item_id: null, adjustment_type: "order_discount", previous_value: 0, new_value: discountAmount, reason: String(form.get("discount_reason") || "Order discount").slice(0, 500) });
   if (serviceAmount > 0) adjustments.push({ order_item_id: null, adjustment_type: "service_charge", previous_value: 0, new_value: serviceAmount, reason: "Installation or service charge" });
   const billingId = String(form.get("billing_address_id") ?? "").trim();
   const result = await db.rpc("create_minimal_sale", {
@@ -32,8 +54,8 @@ export async function createSaleAction(form: FormData) {
     requested_billing_address_id: billingId || null, requested_billing_address: addressId ? null : address,
     requested_warehouse_id: warehouseId, requested_source: String(form.get("sales_source") ?? "direct_office"),
     requested_expected_delivery_date: String(form.get("expected_delivery_date") ?? "") || null,
-    requested_discount: Number(form.get("discount_amount") ?? 0),
-    requested_shipping: Number(form.get("shipping_amount") ?? 0), requested_tax: Number(form.get("tax_amount") ?? 0),
+    requested_discount: discountAmount,
+    requested_shipping: shippingAmount, requested_tax: taxAmount,
     requested_service: serviceAmount, requested_internal_notes: optionalString(form, "internal_notes", 2000),
     requested_customer_notes: optionalString(form, "customer_notes", 2000), requested_items: items, requested_adjustments: adjustments,
   });
@@ -61,7 +83,9 @@ export async function cancelSaleAction(saleId: string, form: FormData) {
 
 export async function recordPaymentAction(saleId: string, form: FormData) {
   const { profile } = await requirePermission("sales.record_payment"), db = createSupabaseAdminClient();
-  const amount = Number(form.get("amount"));
+  let amount: number;
+  try { amount = moneyFromForm(form, "amount", "Payment amount", { required: true, minimum: 0.01 })!; }
+  catch (error) { redirect(target(saleId, "error", error instanceof Error ? error.message : "Payment amount is invalid.")); }
   const result = await db.rpc("record_sale_payment", { actor_profile_id: profile.id, requested_order_id: saleId, requested_amount: amount, requested_date: String(form.get("payment_date") || new Date().toISOString().slice(0, 10)), requested_method: String(form.get("method")), requested_reference: optionalString(form, "reference_number", 200), requested_note: optionalString(form, "internal_note", 1000) });
   if (result.error) redirect(target(saleId, "error", safe(result.error.message, "Unable to record payment.")));
   await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "sale.payment_recorded", module: "sales", entityType: "sales_order", entityId: saleId, description: "Customer payment recorded.", newValues: { amount, method: String(form.get("method")) } });

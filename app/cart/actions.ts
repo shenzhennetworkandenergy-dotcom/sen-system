@@ -4,10 +4,11 @@ import { redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth/session";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { wholeNumberFromForm } from "@/lib/validation/numbers";
 
 const uuid=(value:unknown)=>{const id=String(value??"");if(!/^[0-9a-f-]{36}$/i.test(id))throw new Error("Invalid product.");return id;};
 async function addProductToCart(productId:string,form:FormData){
-  const {profile}=await requireProfile(["customer","admin"]),db=createSupabaseAdminClient(),quantity=Math.max(1,Math.min(99,Number(form.get("quantity")??1)));
+  const {profile}=await requireProfile(["customer","admin"]),db=createSupabaseAdminClient();let quantity:number;try{quantity=wholeNumberFromForm(form,"quantity","Quantity",{required:true,minimum:1,maximum:99})!;}catch(error){redirect(`/products?error=${encodeURIComponent(error instanceof Error?error.message:"Quantity is invalid.")}`);}
   const {data:product}=await db.from("products").select("id,allow_backorders,status,public_catalogue_visible").eq("id",uuid(productId)).maybeSingle();
   const {data:balance}=await db.from("inventory_balances").select("available").eq("product_id",productId);
   const available=(balance??[]).reduce((sum,row)=>sum+Number(row.available),0);
@@ -29,7 +30,7 @@ export async function orderNowAction(productId:string,form:FormData){
   redirect("/cart?success=Review%20your%20order%20and%20confirm%20checkout.");
 }
 export async function updateCartAction(form:FormData){
-  const {profile}=await requireProfile(["customer","admin"]),db=createSupabaseAdminClient(),itemId=uuid(form.get("item_id")),quantity=Math.max(0,Math.min(99,Number(form.get("quantity")??1)));
+  const {profile}=await requireProfile(["customer","admin"]),db=createSupabaseAdminClient(),itemId=uuid(form.get("item_id"));let quantity:number;try{quantity=wholeNumberFromForm(form,"quantity","Quantity",{required:true,minimum:0,maximum:99})!;}catch(error){redirect(`/cart?error=${encodeURIComponent(error instanceof Error?error.message:"Quantity is invalid.")}`);}
   const {data:cart}=await db.from("shopping_carts").select("id").eq("profile_id",profile.id).eq("status","active").maybeSingle();if(!cart)redirect("/cart");
   const result=quantity===0?await db.from("shopping_cart_items").delete().eq("id",itemId).eq("cart_id",cart.id):await db.from("shopping_cart_items").update({quantity,updated_at:new Date().toISOString()}).eq("id",itemId).eq("cart_id",cart.id);
   if(result.error)redirect("/cart?error=Unable%20to%20update%20cart.");revalidatePath("/cart");redirect("/cart?success=Cart%20updated.");

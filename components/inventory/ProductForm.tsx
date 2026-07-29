@@ -8,6 +8,7 @@ import { RichTextEditor } from "@/components/inventory/RichTextEditor";
 import { ProductIdentityFields } from "@/components/inventory/ProductIdentityFields";
 import { ProductAttributeFields } from "@/components/inventory/ProductAttributeFields";
 import { InlineCategoryField } from "@/components/inventory/InlineCategoryField";
+import { roundMoney } from "@/lib/validation/numbers";
 
 type Options = Awaited<ReturnType<typeof getProductOptions>>;
 type Product = Record<string, unknown>;
@@ -29,6 +30,12 @@ function SubmitButtons() {
 
 export function ProductForm({ action, options, product }: { action: (formData: FormData) => void | Promise<void>; options: Options; product?: Product }) {
   const value = (key: string, fallback = "") => String(product?.[key] ?? fallback);
+  const moneyValue = (key: string) => {
+    const raw = product?.[key];
+    if (raw === null || raw === undefined || raw === "") return "";
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? String(roundMoney(parsed)) : "";
+  };
   const [validationMessage, setValidationMessage] = useState("");
   const [productType, setProductType] = useState(value("product_type", "simple"));
   const [businessCategory, setBusinessCategory] = useState(value("sen_business_category", "Others"));
@@ -65,6 +72,17 @@ export function ProductForm({ action, options, product }: { action: (formData: F
     const regular = Number(data.get("regular_price") || 0);
     const sale = Number(data.get("sale_price") || 0);
     const saleInput = form.elements.namedItem("sale_price") as HTMLInputElement;
+    for (const [key, label] of [["purchase_cost", "Purchase cost"], ["regular_price", "Regular price"], ["sale_price", "Sale price"]] as const) {
+      const priceInput = form.elements.namedItem(key) as HTMLInputElement;
+      if (priceInput.value && !/^\d+(?:\.\d{1,2})?$/.test(priceInput.value)) {
+        event.preventDefault();
+        priceInput.setCustomValidity(`${label} can have no more than 2 digits after the decimal point.`);
+        priceInput.reportValidity();
+        focusField(priceInput, `${label} can have no more than 2 digits after the decimal point.`);
+        return;
+      }
+      priceInput.setCustomValidity("");
+    }
     if (sale > 0 && regular > 0 && sale > regular) {
       event.preventDefault();
       saleInput.setCustomValidity("Sale price cannot be higher than the regular price.");
@@ -90,14 +108,14 @@ export function ProductForm({ action, options, product }: { action: (formData: F
       <label>Manufacturer part number <span className="text-xs text-[var(--muted-text)]">(optional)</span><input name="manufacturer_part_number" defaultValue={value("manufacturer_part_number")} className={input}/></label>
     </div><RichTextEditor name="short_description" label="Short description" defaultValue={value("short_description")} maxLength={4000}/><RichTextEditor name="description" label="Full description" defaultValue={value("description")} maxLength={20000}/></section>
     <section className="grid gap-6 lg:grid-cols-2"><div className="rounded-xl border bg-[var(--surface)] p-6"><h2 className="text-xl font-semibold">Pricing</h2><div className="mt-4 grid gap-4 sm:grid-cols-2">
-      <label>Purchase cost (BDT)<input type="number" step="0.0001" min="0" name="purchase_cost" defaultValue={value("purchase_cost")} className={input}/></label>
-      <label>Regular price (BDT)<input type="number" step="0.0001" min="0" name="regular_price" defaultValue={value("regular_price")} className={input}/></label>
-      <label>Sale price (BDT)<input type="number" step="0.0001" min="0" name="sale_price" defaultValue={value("sale_price")} onInput={(event) => event.currentTarget.setCustomValidity("")} className={input}/></label>
+      <label>Purchase cost (BDT)<input type="number" inputMode="decimal" step="0.01" min="0" name="purchase_cost" defaultValue={moneyValue("purchase_cost")} onInput={(event) => event.currentTarget.setCustomValidity("")} className={input}/></label>
+      <label>Regular price (BDT)<input type="number" inputMode="decimal" step="0.01" min="0" name="regular_price" defaultValue={moneyValue("regular_price")} onInput={(event) => event.currentTarget.setCustomValidity("")} className={input}/></label>
+      <label>Sale price (BDT)<input type="number" inputMode="decimal" step="0.01" min="0" name="sale_price" defaultValue={moneyValue("sale_price")} onInput={(event) => event.currentTarget.setCustomValidity("")} className={input}/></label>
       <label>Currency<input type="hidden" name="currency" value="BDT"/><span className={`${input} block bg-[var(--muted-surface)] font-semibold`}>BDT — Bangladeshi Taka</span></label>
     </div></div>
       <div className="rounded-xl border bg-[var(--surface)] p-6"><h2 className="text-xl font-semibold">Inventory</h2><div className="mt-4 grid gap-4">
         <label>Stock status{required}<select name="stock_status" required defaultValue={value("stock_status", "in_stock")} className={input}><option value="in_stock">In stock</option><option value="out_of_stock">Out of stock</option><option value="on_backorder">On backorder</option></select></label>
-        <label>Low-stock threshold<input type="number" step="0.0001" min="0" name="low_stock_threshold" defaultValue={value("low_stock_threshold", "0")} className={input}/></label>
+        <label>Low-stock threshold<input type="number" inputMode="numeric" step="1" min="0" name="low_stock_threshold" defaultValue={value("low_stock_threshold", "0")} className={input}/></label>
         {[["manage_stock", "Manage stock"], ["allow_backorders", "Allow backorders"], ["sold_individually", "Sold individually"], ["serial_tracking_required", "Serial tracking required"], ["batch_tracking_enabled", "Batch/lot tracking"]].map(([key, label]) => <label key={key} className="flex gap-2"><input type="checkbox" name={key} defaultChecked={Boolean(product?.[key] ?? (key === "manage_stock"))}/>{label}</label>)}
       </div></div>
     </section>

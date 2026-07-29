@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requirePermission } from "@/lib/auth/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { parseSignedWholeNumber, wholeNumberFromForm } from "@/lib/validation/numbers";
 import { writeAuditLog } from "@/lib/audit/log";
 import { requiredText, uuidOrNull } from "@/lib/inventory/validation";
 
@@ -12,8 +13,9 @@ async function resolveSerializedInput(db:ReturnType<typeof createSupabaseAdminCl
 
 export async function adjustInventoryAction(form: FormData) {
   const { profile } = await requirePermission("inventory.adjust_stock");
-  const warehouse = uuidOrNull(form.get("warehouse_id")), product = uuidOrNull(form.get("product_id")), variation = uuidOrNull(form.get("variation_id")), reason = uuidOrNull(form.get("reason_id")), change = Number(form.get("quantity_change")), notes = String(form.get("notes") ?? "").slice(0, 1000);
-  if (!warehouse || !product || !reason || !Number.isFinite(change) || change === 0) redirect(destination("error", "Warehouse, product, reason, and nonzero quantity are required.", product));
+  const warehouse = uuidOrNull(form.get("warehouse_id")), product = uuidOrNull(form.get("product_id")), variation = uuidOrNull(form.get("variation_id")), reason = uuidOrNull(form.get("reason_id")), notes = String(form.get("notes") ?? "").slice(0, 1000);
+  let change:number;try{change=parseSignedWholeNumber(form.get("quantity_change"),"Quantity",{required:true})!;}catch(error){redirect(destination("error",error instanceof Error?error.message:"Quantity is invalid.",product));}
+  if (!warehouse || !product || !reason) redirect(destination("error", "Warehouse, product, reason, and nonzero quantity are required.", product));
   const db = createSupabaseAdminClient();
   const input=serials(form);const{data:productRecord,error:productError}=await db.from("products").select("serial_tracking_required").eq("id",product).maybeSingle();if(productError||!productRecord)redirect(destination("error","Unable to validate the selected product.",product));let data,error;if(productRecord.serial_tracking_required){if(!Number.isInteger(change))redirect(destination("error","Serialized quantity must be a whole number.",product));let selected:Array<{id:string}>=[];try{selected=await resolveSerializedInput(db,input);}catch{redirect(destination("error","Unable to validate selected serials.",product));}if(change<0&&selected.length!==Math.abs(change))redirect(destination("error","Resolve and select exactly one existing serial for every removed unit.",product));const result=await db.rpc("admin_adjust_serialized_inventory",{actor_profile_id:profile.id,requested_warehouse_id:warehouse,requested_product_id:product,requested_variation_id:variation,quantity_change:change,requested_reason_id:reason,requested_notes:notes,requested_serial_ids:selected.map((item)=>item.id),requested_manufacturer_serials:selected.length?[]:input});data=result.data;error=result.error;}else{const result=await db.rpc("admin_adjust_inventory", { actor_profile_id: profile.id, requested_warehouse_id: warehouse, requested_product_id: product, requested_variation_id: variation, quantity_change: change, requested_reason_id: reason, requested_notes: notes, requested_serials: input });data=result.data;error=result.error;}
   if (error) {
@@ -26,8 +28,8 @@ export async function adjustInventoryAction(form: FormData) {
 
 export async function transferInventoryAction(form: FormData) {
   const { profile } = await requirePermission("inventory.transfer");
-  const source = uuidOrNull(form.get("source_id")), destinationId = uuidOrNull(form.get("destination_id")), product = uuidOrNull(form.get("product_id")), variation = uuidOrNull(form.get("variation_id")), quantity = Number(form.get("quantity"));
-  if (!source || !destinationId || !product || !Number.isFinite(quantity) || quantity <= 0) redirect(destination("error", "Source, destination, product, and positive quantity are required."));
+  const source = uuidOrNull(form.get("source_id")), destinationId = uuidOrNull(form.get("destination_id")), product = uuidOrNull(form.get("product_id")), variation = uuidOrNull(form.get("variation_id"));let quantity:number;try{quantity=wholeNumberFromForm(form,"quantity","Quantity",{required:true,minimum:1})!;}catch(error){redirect(destination("error",error instanceof Error?error.message:"Quantity is invalid."));}
+  if (!source || !destinationId || !product) redirect(destination("error", "Source, destination, product, and positive quantity are required."));
   const db = createSupabaseAdminClient();
   const input=serials(form),notes=String(form.get("notes")??"").slice(0,1000);const{data:productRecord,error:productError}=await db.from("products").select("serial_tracking_required").eq("id",product).maybeSingle();if(productError||!productRecord)redirect(destination("error","Unable to validate the selected product."));let data,error;if(productRecord.serial_tracking_required){if(!Number.isInteger(quantity))redirect(destination("error","Serialized quantity must be a whole number."));let selected:Array<{id:string}>=[];try{selected=await resolveSerializedInput(db,input);}catch{redirect(destination("error","Unable to validate selected serials."));}if(selected.length!==quantity)redirect(destination("error","Resolve and select exactly one existing serial for every transferred unit."));const result=await db.rpc("admin_transfer_serialized_inventory",{actor_profile_id:profile.id,source_id:source,destination_id:destinationId,requested_product_id:product,requested_variation_id:variation,transfer_quantity:quantity,requested_notes:notes,requested_serial_ids:selected.map((item)=>item.id)});data=result.data;error=result.error;}else{const result=await db.rpc("admin_transfer_inventory", { actor_profile_id: profile.id, source_id: source, destination_id: destinationId, requested_product_id: product, requested_variation_id: variation, transfer_quantity: quantity, requested_notes: notes, requested_serials: input });data=result.data;error=result.error;}
   if (error) {

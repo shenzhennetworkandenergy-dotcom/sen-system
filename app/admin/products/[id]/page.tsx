@@ -151,8 +151,8 @@ export default async function ProductDetailPage({
       <form action={variation} className="mt-5 grid gap-3 md:grid-cols-4">
         <label>Variation SKU<input name="sku" required className="mt-1 w-full rounded border p-2" /></label>
         <label>Combination<input name="combination_key" required className="mt-1 w-full rounded border p-2" /></label>
-        <label>Regular price<input name="regular_price" type="number" min="0" step=".0001" className="mt-1 w-full rounded border p-2" /></label>
-        <label>Purchase cost<input name="purchase_cost" type="number" min="0" step=".0001" className="mt-1 w-full rounded border p-2" /></label>
+        <label>Regular price<input name="regular_price" type="number" inputMode="decimal" min="0" step=".01" className="mt-1 w-full rounded border p-2" /></label>
+        <label>Purchase cost<input name="purchase_cost" type="number" inputMode="decimal" min="0" step=".01" className="mt-1 w-full rounded border p-2" /></label>
         <label className="flex items-center gap-2"><input type="checkbox" name="manage_stock" />Manage variation stock</label>
         <button className="rounded border px-4 py-2 font-semibold">Add variation</button>
       </form>

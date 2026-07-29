@@ -6,6 +6,7 @@ import { requireAllPermissions, requirePermission } from "@/lib/auth/permissions
 import { writeAuditLog } from "@/lib/audit/log";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { jsonArray, optionalString, requiredString, uuid } from "@/lib/orders/validation";
+import { moneyFromForm, parseMoney, parseWholeNumber, wholeNumberFromForm } from "@/lib/validation/numbers";
 
 const purchasingPath = "/admin/purchasing";
 const target = (id: string | null, kind: "success" | "error", message: string) =>
@@ -18,7 +19,13 @@ const safeMessage = (message: string | undefined, fallback: string) =>
 function purchasePayload(form: FormData) {
   const items = jsonArray(form, "items");
   if (!items.length) throw new Error("At least one purchase item is required.");
-  if (items.some((item) => !Number.isSafeInteger(Number(item.quantity)) || Number(item.quantity) < 1)) throw new Error("Purchase quantity must be a positive whole number.");
+  const requestedItems = items.map((item, index) => ({
+    ...item,
+    quantity: parseWholeNumber(item.quantity, `Item ${index + 1} quantity`, { required: true, minimum: 1 }),
+    unit_cost: parseMoney(item.unit_cost, `Item ${index + 1} unit cost`, { required: true }),
+    discount_amount: parseMoney(item.discount_amount ?? 0, `Item ${index + 1} discount`, { required: true }),
+    tax_amount: parseMoney(item.tax_amount ?? 0, `Item ${index + 1} tax`, { required: true }),
+  }));
   return {
     requested_supplier_id: uuid(form.get("supplier_id"), "Supplier"),
     requested_warehouse_id: uuid(form.get("warehouse_id"), "Warehouse"),
@@ -26,14 +33,14 @@ function purchasePayload(form: FormData) {
     requested_order_date: String(form.get("order_date") ?? "") || new Date().toISOString().slice(0, 10),
     requested_expected_date: String(form.get("expected_delivery_date") ?? "") || null,
     requested_supplier_reference: optionalString(form, "supplier_reference", 200),
-    requested_payment_terms: Math.max(0, Math.min(365, Number(form.get("payment_terms_days") ?? 0))),
-    requested_discount: Math.max(0, Number(form.get("discount_amount") ?? 0)),
-    requested_shipping: Math.max(0, Number(form.get("shipping_amount") ?? 0)),
-    requested_tax: Math.max(0, Number(form.get("tax_amount") ?? 0)),
-    requested_other: Math.max(0, Number(form.get("other_amount") ?? 0)),
+    requested_payment_terms: wholeNumberFromForm(form, "payment_terms_days", "Payment terms", { minimum: 0, maximum: 365 }) ?? 0,
+    requested_discount: moneyFromForm(form, "discount_amount", "Order discount") ?? 0,
+    requested_shipping: moneyFromForm(form, "shipping_amount", "Shipping / freight") ?? 0,
+    requested_tax: moneyFromForm(form, "tax_amount", "Tax") ?? 0,
+    requested_other: moneyFromForm(form, "other_amount", "Other cost") ?? 0,
     requested_internal_notes: optionalString(form, "internal_notes", 2000),
     requested_supplier_notes: optionalString(form, "supplier_notes", 2000),
-    requested_items: items,
+    requested_items: requestedItems,
   };
 }
 
@@ -105,10 +112,18 @@ export async function transitionPurchaseOrderAction(purchaseId: string, action: 
 
 export async function receivePurchaseOrderAction(purchaseId: string, form: FormData) {
   const { profile } = await requireAllPermissions(["purchasing.receive", "inventory.receive"]);
-  let items: unknown[];
-  try { items = jsonArray(form, "items"); }
+  let items: Record<string, unknown>[];
+  try { items = jsonArray(form, "items") as Record<string, unknown>[]; }
   catch { redirect(target(purchaseId, "error", "Receipt items are invalid.")); }
   if (!items.length) redirect(target(purchaseId, "error", "Enter at least one received quantity."));
+  try {
+    items = items.map((item, index) => ({
+      ...item,
+      quantity_received: parseWholeNumber(item.quantity_received, `Receipt item ${index + 1} quantity`, { required: true, minimum: 0 }),
+    }));
+  } catch (error) {
+    redirect(target(purchaseId, "error", error instanceof Error ? error.message : "Receipt quantities are invalid."));
+  }
   const result = await createSupabaseAdminClient().rpc("receive_purchase_order", {
     actor_profile_id: profile.id,
     requested_order_id: purchaseId,
@@ -180,9 +195,9 @@ function supplierPayload(form: FormData, actorId: string, includeCreator: boolea
     country_name: requiredString(form, "country_name", 100),
     address: optionalString(form, "address", 500),
     tax_registration: optionalString(form, "tax_registration", 120),
-    payment_terms_days: Math.max(0, Math.min(365, Number(form.get("payment_terms_days") ?? 0))),
+    payment_terms_days: wholeNumberFromForm(form, "payment_terms_days", "Payment terms", { minimum: 0, maximum: 365 }) ?? 0,
     default_currency: String(form.get("default_currency") ?? "BDT").trim().toUpperCase().slice(0, 3),
-    lead_time_days: Math.max(0, Math.min(3650, Number(form.get("lead_time_days") ?? 0))),
+    lead_time_days: wholeNumberFromForm(form, "lead_time_days", "Lead time", { minimum: 0, maximum: 3650 }) ?? 0,
     notes: optionalString(form, "notes", 2000),
     updated_by: actorId,
   };

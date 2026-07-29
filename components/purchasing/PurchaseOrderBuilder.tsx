@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { PurchaseBuilderItem } from "@/lib/purchasing/types";
+import { roundMoney } from "@/lib/validation/numbers";
 
 type Supplier = { id: string; code: string; name: string; default_currency: string; payment_terms_days: number };
 type Warehouse = { id: string; code: string; name: string; country_name: string };
@@ -25,7 +26,12 @@ export function PurchaseOrderBuilder({
   initialItems?: PurchaseBuilderItem[];
   submitLabel: string;
 }) {
-  const [items, setItems] = useState<PurchaseBuilderItem[]>(initialItems);
+  const [items, setItems] = useState<PurchaseBuilderItem[]>(() => initialItems.map((item) => ({
+    ...item,
+    unit_cost: roundMoney(item.unit_cost),
+    discount_amount: roundMoney(item.discount_amount),
+    tax_amount: roundMoney(item.tax_amount),
+  })));
   const [productId, setProductId] = useState("");
   const [variationId, setVariationId] = useState("");
   const [productQuery, setProductQuery] = useState("");
@@ -49,7 +55,7 @@ export function PurchaseOrderBuilder({
       sku: variation?.sku ?? product.sku,
       serial_tracking_required: product.serial_tracking_required,
       quantity: 1,
-      unit_cost: Number(variation?.purchase_cost ?? product.purchase_cost ?? 0),
+      unit_cost: roundMoney(Number(variation?.purchase_cost ?? product.purchase_cost ?? 0)),
       discount_amount: 0,
       tax_amount: 0,
       description: "",
@@ -135,9 +141,9 @@ export function PurchaseOrderBuilder({
             <td className="p-3"><strong>{item.name}</strong>{item.serial_tracking_required ? <span className="mt-1 block text-xs text-cyan-700">Serialized units</span> : null}<input aria-label={`Description for ${item.name}`} value={item.description} onChange={(event) => updateItem(index, { description: event.target.value })} placeholder="Optional line note" className="mt-2 w-full rounded-lg border px-2 py-1.5" /></td>
             <td className="p-3 font-mono text-xs">{item.sku}</td>
             <td className="p-3"><input aria-label={`Quantity for ${item.name}`} type="number" min="1" step="1" required value={item.quantity} onChange={(event) => updateItem(index, { quantity: Math.max(1, Math.trunc(Number(event.target.value) || 1)) })} className="w-28 rounded-lg border px-2 py-1.5" /></td>
-            <td className="p-3"><input aria-label={`Unit cost for ${item.name}`} type="number" min="0" step="0.0001" required value={item.unit_cost} onChange={(event) => updateItem(index, { unit_cost: Number(event.target.value) })} className="w-32 rounded-lg border px-2 py-1.5" /></td>
-            <td className="p-3"><input aria-label={`Discount for ${item.name}`} type="number" min="0" step="0.0001" value={item.discount_amount} onChange={(event) => updateItem(index, { discount_amount: Number(event.target.value) })} className="w-28 rounded-lg border px-2 py-1.5" /></td>
-            <td className="p-3"><input aria-label={`Tax for ${item.name}`} type="number" min="0" step="0.0001" value={item.tax_amount} onChange={(event) => updateItem(index, { tax_amount: Number(event.target.value) })} className="w-28 rounded-lg border px-2 py-1.5" /></td>
+            <td className="p-3"><input aria-label={`Unit cost for ${item.name}`} type="number" inputMode="decimal" min="0" step="0.01" required value={item.unit_cost} onChange={(event) => updateItem(index, { unit_cost: Number(event.target.value) })} onBlur={() => updateItem(index, { unit_cost: roundMoney(item.unit_cost) })} className="w-32 rounded-lg border px-2 py-1.5" /></td>
+            <td className="p-3"><input aria-label={`Discount for ${item.name}`} type="number" inputMode="decimal" min="0" step="0.01" value={item.discount_amount} onChange={(event) => updateItem(index, { discount_amount: Number(event.target.value) })} onBlur={() => updateItem(index, { discount_amount: roundMoney(item.discount_amount) })} className="w-28 rounded-lg border px-2 py-1.5" /></td>
+            <td className="p-3"><input aria-label={`Tax for ${item.name}`} type="number" inputMode="decimal" min="0" step="0.01" value={item.tax_amount} onChange={(event) => updateItem(index, { tax_amount: Number(event.target.value) })} onBlur={() => updateItem(index, { tax_amount: roundMoney(item.tax_amount) })} className="w-28 rounded-lg border px-2 py-1.5" /></td>
             <td className="p-3 font-bold">{Math.max(item.quantity * item.unit_cost - item.discount_amount + item.tax_amount, 0).toFixed(2)}</td>
             <td className="p-3"><button type="button" onClick={() => setItems((current) => current.filter((_, position) => position !== index))} className="rounded-lg border border-red-300 px-3 py-1.5 font-semibold text-red-700">Remove</button></td>
           </tr>)}</tbody>
@@ -147,10 +153,10 @@ export function PurchaseOrderBuilder({
     </section>
 
     <section className="grid gap-3 rounded-2xl border bg-[var(--surface)] p-4 shadow-sm md:grid-cols-3">
-      <label className="text-sm font-semibold">Order discount<input name="discount_amount" type="number" min="0" step="0.0001" defaultValue={defaults.discount_amount ?? 0} className="mt-1 w-full rounded-xl border px-3 py-2.5" /></label>
-      <label className="text-sm font-semibold">Shipping / freight<input name="shipping_amount" type="number" min="0" step="0.0001" defaultValue={defaults.shipping_amount ?? 0} className="mt-1 w-full rounded-xl border px-3 py-2.5" /></label>
-      <label className="text-sm font-semibold">Tax<input name="tax_amount" type="number" min="0" step="0.0001" defaultValue={defaults.tax_amount ?? 0} className="mt-1 w-full rounded-xl border px-3 py-2.5" /></label>
-      <label className="text-sm font-semibold">Other cost<input name="other_amount" type="number" min="0" step="0.0001" defaultValue={defaults.other_amount ?? 0} className="mt-1 w-full rounded-xl border px-3 py-2.5" /></label>
+      <label className="text-sm font-semibold">Order discount<input name="discount_amount" type="number" inputMode="decimal" min="0" step="0.01" defaultValue={defaults.discount_amount ?? 0} className="mt-1 w-full rounded-xl border px-3 py-2.5" /></label>
+      <label className="text-sm font-semibold">Shipping / freight<input name="shipping_amount" type="number" inputMode="decimal" min="0" step="0.01" defaultValue={defaults.shipping_amount ?? 0} className="mt-1 w-full rounded-xl border px-3 py-2.5" /></label>
+      <label className="text-sm font-semibold">Tax<input name="tax_amount" type="number" inputMode="decimal" min="0" step="0.01" defaultValue={defaults.tax_amount ?? 0} className="mt-1 w-full rounded-xl border px-3 py-2.5" /></label>
+      <label className="text-sm font-semibold">Other cost<input name="other_amount" type="number" inputMode="decimal" min="0" step="0.01" defaultValue={defaults.other_amount ?? 0} className="mt-1 w-full rounded-xl border px-3 py-2.5" /></label>
       <label className="text-sm font-semibold md:col-span-2">Internal notes<textarea name="internal_notes" maxLength={2000} defaultValue={defaults.internal_notes ?? ""} className="mt-1 min-h-24 w-full rounded-xl border px-3 py-2.5" /></label>
       <label className="text-sm font-semibold md:col-span-3">Supplier-facing notes<textarea name="supplier_notes" maxLength={2000} defaultValue={defaults.supplier_notes ?? ""} className="mt-1 min-h-20 w-full rounded-xl border px-3 py-2.5" /></label>
       <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4 md:col-span-3">

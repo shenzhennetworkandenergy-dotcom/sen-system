@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { requirePermission } from "@/lib/auth/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
+import { parseWholeNumber, roundMoney } from "@/lib/validation/numbers";
 
 const statuses = new Set([
   "submitted",
@@ -20,7 +21,12 @@ export async function createQuotationAction(form: FormData) {
   const { profile } = await requirePermission("quotations.create");
   let customerId = String(form.get("customer_id") ?? "").trim();
   const productIds = form.getAll("product_id").map(String).filter(Boolean);
-  const quantities = form.getAll("quantity").map((value) => Math.max(1, Math.trunc(Number(value) || 1)));
+  let quantities: number[];
+  try {
+    quantities = form.getAll("quantity").map((value, index) => parseWholeNumber(value, `Item ${index + 1} quantity`, { required: true, minimum: 1 })!);
+  } catch (error) {
+    redirect(`/admin/quotations/new?error=${encodeURIComponent(error instanceof Error ? error.message : "Quotation quantities are invalid.")}`);
+  }
   const uniqueProductIds = [...new Set(productIds)];
   if (!uniqueProductIds.length) redirect("/admin/quotations/new?error=Choose%20at%20least%20one%20product.");
   const db = createSupabaseAdminClient();
@@ -62,7 +68,7 @@ export async function createQuotationAction(form: FormData) {
     product_name_snapshot: product.name,
     sku_snapshot: product.sku,
     quantity: quantities[productIds.indexOf(product.id)] ?? 1,
-    target_price: Number(product.sale_price ?? product.regular_price ?? 0),
+    target_price: roundMoney(Number(product.sale_price ?? product.regular_price ?? 0)),
   })));
   if (item.error) {
     await db.from("quotation_requests").delete().eq("id", quotation.id);
