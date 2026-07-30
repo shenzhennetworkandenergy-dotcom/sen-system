@@ -3,6 +3,7 @@ import Link from "next/link";
 import { connection } from "next/server";
 
 import { MobileNavigation } from "@/components/layout/MobileNavigation";
+import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
 import { ProductSearch } from "@/components/catalog/ProductSearch";
 import { Button } from "@/components/ui/Button";
 import { Container } from "@/components/ui/Container";
@@ -24,11 +25,18 @@ export async function PublicHeader() {
       ? "Admin Dashboard"
       : profile?.role === "employee"
         ? "Employee Dashboard"
-        : "My Account";
+        : "Customer Dashboard";
   let cartCount = 0;
+  let avatarUrl: string | null = null;
   let floatingConversation: FloatingConversation = null;
   if (profile) {
     const db = createSupabaseAdminClient();
+    if (profile.avatar_path) {
+      const signedAvatar = await db.storage
+        .from("profile-avatars")
+        .createSignedUrl(profile.avatar_path, 3600);
+      avatarUrl = signedAvatar.data?.signedUrl ?? null;
+    }
     const [{ data: cart }, { data: conversation }] = await Promise.all([
       db
         .from("shopping_carts")
@@ -127,6 +135,16 @@ export async function PublicHeader() {
               </Link>
               <Link href={dash} className="sen-nav-link">
                 {label}
+              </Link>
+              <Link href={routes.profile} className="sen-nav-link flex items-center gap-2">
+                <ProfileAvatar
+                  imageUrl={avatarUrl}
+                  emoji={profile?.avatar_emoji}
+                  name={profile?.full_name}
+                  size={28}
+                  className="ring-1 ring-white/30"
+                />
+                <span>My Profile</span>
               </Link>
               <a href={routes.logout} className="sen-nav-link">
                 Logout

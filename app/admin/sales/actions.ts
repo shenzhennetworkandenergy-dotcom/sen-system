@@ -6,9 +6,58 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
 import { addressFromForm, jsonArray, optionalString, uuid } from "@/lib/orders/validation";
 import { moneyFromForm, parseMoney, parseWholeNumber } from "@/lib/validation/numbers";
+import { normalizeSaleLineEdit } from "@/lib/sales/line-editing";
 
 const target = (id: string, kind: "success" | "error", message: string) => `/admin/sales/${id}?${kind}=${encodeURIComponent(message)}`;
 const safe = (message: string | undefined, fallback: string) => message && /sale|payment|amount|method|stock|draft|serial|document|permission|eligible/i.test(message) ? message : fallback;
+
+export async function updateSaleLinesAction(saleId: string, form: FormData) {
+  const { profile } = await requirePermission("sales.edit");
+  const db = createSupabaseAdminClient();
+  const reason = String(form.get("reason") ?? "").trim().slice(0, 500);
+  let items;
+  try {
+    if (!reason) throw new Error("An edit reason is required.");
+    const raw = JSON.parse(String(form.get("items") ?? "[]")) as unknown;
+    if (!Array.isArray(raw) || !raw.length) throw new Error("Sale items are required.");
+    items = raw.map((item) => {
+      const normalized = normalizeSaleLineEdit(item as Record<string, unknown>);
+      return {
+        id: normalized.id,
+        quantity: normalized.quantity,
+        unit_price: normalized.unitPrice,
+        discount_type: normalized.discountType,
+        discount_value: normalized.discountValue,
+      };
+    });
+  } catch (error) {
+    redirect(target(saleId, "error", error instanceof Error ? error.message : "Sale edits are invalid."));
+  }
+
+  const result = await db.rpc("update_sale_lines", {
+    actor_profile_id: profile.id,
+    requested_order_id: saleId,
+    requested_reason: reason,
+    requested_items: items,
+  });
+  if (result.error) {
+    redirect(target(saleId, "error", safe(result.error.message, "Unable to update sale products and pricing.")));
+  }
+  await writeAuditLog({
+    actorId: profile.id,
+    actorRole: profile.role,
+    action: "sale.lines_updated",
+    module: "sales",
+    entityType: "sales_order",
+    entityId: saleId,
+    description: "Sale quantities and pricing were updated.",
+    newValues: { reason, item_count: items.length },
+  });
+  revalidatePath("/admin/sales");
+  revalidatePath(`/admin/sales/${saleId}`);
+  revalidatePath(`/account/sales`);
+  redirect(target(saleId, "success", "Sale products and pricing updated. Existing documents were marked superseded."));
+}
 
 export async function createSaleAction(form: FormData) {
   const { profile, permissions } = await requirePermission("sales.create");

@@ -4,6 +4,7 @@ export type DashboardNavigationItem = { key:string; label:string; route:string|n
 
 export const adminNavigation: DashboardNavigationItem[] = [
   {key:"overview",label:"Overview",route:routes.admin,group:"Administration",iconKey:"dashboard",requiredPermission:null,implemented:true,adminVisible:true,employeeVisible:false},
+  {key:"my-profile",label:"My Profile",route:routes.profile,group:"Administration",iconKey:"users",requiredPermission:null,implemented:true,adminVisible:true,employeeVisible:false},
   {key:"users",label:"Users",route:routes.adminUsers,group:"Administration",iconKey:"users",requiredPermission:"users.view",implemented:true,adminVisible:true,employeeVisible:false},
   {key:"permissions",label:"Permissions",route:routes.adminPermissions,group:"Administration",iconKey:"permissions",requiredPermission:"users.manage_permissions",implemented:true,adminVisible:true,employeeVisible:false},
   {key:"team-activity",label:"Team Activity",route:routes.adminActivity,group:"Administration",iconKey:"activity",requiredPermission:"activity.view_all",implemented:true,adminVisible:true,employeeVisible:false},
@@ -34,6 +35,7 @@ export const adminNavigation: DashboardNavigationItem[] = [
 
 export const employeeNavigation: DashboardNavigationItem[] = [
   {key:"employee-dashboard",label:"Employee Dashboard",route:routes.employee,group:"Workspace",iconKey:"dashboard",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
+  {key:"my-profile",label:"My Profile",route:routes.profile,group:"Workspace",iconKey:"users",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
   {key:"employee-profile",label:"My workplace",route:routes.employeeProfile,group:"Workspace",iconKey:"employees",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
   {key:"employee-activity",label:"My Activity",route:routes.employeeActivity,group:"Workspace",iconKey:"activity",requiredPermission:"activity.view_own",implemented:true,adminVisible:false,employeeVisible:true},
   ...adminNavigation.filter((item)=>item.employeeVisible),
