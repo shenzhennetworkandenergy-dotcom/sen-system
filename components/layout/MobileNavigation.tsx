@@ -8,11 +8,13 @@ export function MobileNavigation({
   isAuthenticated = false,
   dashboardHref,
   dashboardLabel = "My Account",
+  profileHref = routes.profile,
   cartCount = 0,
 }: {
   isAuthenticated?: boolean;
   dashboardHref?: string;
   dashboardLabel?: string;
+  profileHref?: string;
   cartCount?: number;
 }) {
   return (
@@ -29,6 +31,7 @@ export function MobileNavigation({
             <Link href={dashboardHref ?? routes.account}>
               {dashboardLabel}
             </Link>
+            <Link href={profileHref}>My Profile</Link>
             <a href={routes.logout}>Logout</a>
           </>
         ) : (

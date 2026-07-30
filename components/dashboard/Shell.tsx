@@ -4,6 +4,9 @@ import { adminNavigation, visibleEmployeeNavigation } from "@/lib/navigation/das
 import { DashboardNavigation } from "@/components/dashboard/DashboardNavigation";
 import { ProductSearch } from "@/components/catalog/ProductSearch";
 import { getDashboardWorkCounts } from "@/lib/dashboard/work-counts";
+import { getCurrentProfile } from "@/lib/auth/session";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
 
 type DashboardShellProps = {
   title: string;
@@ -15,7 +18,17 @@ type DashboardShellProps = {
 
 export async function DashboardShell({ title, subtitle, children, admin = false, employeePermissions }: DashboardShellProps) {
   const navigation = admin ? adminNavigation : employeePermissions ? visibleEmployeeNavigation(employeePermissions) : [];
-  const workCounts = admin ? await getDashboardWorkCounts() : {};
+  const [{ profile }, workCounts] = await Promise.all([
+    getCurrentProfile(),
+    admin ? getDashboardWorkCounts() : Promise.resolve({}),
+  ]);
+  let avatarUrl: string | null = null;
+  if (profile?.avatar_path) {
+    const signed = await createSupabaseAdminClient().storage
+      .from("profile-avatars")
+      .createSignedUrl(profile.avatar_path, 3600);
+    avatarUrl = signed.data?.signedUrl ?? null;
+  }
 
   return <div className="sen-dashboard-shell min-h-screen">
     <header className="sen-dashboard-header sticky top-0 z-30 border-b bg-[#07152f] text-white shadow-lg backdrop-blur">
@@ -28,6 +41,10 @@ export async function DashboardShell({ title, subtitle, children, admin = false,
         <ProductSearch compact className="hidden w-full max-w-md md:block" />
         <nav aria-label="Account navigation" className="flex shrink-0 items-center gap-1 text-xs font-semibold sm:gap-2 sm:text-sm">
           <a href={routes.home} className="rounded-lg px-2.5 py-2 !text-slate-100 hover:bg-white/10 hover:!text-white sm:px-3">Public website</a>
+          <a href={routes.profile} className="flex items-center gap-2 rounded-lg px-2 py-1.5 !text-slate-100 hover:bg-white/10 hover:!text-white">
+            <ProfileAvatar imageUrl={avatarUrl} emoji={profile?.avatar_emoji} name={profile?.full_name} size={28} className="ring-1 ring-white/30" />
+            <span className="hidden sm:inline">My Profile</span>
+          </a>
           <a href={routes.logout} className="rounded-lg border border-white/20 bg-white/5 px-2.5 py-1.5 !text-white hover:bg-white/15 hover:!text-white sm:px-3">Logout</a>
         </nav>
       </div>
