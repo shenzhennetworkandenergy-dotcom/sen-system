@@ -61,7 +61,7 @@ export function ProductSearch({
 
   return (
     <div className={`relative ${className}`}>
-      <form action="/products" role="search" className="flex gap-2">
+      <form action="/products" role="search" className="sen-search-form flex gap-2">
         <label className="sr-only" htmlFor={`${listId}-input`}>
           Search products
         </label>
@@ -89,12 +89,12 @@ export function ProductSearch({
           aria-controls={listId}
           aria-expanded={open}
           placeholder="Search products, SKU or model"
-          className={`min-w-0 flex-1 rounded-xl border border-slate-300 bg-white text-slate-950 outline-none transition focus:border-cyan-500 focus:ring-4 focus:ring-cyan-100 ${
+          className={`sen-search-input min-w-0 flex-1 rounded-xl border border-slate-300 bg-white text-slate-950 outline-none transition focus:border-cyan-500 focus:ring-4 focus:ring-cyan-100 ${
             compact ? "h-9 px-3 text-xs" : "h-12 px-4"
           }`}
         />
         <button
-          className={`rounded-xl bg-cyan-600 font-bold text-white transition hover:bg-cyan-500 ${
+          className={`sen-search-button rounded-xl bg-cyan-600 font-bold text-white transition hover:bg-cyan-500 ${
             compact ? "h-9 px-3 text-xs" : "h-12 px-5"
           }`}
         >

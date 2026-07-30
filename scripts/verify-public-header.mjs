@@ -42,11 +42,11 @@ const requiredCssTokens = [
 for (const token of requiredHeaderTokens) {
   assert.ok(header.includes(token), `PublicHeader is missing ${token}`);
 }
-for (const token of requiredMobileTokens) {
-  assert.ok(mobile.includes(token), `MobileNavigation is missing ${token}`);
-}
 for (const token of requiredSearchTokens) {
   assert.ok(search.includes(token), `ProductSearch is missing ${token}`);
+}
+for (const token of requiredMobileTokens) {
+  assert.ok(mobile.includes(token), `MobileNavigation is missing ${token}`);
 }
 for (const token of requiredCssTokens) {
   assert.ok(css.includes(token), `globals.css is missing ${token}`);
