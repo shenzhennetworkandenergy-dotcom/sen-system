@@ -580,54 +580,17 @@ html { scroll-behavior: smooth; }
 .catalogue-card-dynamic .catalogue-card-brand,.catalogue-card-dynamic .catalogue-card-link { color:color-mix(in srgb,var(--category-color) 78%,#07102f); }
 .sen-business-category-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,16rem),1fr));gap:1.25rem; }
 .sen-dynamic-category-card { border-top:4px solid var(--category-color); }
-.catalogue-theme-networking { --theme-primary:#007d9f;--theme-surface:#effaff;--theme-panel:#fff;color:#10233f; }
-.catalogue-theme-energy { --theme-primary:#0a9d62;--theme-surface:#f3fbef;--theme-panel:#fffdf4;color:#183323; }
-.catalogue-theme-medical { --theme-primary:#007f9e;--theme-surface:#eefcff;--theme-panel:#fff;color:#123143; }
-.catalogue-theme-others { --theme-primary:#b84a0f;--theme-surface:#fff5e9;--theme-panel:#fff;color:#3f2415; }
 .catalogue-theme-surface { background:var(--theme-surface);transition:background .45s ease,color .45s ease; }
 .catalogue-theme-panel { background:var(--theme-panel);color:#10152f;border-color:color-mix(in srgb,var(--theme-primary) 30%,#dce4f5); }
-.catalogue-theme-networking .catalogue-theme-panel h1,
-.catalogue-theme-networking .catalogue-theme-panel h2,
-.catalogue-theme-others .catalogue-theme-panel h1,
-.catalogue-theme-others .catalogue-theme-panel h2 { color:inherit; }
 .catalogue-theme-tagline { color:var(--theme-primary); }
-.catalogue-theme-networking .sen-detail-media { background-color:#071225;background-image:linear-gradient(rgb(0 189 232/.09) 1px,transparent 1px),linear-gradient(90deg,rgb(0 189 232/.09) 1px,transparent 1px);background-size:28px 28px; }
-.catalogue-theme-energy .sen-detail-media { background:radial-gradient(circle at 40% 30%,#fff7ba,#dff6d7); }
-.catalogue-theme-medical .sen-detail-media { background:linear-gradient(145deg,#fff,#e6fbff); }
-.catalogue-theme-others .sen-detail-media { background:linear-gradient(135deg,#383b40,#17191c); }
-.catalogue-card-networking { border-top:4px solid #00bde8;background:linear-gradient(160deg,#fff,#edfaff); }
-.catalogue-card-energy { border-top:4px solid #26a65b;background:linear-gradient(160deg,#fff,#f2fbe9); }
-.catalogue-card-medical { border-top:4px solid #18aabc;background:linear-gradient(160deg,#fff,#edfcff); }
-.catalogue-card-others { border-top:4px solid #e96d23;background:linear-gradient(160deg,#fff,#fff5e9); }
 .catalogue-card-badge { color:#fff;background:#10233f;box-shadow:0 4px 14px rgb(15 23 42/.18); }
 .catalogue-card-brand,.catalogue-card-link { color:#155fb3; }
-.catalogue-card-energy .catalogue-card-badge { background:#176b3a; }
-.catalogue-card-energy .catalogue-card-brand,.catalogue-card-energy .catalogue-card-link { color:#176b3a; }
-.catalogue-card-medical .catalogue-card-badge { background:#006c80; }
-.catalogue-card-medical .catalogue-card-brand,.catalogue-card-medical .catalogue-card-link { color:#006c80; }
-.catalogue-card-others .catalogue-card-badge { background:#97400f; }
-.catalogue-card-others .catalogue-card-brand,.catalogue-card-others .catalogue-card-link { color:#97400f; }
 .catalogue-category-hero { color:inherit;background:linear-gradient(135deg,var(--theme-panel),var(--theme-surface));transition:background .45s ease,color .45s ease; }
-.catalogue-theme-networking .catalogue-category-hero { background:radial-gradient(circle at 75% 10%,#103e61,#040b1d 60%); }
-.catalogue-theme-energy .catalogue-category-hero { background:radial-gradient(circle at 80% 0,#fff2a3,#e4f8dc 45%,#f3fbef); }
-.catalogue-theme-medical .catalogue-category-hero { background:linear-gradient(135deg,#fff 15%,#dffaff 65%,#e8f7fb); }
-.catalogue-theme-others .catalogue-category-hero { background:radial-gradient(circle at 75% 10%,#6b3a21,#242526 58%); }
-.catalogue-theme-networking .catalogue-category-hero,
-.catalogue-theme-others .catalogue-category-hero { color:#fff; }
 .catalogue-category-switch { display:flex;min-height:8rem;flex-direction:column;justify-content:space-between;border:1px solid color-mix(in srgb,var(--theme-primary) 38%,transparent);border-radius:1.25rem;padding:1.1rem;color:#10152f;background:rgb(255 255 255/.92);box-shadow:0 12px 28px rgb(0 0 0/.08);transition:transform .3s ease,box-shadow .3s ease,border-color .3s ease; }
 .catalogue-category-switch:hover,.catalogue-category-switch.is-active { transform:translateY(-5px);border-color:var(--theme-primary);box-shadow:0 20px 38px color-mix(in srgb,var(--theme-primary) 22%,transparent); }
 .catalogue-category-switch span { font-size:1.15rem;font-weight:800; }
 .catalogue-category-switch small { line-height:1.45;color:#526071; }
 .catalogue-category-switch::before { content:"";width:2.25rem;height:.42rem;border-radius:999px;background:var(--theme-primary);box-shadow:0 4px 14px color-mix(in srgb,var(--theme-primary) 35%,transparent); }
-.catalogue-category-switch-networking { border-top:5px solid #00bde8;background:linear-gradient(150deg,#eafbff,#fff); }
-.catalogue-category-switch-energy { border-top:5px solid #26a65b;background:linear-gradient(150deg,#f2fbe9,#fff); }
-.catalogue-category-switch-medical { border-top:5px solid #18aabc;background:linear-gradient(150deg,#edfcff,#fff); }
-.catalogue-category-switch-others { border-top:5px solid #e96d23;background:linear-gradient(150deg,#fff5e9,#fff); }
-.catalogue-theme-networking .catalogue-theme-panel,.catalogue-theme-others .catalogue-theme-panel { box-shadow:0 16px 38px rgb(0 0 0/.2); }
-.catalogue-theme-networking .sen-button-glow { background:linear-gradient(105deg,#007d9f,#245fc8) !important; }
-.catalogue-theme-energy .sen-button-glow { background:linear-gradient(105deg,#176b3a,#8a6a00) !important; }
-.catalogue-theme-medical .sen-button-glow { background:linear-gradient(105deg,#006c80,#245fc8) !important; }
-.catalogue-theme-others .sen-button-glow { background:linear-gradient(105deg,#97400f,#7c3aed) !important; }
 .sen-catalogue-cta { position: relative; overflow: hidden; background: radial-gradient(circle at 50% 0,#25206c 0,#0b1034 42%,#05071d 100%); }
 .sen-catalogue-cta::before { content: ""; position: absolute; inset: 0; opacity: .22; background-image: linear-gradient(rgb(92 200 255 / .22) 1px,transparent 1px),linear-gradient(90deg,rgb(92 200 255 / .22) 1px,transparent 1px); background-size: 54px 54px; animation: sen-grid-drift 18s linear infinite; }
 

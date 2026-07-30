@@ -33,8 +33,9 @@ for (const [name, passed] of checks) {
 if (failed) process.exitCode = 1;
 if (failed) process.exit();
 
-const envText = await readFile(".env.local", "utf8");
-const env = Object.fromEntries(envText.split(/\r?\n/).map((line)=>line.trim()).filter((line)=>line&&!line.startsWith("#")&&line.includes("=")).map((line)=>{const at=line.indexOf("=");return [line.slice(0,at),line.slice(at+1).replace(/^['"]|['"]$/g,"")];}));
+const envText = await readFile(".env.local", "utf8").catch(()=>"");
+const fileEnv = Object.fromEntries(envText.split(/\r?\n/).map((line)=>line.trim()).filter((line)=>line&&!line.startsWith("#")&&line.includes("=")).map((line)=>{const at=line.indexOf("=");return [line.slice(0,at),line.slice(at+1).replace(/^['"]|['"]$/g,"")];}));
+const env = {...fileEnv,...process.env};
 assert.match(env.NEXT_PUBLIC_SUPABASE_URL ?? "", /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i, "Accounting/HR verification refuses to mutate a non-local database.");
 const db = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SECRET_KEY || env.SUPABASE_SERVICE_ROLE_KEY, { auth:{persistSession:false,autoRefreshToken:false} });
 for (const table of ["accounting_accounts","journal_entries","journal_lines","hr_departments","hr_employee_records","hr_leave_requests","hr_attendance"]) {

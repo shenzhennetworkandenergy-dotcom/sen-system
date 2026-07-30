@@ -38,8 +38,9 @@ for (const permission of ["crm.create", "crm.edit"]) {
 }
 console.log("CRM source and security verification passed.");
 
-const envText=fs.readFileSync(".env.local","utf8");
-const env=Object.fromEntries(envText.split(/\r?\n/).map((line)=>line.trim()).filter((line)=>line&&!line.startsWith("#")&&line.includes("=")).map((line)=>{const at=line.indexOf("=");return [line.slice(0,at),line.slice(at+1).replace(/^['"]|['"]$/g,"")];}));
+const envText=fs.existsSync(".env.local")?fs.readFileSync(".env.local","utf8"):"";
+const fileEnv=Object.fromEntries(envText.split(/\r?\n/).map((line)=>line.trim()).filter((line)=>line&&!line.startsWith("#")&&line.includes("=")).map((line)=>{const at=line.indexOf("=");return [line.slice(0,at),line.slice(at+1).replace(/^['"]|['"]$/g,"")];}));
+const env={...fileEnv,...process.env};
 assert.match(env.NEXT_PUBLIC_SUPABASE_URL??"",/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i,"CRM verification refuses to mutate a non-local database.");
 const db=createClient(env.NEXT_PUBLIC_SUPABASE_URL,env.SUPABASE_SECRET_KEY||env.SUPABASE_SERVICE_ROLE_KEY,{auth:{persistSession:false,autoRefreshToken:false}});
 for(const table of ["crm_companies","crm_contacts","crm_leads","crm_activities"]){const probe=await db.from(table).select("id").limit(1);assert.equal(probe.error,null,`${table} is unavailable locally: ${probe.error?.message}`);}

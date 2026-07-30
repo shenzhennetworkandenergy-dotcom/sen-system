@@ -66,6 +66,15 @@ npx vercel --prod --yes
 Wait until Vercel reports the deployment as Ready. Confirm the deployment's Git
 commit matches the commit that passed `npm run test:release`.
 
+The two server-dependent smoke checks run after the release gate:
+
+```bash
+set CHATBOT_TEST_BASE_URL=https://sen-system.vercel.app
+npm run test:chatbot
+set SMOKE_BASE_URL=https://sen-system.vercel.app
+npm run test:production-routes
+```
+
 ## 5. Production smoke checks
 
 Verify:
@@ -97,4 +106,3 @@ If the application release fails, promote the previously verified Vercel
 deployment. Do not reverse an applied data migration by editing or deleting its
 file. Create a forward migration that safely restores compatible behavior,
 test it locally, and apply it through the same release gate.
-
