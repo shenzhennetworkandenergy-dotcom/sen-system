@@ -101,7 +101,7 @@ export async function getPurchaseOrder(id: string) {
 export async function getSuppliers(params: { q?: string; status?: string; page?: string }) {
   const db = createSupabaseAdminClient();
   const page = Math.max(1, Number.parseInt(params.page ?? "1") || 1), size = 25;
-  let query = db.from("suppliers").select("*", { count: "exact" });
+  let query = db.from("suppliers").select("*,supplier_categories(id,name,category_level),brands(id,name)", { count: "exact" });
   if (params.q) query = query.or(`name.ilike.%${params.q.slice(0, 80)}%,code.ilike.%${params.q.slice(0, 80)}%,email.ilike.%${params.q.slice(0, 80)}%`);
   if (params.status && ["active", "on_hold", "archived"].includes(params.status)) query = query.eq("status", params.status);
   const result = await query.order("name").range((page - 1) * size, page * size - 1);
@@ -115,7 +115,7 @@ export async function getSuppliers(params: { q?: string; status?: string; page?:
 export async function getSupplier(id: string) {
   const db = createSupabaseAdminClient();
   const [supplierResult, ordersResult] = await Promise.all([
-    db.from("suppliers").select("*").eq("id", id).maybeSingle(),
+    db.from("suppliers").select("*,supplier_categories(id,name,category_level),brands(id,name)").eq("id", id).maybeSingle(),
     db.from("purchase_orders").select("id,order_number,status,total_amount,currency,order_date,expected_delivery_date").eq("supplier_id", id).order("created_at", { ascending: false }).limit(50),
   ]);
   const error = supplierResult.error ?? ordersResult.error;

@@ -19,6 +19,7 @@
     "test:inventory-admin-controls": "node scripts/verify-inventory-admin-controls.mjs",
     "test:sales": "node scripts/verify-sales.mjs",
     "test:purchasing": "node scripts/verify-purchasing.mjs",
+    "test:supplier-categories": "node scripts/verify-supplier-categories.mjs && node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/supplier-codes.test.mts",
     "test:accounting-hr": "node scripts/verify-accounting-hr.mjs",
     "test:crm": "node scripts/verify-crm.mjs",
     "test:variable-products": "node scripts/verify-variable-products.mjs",
