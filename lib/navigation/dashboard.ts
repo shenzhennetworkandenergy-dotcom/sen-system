@@ -10,6 +10,7 @@ export const adminNavigation: DashboardNavigationItem[] = [
   {key:"team-activity",label:"Team Activity",route:routes.adminActivity,group:"Administration",iconKey:"activity",requiredPermission:"activity.view_all",implemented:true,adminVisible:true,employeeVisible:false},
   {key:"employees",label:"Employees",route:`${routes.adminUsers}?role=employee`,group:"Administration",iconKey:"employees",requiredPermission:"employees.view",implemented:true,adminVisible:true,employeeVisible:false},
   {key:"employee-activity",label:"Employee Activity",route:`${routes.adminActivity}?scope=employees`,group:"Administration",iconKey:"activity",requiredPermission:"employees.view_activity",implemented:true,adminVisible:true,employeeVisible:false},
+  {key:"archive",label:"Archive",route:routes.adminArchive,group:"Administration",iconKey:"inventory",requiredPermission:null,implemented:true,adminVisible:true,employeeVisible:false},
   {key:"crm",label:"CRM",route:routes.adminCrm,group:"Commerce and Customers",iconKey:"crm",requiredPermission:"crm.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"products",label:"Products",route:"/admin/products",group:"Commerce and Customers",iconKey:"products",requiredPermission:"products.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"orders",label:"Orders",route:routes.adminOrders,group:"Commerce and Customers",iconKey:"sales",requiredPermission:"orders.view",implemented:true,adminVisible:true,employeeVisible:true},
@@ -24,13 +25,13 @@ export const adminNavigation: DashboardNavigationItem[] = [
   {key:"purchasing",label:"Purchasing",route:routes.adminPurchasing,group:"Procurement and Finance",iconKey:"purchasing",requiredPermission:"purchasing.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"suppliers",label:"Suppliers",route:routes.adminSuppliers,group:"Procurement and Finance",iconKey:"suppliers",requiredPermission:"suppliers.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"accounting",label:"Accounting",route:routes.adminAccounting,group:"Procurement and Finance",iconKey:"accounting",requiredPermission:"accounting.view",implemented:true,adminVisible:true,employeeVisible:true},
-  {key:"hr",label:"HR",route:routes.adminHr,group:"Organization",iconKey:"hr",requiredPermission:"hr.view",implemented:true,adminVisible:true,employeeVisible:true},
+  {key:"hr",label:"HR",route:routes.adminHr,group:"Organization",iconKey:"hr",requiredPermission:null,implemented:true,adminVisible:true,employeeVisible:false},
   {key:"manufacturing",label:"Manufacturing",route:null,group:"Organization",iconKey:"manufacturing",requiredPermission:"manufacturing.view",implemented:false,adminVisible:true,employeeVisible:false},
   {key:"projects",label:"Projects",route:null,group:"Organization",iconKey:"projects",requiredPermission:"projects.view",implemented:false,adminVisible:true,employeeVisible:false},
   {key:"support",label:"Support",route:routes.adminSupport,group:"Organization",iconKey:"support",requiredPermission:"support.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"reports",label:"Reports",route:null,group:"Insights and System",iconKey:"reports",requiredPermission:"reports.view",implemented:false,adminVisible:true,employeeVisible:false},
   {key:"ai",label:"AI Assistant",route:null,group:"Insights and System",iconKey:"ai",requiredPermission:"ai.use",implemented:false,adminVisible:true,employeeVisible:false},
-  {key:"settings",label:"Settings",route:routes.adminPaymentSettings,group:"Insights and System",iconKey:"settings",requiredPermission:"settings.view",implemented:true,adminVisible:true,employeeVisible:false},
+  {key:"settings",label:"Settings",route:routes.adminDataManagement,group:"Insights and System",iconKey:"settings",requiredPermission:"settings.view",implemented:true,adminVisible:true,employeeVisible:false},
 ];
 
 export const employeeNavigation: DashboardNavigationItem[] = [
@@ -38,6 +39,7 @@ export const employeeNavigation: DashboardNavigationItem[] = [
   {key:"my-profile",label:"My Profile",route:routes.profile,group:"Workspace",iconKey:"users",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
   {key:"employee-profile",label:"My workplace",route:routes.employeeProfile,group:"Workspace",iconKey:"employees",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
   {key:"employee-activity",label:"My Activity",route:routes.employeeActivity,group:"Workspace",iconKey:"activity",requiredPermission:"activity.view_own",implemented:true,adminVisible:false,employeeVisible:true},
+  {key:"employee-hr",label:"My HR",route:routes.employeeHr,group:"Workspace",iconKey:"hr",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
   ...adminNavigation.filter((item)=>item.employeeVisible),
 ];
 

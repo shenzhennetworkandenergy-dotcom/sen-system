@@ -7,6 +7,8 @@ import { ConfirmSubmitButton } from "@/components/ui/ConfirmSubmitButton";
 import { requirePermission } from "@/lib/auth/permissions";
 import { getProductOptions } from "@/lib/inventory/products";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { deletionActionCopy } from "@/lib/deletion/policy";
+import { getDeletionMode } from "@/lib/deletion/settings";
 import {
   createVariationAction,
   deleteProductAction,
@@ -26,6 +28,7 @@ export default async function ProductDetailPage({
   const { profile, permissions } = await requirePermission("products.view");
   const [{ id }, message] = await Promise.all([params, searchParams]);
   const db = createSupabaseAdminClient();
+  const deletionMode = profile.role === "admin" ? await getDeletionMode() : null;
   const [
     { data: product, error },
     options,
@@ -159,8 +162,8 @@ export default async function ProductDetailPage({
 
     {profile.role === "admin" ? <section className="mt-6 rounded-xl border border-red-300 bg-red-50 p-6 text-red-950">
       <h2 className="text-xl font-semibold">Remove product</h2>
-      <p className="mt-2 text-sm">Unused products are deleted permanently. Products connected to stock, serials, orders, or finance are archived automatically so their business history remains intact.</p>
-      <form action={deleteProductAction.bind(null, id)}><ConfirmSubmitButton confirmation={`Remove ${product.name}? Protected business history will be archived automatically.`} className="mt-4 rounded border border-red-700 px-4 py-2 font-semibold text-red-800">Delete or archive product</ConfirmSubmitButton></form>
+      <p className="mt-2 text-sm">{deletionMode?.permanentEnabled ? "Permanent Deletion Mode is enabled. Unused products will be removed permanently; protected dependencies must be removed first." : "Archive protection is enabled. This product will be hidden and moved to the recoverable Archive."}</p>
+      <form action={deleteProductAction.bind(null, id)}><ConfirmSubmitButton confirmation={`${deletionActionCopy(Boolean(deletionMode?.permanentEnabled)).confirmation} Product: ${product.name}`} className="mt-4 rounded border border-red-700 px-4 py-2 font-semibold text-red-800">{deletionActionCopy(Boolean(deletionMode?.permanentEnabled)).button}</ConfirmSubmitButton></form>
     </section> : null}
   </DashboardShell>;
 }

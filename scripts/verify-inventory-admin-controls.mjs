@@ -22,7 +22,7 @@ for (const token of ["Current location", "serialized unit(s)", 'currency: "BDT"'
 const productForm = read("components/inventory/ProductForm.tsx");
 if (!productForm.includes('name="currency" value="BDT"')) throw new Error("Product administration is not locked to BDT.");
 const productActions = read("app/admin/products/actions.ts");
-for (const token of ["deleteProductAction", 'status:"archived"', "Protected inventory, serial, order, or financial history", "business history were preserved"]) {
+for (const token of ["deleteProductAction", 'status: "archived"', "getDeletionMode", "registerArchiveEntry"]) {
   if (!productActions.includes(token)) throw new Error(`Guarded product deletion is missing ${token}.`);
 }
 const catalogueActions = read("app/admin/catalog-actions.ts");
@@ -31,7 +31,7 @@ for (const token of ["deleteBrandAction", "deleteAttributeAction"]) if (!catalog
 const userActions = read("app/admin/users/[id]/actions.ts");
 for (const token of ["resetUserPasswordAction", "deleteUserAction", "final active administrator", "password value was not recorded"]) if (!userActions.includes(token)) throw new Error(`Account administration is missing ${token}`);
 const userPage = read("app/admin/users/[id]/page.tsx");
-for (const token of ["Authentication account", "Passwords are never readable", "Set temporary password", "Delete or archive account"]) if (!userPage.includes(token)) throw new Error(`User detail is missing ${token}`);
+for (const token of ["Authentication account", "Passwords are never readable", "Set temporary password", "deletionActionCopy"]) if (!userPage.includes(token)) throw new Error(`User detail is missing ${token}`);
 if (/display current password|show current password/i.test(userPage)) throw new Error("The UI must never claim that stored passwords are readable.");
 
 console.log("Inventory standardization and guarded admin controls verification passed.");

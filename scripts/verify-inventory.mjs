@@ -49,7 +49,7 @@ assert.ok(navigation.includes('label:"Accounting",route:routes.adminAccounting')
 assert.ok(navigation.includes('label:"HR",route:routes.adminHr'), "Implemented HR needs its real route");
 assert.ok(navigation.includes('label:"Quotations",route:routes.adminQuotations'), "Implemented Quotations needs its real route");
 assert.ok(navigation.includes('label:"Support",route:routes.adminSupport'), "Implemented Support needs its real route");
-assert.ok(navigation.includes('label:"Settings",route:routes.adminPaymentSettings'), "Implemented Settings needs its real route");
+assert.ok(navigation.includes('label:"Settings",route:routes.adminDataManagement'), "Implemented Settings needs its real route");
 const routes = ["app/admin/products/page.tsx", "app/admin/products/new/page.tsx", "app/admin/inventory/page.tsx", "app/admin/inventory/adjustments/new/page.tsx", "app/admin/inventory/movements/page.tsx", "app/admin/warehouses/page.tsx", "app/admin/serials/page.tsx", "app/admin/inventory/export/route.ts", "app/admin/sales/page.tsx"];
 await Promise.all(routes.map((route) => access(new URL(route, root))));
 console.log(`Inventory static verification passed: ${tables.length} core tables, 4 RPCs, ${labels.length} navigation items, and ${routes.length} route entry points.`);

@@ -1,17 +1,71 @@
-# Human Resources
+# SEN Human Resources
 
-## Scope
+## Purpose and access
 
-The HR module extends existing authenticated staff profiles rather than creating a second identity system. An HR employee record links one-to-one to `profiles` and adds an employee number, department, job title, employment terms, work location, manager and optional salary information.
+The HR module uses the existing `profiles` account as identity and adds one
+`hr_employee_records` row for employment data. HR administration is restricted
+to administrators. Employees use `/employee/hr` for their own attendance,
+correction requests, leave balances, leave requests, goals, and HR
+notifications. They cannot read another employee's HR, salary, payroll,
+performance, or document records.
 
-The database also includes leave requests and daily attendance records. Leave review is implemented in the staff interface; attendance is a secured schema foundation for the next timekeeping phase.
+## Admin routes
 
-Departments are reusable organizational records. Employee records may reference existing work locations and active staff profiles, preserving the platform's shared organization and authentication boundaries.
+- `/admin/hr` — operational overview
+- `/admin/hr/employees` — employee directory and lifecycle
+- `/admin/hr/departments` — departments, teams, and designations
+- `/admin/hr/attendance` — daily attendance and CSV import
+- `/admin/hr/attendance/corrections` — correction approvals
+- `/admin/hr/leaves` — leave types, balances, and approvals
+- `/admin/hr/payroll` — payroll records and status
+- `/admin/hr/performance` — reviews and goals
+- `/admin/hr/reports` — protected CSV exports
+- `/admin/hr/settings` — work rules and attendance device registration
 
-## Security
+## Employee routes
 
-HR tables use Row Level Security. HR staff require `hr.view`; employee-record creation requires `hr.manage_employees`; leave approval or rejection requires `hr.manage_leave`. Sensitive mutations are performed through service-role-only database functions and generate central audit events.
+- `/employee/hr`
+- `/employee/hr/attendance`
+- `/employee/hr/attendance/corrections/new`
+- `/employee/hr/leaves`
+- `/employee/hr/leaves/new`
 
-## Route
+## Attendance CSV
 
-The staff route is `/admin/hr`. Administrators have full access; employees see it only when their effective permissions allow it.
+Upload a UTF-8 CSV from the attendance page. Required headers are
+`employee_number`, `work_date`, and `status`. Optional headers are `check_in`,
+`check_out`, and `notes`. Employee number and all rows are validated before
+records are written.
+
+## Fingerprint/camera device readiness
+
+SEN does not store raw fingerprints, face images, or reusable biometric
+templates. A future device or local gateway sends normalized events to
+`POST /api/hr/attendance-events` with the `x-sen-device-key` header.
+
+Example JSON:
+
+```json
+{
+  "eventUid": "stable-device-event-id",
+  "employeeExternalId": "device-employee-id",
+  "eventType": "check_in",
+  "occurredAt": "2026-07-30T01:00:00.000Z",
+  "metadata": { "terminal": "front-door" }
+}
+```
+
+The endpoint requires an active registered device and employee mapping,
+deduplicates events, stores safe metadata, and updates daily attendance. Device
+ingestion must be explicitly enabled in HR settings.
+
+## Security and deployment
+
+- HR tables use Row Level Security.
+- Admin actions require an authenticated administrator.
+- Self-service derives the employee from the signed-in profile.
+- Employee archival preserves historical and linked records.
+- HR documents use a private bucket and short-lived signed download URLs.
+- Device keys are stored only as hashes and displayed once when created.
+- Apply `202607300004_integrated_hr_management.sql` locally before hosted
+  Supabase. Never commit service keys or device keys.

@@ -16,7 +16,7 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
   await requireProfile(["admin"]);
   const params = await searchParams;
   const supabase = createSupabaseAdminClient();
-  let query = supabase.from("profiles").select("*").order("updated_at", { ascending: false }).limit(100);
+  let query = supabase.from("profiles").select("*").is("archived_at", null).order("updated_at", { ascending: false }).limit(100);
   if (params.role && allowedRoles.has(params.role)) query = query.eq("role", params.role);
   if (params.status && allowedStatuses.has(params.status)) query = query.eq("status", params.status);
   if (params.q?.trim()) query = query.or(`email.ilike.%${params.q.slice(0, 80)}%,full_name.ilike.%${params.q.slice(0, 80)}%,phone.ilike.%${params.q.slice(0, 80)}%,company_name.ilike.%${params.q.slice(0, 80)}%`);
