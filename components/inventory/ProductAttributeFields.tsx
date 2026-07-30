@@ -4,8 +4,8 @@ import { useState } from "react";
 
 type Row = { name: string; values: string; universal: boolean; variation: boolean };
 
-export function ProductAttributeFields({ productType }: { productType: string }) {
-  const [rows, setRows] = useState<Row[]>([]);
+export function ProductAttributeFields({ productType, suggestions = [] }: { productType: string; suggestions?: Row[] }) {
+  const [rows, setRows] = useState<Row[]>(suggestions);
   const update = (index: number, patch: Partial<Row>) => setRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, ...patch } : row));
   if (productType !== "variable") return null;
   return <section className="rounded-xl border bg-[var(--surface)] p-6">

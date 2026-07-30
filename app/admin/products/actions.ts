@@ -7,9 +7,15 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
 import { registerArchiveEntry, removeArchiveEntry } from "@/lib/deletion/archive";
 import { getDeletionMode } from "@/lib/deletion/settings";
-import { checked, optionalMoney, optionalNumber, optionalText, optionalWholeNumber, productStatuses, productTypes, requiredText, slugify, uuidOrNull, businessCategories } from "@/lib/inventory/validation";
+import { checked, optionalMoney, optionalNumber, optionalText, optionalWholeNumber, productStatuses, productTypes, requiredText, slugify, uuidOrNull } from "@/lib/inventory/validation";
 import { sanitizeProductHtml } from "@/lib/inventory/html";
 import { automaticSku, normalizeIdentifier } from "@/lib/inventory/identifiers";
+import {
+  categorySpecificationInput,
+  mergeCategorySpecifications,
+  parseStoredSpecifications,
+} from "@/lib/inventory/category-specifications";
+import type { CategoryFieldDefinition } from "@/lib/catalog/business-category-domain";
 import {
   buildProductImagePath,
   sanitizeMediaFileName,
@@ -20,13 +26,13 @@ import {
 function target(id?: string, type: "success" | "error" = "success", message = "Saved") { return id ? `/admin/products/${id}?${type}=${encodeURIComponent(message)}` : `/admin/products?${type}=${encodeURIComponent(message)}`; }
 function createErrorTarget(message: string) { return `/admin/products/new?error=${encodeURIComponent(message)}`; }
 function payload(form: FormData) {
-  const name = requiredText(form, "name"), sku = requiredText(form, "sku", 100), product_type = String(form.get("product_type")), status = String(form.get("status")), sen_business_category = String(form.get("sen_business_category")), regular_price = optionalMoney(form, "regular_price", "Regular price"), sale_price = optionalMoney(form, "sale_price", "Sale price"), stock_status = String(form.get("stock_status") ?? "in_stock");
-  if (!productTypes.includes(product_type as never) || !productStatuses.includes(status as never) || !businessCategories.includes(sen_business_category as never) || !["in_stock", "out_of_stock", "on_backorder"].includes(stock_status)) throw new Error("Invalid product type, status, business category, or stock status.");
+  const name = requiredText(form, "name"), sku = requiredText(form, "sku", 100), product_type = String(form.get("product_type")), status = String(form.get("status")), regular_price = optionalMoney(form, "regular_price", "Regular price"), sale_price = optionalMoney(form, "sale_price", "Sale price"), stock_status = String(form.get("stock_status") ?? "in_stock");
+  if (!productTypes.includes(product_type as never) || !productStatuses.includes(status as never) || !["in_stock", "out_of_stock", "on_backorder"].includes(stock_status)) throw new Error("Invalid product type, status, or stock status.");
   if (sale_price !== null && regular_price !== null && sale_price > regular_price) throw new Error("Sale price cannot exceed regular price.");
   const currency = requiredText(form, "currency", 3).toUpperCase(); if (currency !== "BDT") throw new Error("SEN product prices must use BDT.");
-  let specifications = {}; try { specifications = JSON.parse(String(form.get("specifications") ?? "{}")); } catch { throw new Error("Specifications must be valid JSON."); }
+  const specifications = parseStoredSpecifications(String(form.get("specifications") ?? "{}"));
   const serialTracking = checked(form, "serial_tracking_required"), modelNumber = optionalText(form, "model_number", 160); if (serialTracking && !modelNumber) throw new Error("Model number is required for serial-tracked products.");
-  return { name, sku, model_number: modelNumber, slug: slugify(String(form.get("slug") || name)), product_type, status, sen_business_category, brand_id: uuidOrNull(form.get("brand_id")), barcode: optionalText(form, "barcode", 100), manufacturer_part_number: optionalText(form, "manufacturer_part_number", 100), short_description: sanitizeProductHtml(optionalText(form, "short_description", 4000)), description: sanitizeProductHtml(optionalText(form, "description", 20000)), specifications, internal_notes: optionalText(form, "internal_notes", 5000), warranty_information: optionalText(form, "warranty_information", 1000), purchase_cost: optionalMoney(form, "purchase_cost", "Purchase cost"), regular_price, sale_price, currency, weight: optionalNumber(form, "weight"), length: optionalNumber(form, "length"), width: optionalNumber(form, "width"), height: optionalNumber(form, "height"), country_of_origin: optionalText(form, "country_of_origin", 100), manage_stock: checked(form, "manage_stock"), stock_status, low_stock_threshold: optionalWholeNumber(form, "low_stock_threshold", "Low-stock threshold") ?? 0, allow_backorders: checked(form, "allow_backorders"), sold_individually: checked(form, "sold_individually"), serial_tracking_required: serialTracking, batch_tracking_enabled: checked(form, "batch_tracking_enabled"), featured: checked(form, "featured"), public_catalogue_visible: checked(form, "public_catalogue_visible") };
+  return { name, sku, model_number: modelNumber, slug: slugify(String(form.get("slug") || name)), product_type, status, brand_id: uuidOrNull(form.get("brand_id")), barcode: optionalText(form, "barcode", 100), manufacturer_part_number: optionalText(form, "manufacturer_part_number", 100), short_description: sanitizeProductHtml(optionalText(form, "short_description", 4000)), description: sanitizeProductHtml(optionalText(form, "description", 20000)), specifications, internal_notes: optionalText(form, "internal_notes", 5000), warranty_information: optionalText(form, "warranty_information", 1000), purchase_cost: optionalMoney(form, "purchase_cost", "Purchase cost"), regular_price, sale_price, currency, weight: optionalNumber(form, "weight"), length: optionalNumber(form, "length"), width: optionalNumber(form, "width"), height: optionalNumber(form, "height"), country_of_origin: optionalText(form, "country_of_origin", 100), manage_stock: checked(form, "manage_stock"), stock_status, low_stock_threshold: optionalWholeNumber(form, "low_stock_threshold", "Low-stock threshold") ?? 0, allow_backorders: checked(form, "allow_backorders"), sold_individually: checked(form, "sold_individually"), serial_tracking_required: serialTracking, batch_tracking_enabled: checked(form, "batch_tracking_enabled"), featured: checked(form, "featured"), public_catalogue_visible: checked(form, "public_catalogue_visible") };
 }
 function safeProductError(message: string) {
   if (/SKU already exists|duplicate key.*sku/i.test(message)) return "That SKU is already used by a product or variation.";
@@ -86,9 +92,28 @@ async function saveSubmittedAttributes(productId: string, form: FormData) {
   }
 }
 async function saveProduct(actorId: string, productId: string | null, form: FormData, canManageIdentifiers: boolean) {
-  const data = payload(form); await validateProductStockModel(productId, data);
-  if (!productId) data.public_catalogue_visible = true;
+  const baseData = payload(form);
+  const businessCategoryId = uuidOrNull(form.get("business_category_id"));
+  if (!businessCategoryId) throw new Error("An active business category is required.");
   const db = createSupabaseAdminClient();
+  const [{ data: businessCategory, error: categoryError }, { data: fieldRows, error: fieldsError }] = await Promise.all([
+    db.from("business_categories").select("id,name").eq("id", businessCategoryId).eq("is_active", true).is("archived_at", null).maybeSingle(),
+    db.from("business_category_fields").select("field_key,label,field_type,placeholder,help_text,unit,options,is_required,is_filterable,use_for_variations,is_active,sort_order").eq("business_category_id", businessCategoryId).eq("is_active", true).order("sort_order"),
+  ]);
+  if (categoryError || fieldsError || !businessCategory) throw new Error("An active business category is required.");
+  const categoryFields = (fieldRows ?? []) as CategoryFieldDefinition[];
+  const specifications = mergeCategorySpecifications(
+    categoryFields,
+    categorySpecificationInput(form, categoryFields),
+    baseData.specifications,
+  );
+  const data = {
+    ...baseData,
+    sen_business_category: businessCategory.name,
+    specifications,
+  };
+  await validateProductStockModel(productId, data);
+  if (!productId) data.public_catalogue_visible = true;
   const { data: brand } = data.brand_id ? await db.from("brands").select("name").eq("id", data.brand_id).eq("is_active", true).maybeSingle() : { data: null };
   if (!brand || !data.model_number) throw new Error("An active brand and model number are required.");
   const generatedSku = automaticSku(brand.name, data.model_number), customSku = checked(form, "custom_sku");
@@ -361,10 +386,16 @@ export async function importProductsCsvAction(form: FormData) {
         const result = await db.from("brands").insert({ name: record.brand.slice(0, 120), slug: `${slugify(record.brand)}-${crypto.randomUUID().slice(0, 6)}` }).select("id").single();
         if (result.error || !result.data) throw new Error("brand could not be created"); brand = result.data;
       }
-      let { data: category } = await db.from("product_categories").select("id").ilike("name", record.category).maybeSingle();
+      const requestedBusinessCategory = record.business_category?.trim() || "Others";
+      let { data: businessCategory } = await db.from("business_categories").select("id,name").is("archived_at", null).eq("is_active", true).ilike("name", requestedBusinessCategory).maybeSingle();
+      if (!businessCategory) {
+        const fallback = await db.from("business_categories").select("id,name").eq("slug", "others").eq("is_active", true).is("archived_at", null).maybeSingle();
+        businessCategory = fallback.data;
+      }
+      if (!businessCategory) throw new Error("an active business category is required");
+      let { data: category } = await db.from("product_categories").select("id").eq("business_category_id", businessCategory.id).ilike("name", record.category).maybeSingle();
       if (!category) {
-        const business = businessCategories.includes(record.business_category as never) ? record.business_category : "Others";
-        const result = await db.from("product_categories").insert({ name: record.category.slice(0, 120), slug: `${slugify(record.category)}-${crypto.randomUUID().slice(0, 6)}`, sen_business_category: business }).select("id").single();
+        const result = await db.from("product_categories").insert({ name: record.category.slice(0, 120), slug: `${slugify(record.category)}-${crypto.randomUUID().slice(0, 6)}`, business_category_id: businessCategory.id, sen_business_category: businessCategory.name }).select("id").single();
         if (result.error || !result.data) throw new Error("category could not be created"); category = result.data;
       }
       const productForm = new FormData();
@@ -372,7 +403,7 @@ export async function importProductsCsvAction(form: FormData) {
         name: record.name, model_number: record.model, sku: record.sku || automaticSku(record.brand, record.model), brand_id: brand.id, category_id: category.id,
         product_type: ["simple", "variable"].includes(record.product_type) ? record.product_type : "simple",
         status: ["draft", "active"].includes(record.status) ? record.status : "draft",
-        sen_business_category: businessCategories.includes(record.business_category as never) ? record.business_category : "Others",
+        business_category_id: businessCategory.id,
         currency: "BDT", stock_status: ["in_stock", "out_of_stock", "on_backorder"].includes(record.stock_status) ? record.stock_status : "out_of_stock",
         purchase_cost: record.purchase_cost ?? "", regular_price: record.regular_price ?? "", sale_price: record.sale_price ?? "",
         short_description: record.short_description ?? "", description: record.description ?? "", specifications: record.specifications || "{}",

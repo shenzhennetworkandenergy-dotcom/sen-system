@@ -230,6 +230,32 @@ before insert or update of business_category_id, sen_business_category
 on public.product_categories
 for each row execute function public.sync_business_category_name();
 
+create or replace function public.validate_product_category_business_match()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+declare
+  product_business_category_id uuid;
+  classification_business_category_id uuid;
+begin
+  select business_category_id into product_business_category_id
+  from public.products where id = new.product_id;
+  select business_category_id into classification_business_category_id
+  from public.product_categories where id = new.category_id;
+  if product_business_category_id is distinct from classification_business_category_id then
+    raise exception 'Product classification must use the selected business category';
+  end if;
+  return new;
+end
+$$;
+
+drop trigger if exists validate_product_category_business_match
+on public.product_category_assignments;
+create trigger validate_product_category_business_match
+before insert or update on public.product_category_assignments
+for each row execute function public.validate_product_category_business_match();
+
 alter table public.business_categories enable row level security;
 alter table public.business_category_fields enable row level security;
 
