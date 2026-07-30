@@ -2,6 +2,7 @@
 import { notFound } from "next/navigation";
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { ProductForm } from "@/components/inventory/ProductForm";
+import { ProductGalleryUploader } from "@/components/inventory/ProductGalleryUploader";
 import { ConfirmSubmitButton } from "@/components/ui/ConfirmSubmitButton";
 import { requirePermission } from "@/lib/auth/permissions";
 import { getProductOptions } from "@/lib/inventory/products";
@@ -10,7 +11,6 @@ import {
   createVariationAction,
   deleteProductAction,
   updateProductAction,
-  uploadProductMediaAction,
 } from "../actions";
 import { manageProductMediaAction } from "../media-actions";
 
@@ -65,7 +65,6 @@ export default async function ProductDetailPage({
   };
   const update = updateProductAction.bind(null, id);
   const variation = createVariationAction.bind(null, id);
-  const upload = uploadProductMediaAction.bind(null, id);
   const manage = manageProductMediaAction.bind(null, id);
   const can = (key: string) => profile.role === "admin" || permissions.has(key);
   const expectedCount = (serialUnits ?? []).filter((unit) => unit.status === "expected").length;
@@ -135,12 +134,7 @@ export default async function ProductDetailPage({
           </form>
         </article>)}
       </div> : <p className="mt-3 text-[var(--muted-text)]">No product images uploaded.</p>}
-      <form action={upload} className="mt-5 grid gap-3 md:grid-cols-2">
-        <label>New image<input type="file" name="file" required accept="image/jpeg,image/png,image/webp" className="mt-1 block w-full rounded border p-2" /></label>
-        <label>Purpose<select name="media_purpose" className="mt-1 w-full rounded border p-2"><option value="gallery_image">Gallery image</option><option value="main_product_image">Main product image</option></select></label>
-        <label>Alt text<input name="alt_text" className="mt-1 w-full rounded border p-2" /></label>
-        <button className="self-end rounded border px-4 py-2 font-semibold">Upload image</button>
-      </form>
+      {can("products.manage_media") ? <ProductGalleryUploader productId={id} /> : null}
     </section>
 
     <div id="product-settings"><ProductForm action={update} options={options} product={formProduct} /></div>

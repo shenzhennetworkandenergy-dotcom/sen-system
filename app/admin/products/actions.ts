@@ -8,6 +8,12 @@ import { writeAuditLog } from "@/lib/audit/log";
 import { checked, optionalMoney, optionalNumber, optionalText, optionalWholeNumber, productStatuses, productTypes, requiredText, slugify, uuidOrNull, businessCategories } from "@/lib/inventory/validation";
 import { sanitizeProductHtml } from "@/lib/inventory/html";
 import { automaticSku, normalizeIdentifier } from "@/lib/inventory/identifiers";
+import {
+  buildProductImagePath,
+  sanitizeMediaFileName,
+  validateProductImageMetadata,
+  type ProductImageMetadata,
+} from "@/lib/inventory/product-media";
 
 function target(id?: string, type: "success" | "error" = "success", message = "Saved") { return id ? `/admin/products/${id}?${type}=${encodeURIComponent(message)}` : `/admin/products?${type}=${encodeURIComponent(message)}`; }
 function createErrorTarget(message: string) { return `/admin/products/new?error=${encodeURIComponent(message)}`; }
@@ -96,18 +102,50 @@ async function saveProduct(actorId: string, productId: string | null, form: Form
   return String(savedId);
 }
 
-async function uploadFormImages(productId:string,actorId:string,form:FormData){const db=createSupabaseAdminClient(),alt=String(form.get("image_alt_text")??"").slice(0,200),candidates:[File,string][]=[];const main=form.get("main_image");if(main instanceof File&&main.size)candidates.push([main,"main_product_image"]);for(const item of form.getAll("gallery_images"))if(item instanceof File&&item.size)candidates.push([item,"gallery_image"]);const failures:string[]=[];for(const[file,purpose]of candidates.slice(0,11)){if(file.size>10485760||!["image/jpeg","image/png","image/webp"].includes(file.type)){failures.push(file.name);continue}const ext={"image/jpeg":"jpg","image/png":"png","image/webp":"webp"}[file.type],path=`${productId}/${crypto.randomUUID()}.${ext}`;if(purpose==="main_product_image")await db.from("product_media").update({is_primary:false,media_purpose:"gallery_image"}).eq("product_id",productId).eq("is_primary",true);const{error:uploadError}=await db.storage.from("product-media").upload(path,await file.arrayBuffer(),{contentType:file.type,upsert:false});if(uploadError){failures.push(file.name);continue}const{error}=await db.from("product_media").insert({product_id:productId,storage_path:path,original_file_name:file.name.replace(/[^A-Za-z0-9._-]/g,"_").slice(0,200),media_type:"image",media_purpose:purpose,visibility:"public",mime_type:file.type,file_size:file.size,alt_text:alt||file.name,is_primary:purpose==="main_product_image",uploaded_by:actorId});if(error){await db.storage.from("product-media").remove([path]);failures.push(file.name)}}return failures;}
+async function uploadFormImages(productId: string, actorId: string, form: FormData) {
+  const image = form.get("main_image");
+  if (!(image instanceof File) || !image.size) return [];
+  try {
+    validateProductImageMetadata(image);
+  } catch {
+    return [image.name];
+  }
+  const db = createSupabaseAdminClient();
+  const path = buildProductImagePath(productId, image.type);
+  const { error: uploadError } = await db.storage
+    .from("product-media")
+    .upload(path, await image.arrayBuffer(), { contentType: image.type, upsert: false });
+  if (uploadError) return [image.name];
+  const { error } = await db.from("product_media").insert({
+    product_id: productId,
+    storage_path: path,
+    original_file_name: sanitizeMediaFileName(image.name),
+    media_type: "image",
+    media_purpose: "main_product_image",
+    visibility: "public",
+    mime_type: image.type,
+    file_size: image.size,
+    alt_text: image.name,
+    is_primary: true,
+    uploaded_by: actorId,
+  });
+  if (error) {
+    await db.storage.from("product-media").remove([path]);
+    return [image.name];
+  }
+  return [];
+}
 
 export async function createProductAction(form: FormData) {
   const { profile, permissions } = await requirePermission("products.create");
   let savedId: string;
   try { savedId = await saveProduct(profile.id, null, form, profile.role==="admin"||permissions.has("products.manage_identifiers")); } catch (error) { const message = error instanceof Error ? error.message : "Unknown"; console.error("Product create failed", { message }); redirect(createErrorTarget(/required|Invalid|price|JSON|Currency|already exists|Permission/i.test(message) ? message : safeProductError(message))); }
-  const failures=await uploadFormImages(savedId,profile.id,form); revalidatePath("/admin/products"); revalidatePath("/products"); if(form.get("submit_intent")==="save_generate") redirect(`/admin/products/${savedId}/serials/new`); redirect(target(savedId, failures.length?"error":"success", failures.length?`Product created, but ${failures.length} image(s) failed to upload.`:"Product created and is now visible in the product administration list."));
+  revalidatePath("/admin/products"); revalidatePath("/products"); if(form.get("submit_intent")==="save_generate") redirect(`/admin/products/${savedId}/serials/new`); redirect(target(savedId, "success", "Product created. You can now add its main and gallery images below."));
 }
 export async function updateProductAction(productId: string, form: FormData) {
   const { profile, permissions } = await requirePermission("products.edit");
   try { await saveProduct(profile.id, productId, form, profile.role==="admin"||permissions.has("products.manage_identifiers")); } catch (error) { const message = error instanceof Error ? error.message : "Unknown"; console.error("Product update failed", { message }); redirect(target(productId, "error", /required|Invalid|price|JSON|Currency|variations|already exists|Permission/i.test(message) ? message : safeProductError(message))); }
-  const failures=await uploadFormImages(productId,profile.id,form); revalidatePath(`/admin/products/${productId}`); revalidatePath("/admin/products"); revalidatePath("/products"); if(form.get("submit_intent")==="save_generate") redirect(`/admin/products/${productId}/serials/new`); redirect(target(productId, failures.length?"error":"success", failures.length?`Product updated, but ${failures.length} image(s) failed to upload.`:"Product updated."));
+  revalidatePath(`/admin/products/${productId}`); revalidatePath("/admin/products"); revalidatePath("/products"); if(form.get("submit_intent")==="save_generate") redirect(`/admin/products/${productId}/serials/new`); redirect(target(productId, "success", "Product updated."));
 }
 export async function archiveProductAction(form: FormData) { const { profile } = await requirePermission("products.archive"); const ids = [...new Set(form.getAll("productIds").map(String))].filter((item) => /^[0-9a-f-]{36}$/i.test(item)).slice(0, 100); if (!ids.length) redirect(target(undefined, "error", "Select at least one product.")); const db = createSupabaseAdminClient(); const { error } = await db.from("products").update({ status: "archived", updated_by: profile.id, updated_at: new Date().toISOString() }).in("id", ids); if (error) redirect(target(undefined, "error", "Unable to archive products.")); await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "product.archived", module: "products", entityType: "product", description: "Products archived.", newValues: { product_ids: ids, count: ids.length } }); revalidatePath("/admin/products"); redirect(target(undefined, "success", `${ids.length} product(s) archived.`)); }
 export async function deleteProductAction(productId: string) {
@@ -235,4 +273,162 @@ export async function createVariationAction(productId: string, form: FormData) {
   await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "product.variation_created", module: "products", entityType: "product_variation", entityId: created.id, description: "Product variation created.", newValues: { product_id: productId, sku: data.sku, combination_key: data.combination_key } });
   revalidatePath(`/admin/products/${productId}`); redirect(target(productId, "success", "Variation created."));
 }
-export async function uploadProductMediaAction(productId: string, form: FormData) { const { profile } = await requirePermission("products.manage_media"); const file = form.get("file"); if (!(file instanceof File) || file.size === 0 || file.size > 10485760 || !["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(file.type)) redirect(target(productId, "error", "Choose a JPG, PNG, WebP, or PDF up to 10 MB.")); const purposes=["main_product_image","gallery_image","warranty_document","purchase_invoice","supplier_invoice","packing_list","customs_document","internal_product_document"],purpose=String(form.get("media_purpose")??"gallery_image");if(!purposes.includes(purpose))redirect(target(productId,"error","Invalid media purpose."));const isImage=file.type!=="application/pdf";if(isImage&&!['main_product_image','gallery_image'].includes(purpose))redirect(target(productId,"error","Images must be main or gallery product images."));if(!isImage&&['main_product_image','gallery_image'].includes(purpose))redirect(target(productId,"error","Product images require JPG, PNG, or WebP."));const visibility=['main_product_image','gallery_image'].includes(purpose)?'public':['warranty_document','purchase_invoice'].includes(purpose)?'customer_order_restricted':'internal'; const ext = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "application/pdf": "pdf" }[file.type]!; const path = `${productId}/${crypto.randomUUID()}.${ext}`, db = createSupabaseAdminClient(); const { error: uploadError } = await db.storage.from("product-media").upload(path, await file.arrayBuffer(), { contentType: file.type, upsert: false }); if (uploadError) redirect(target(productId, "error", "Unable to upload media.")); const { error } = await db.from("product_media").insert({ product_id: productId, storage_path: path, original_file_name:file.name.replace(/[^A-Za-z0-9._-]/g,"_").slice(0,200), media_type: isImage ? "image" : "document", media_purpose:purpose,visibility,mime_type: file.type, file_size: file.size, alt_text: String(form.get("alt_text") ?? "").slice(0, 200),is_primary:purpose==='main_product_image',uploaded_by:profile.id }); if (error) { await db.storage.from("product-media").remove([path]); redirect(target(productId, "error", "Unable to save media details.")); } await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "product.media_added", module: "products", entityType: "product", entityId: productId, description: "Product media added.", newValues: { media_type: isImage ? "image" : "document",media_purpose:purpose,visibility } }); revalidatePath(`/admin/products/${productId}`); redirect(target(productId, "success", "Media uploaded.")); }
+
+type ProductImagePurpose = "main_product_image" | "gallery_image";
+type ProductImageUploadRequest = ProductImageMetadata & {
+  purpose: ProductImagePurpose;
+  altText?: string;
+};
+type PreparedProductImageUpload = ProductImageUploadRequest & {
+  path: string;
+};
+
+function validateImagePurpose(purpose: string): asserts purpose is ProductImagePurpose {
+  if (!["main_product_image", "gallery_image"].includes(purpose)) {
+    throw new Error("Choose main image or gallery image.");
+  }
+}
+
+function validatePreparedImagePath(productId: string, path: string, mimeType: string) {
+  const expectedPath = buildProductImagePath(
+    productId,
+    mimeType,
+    path.split("/").at(-1)?.split(".")[0] ?? "",
+  );
+  if (path !== expectedPath) throw new Error("Invalid product image upload path.");
+}
+
+export async function prepareProductImageUploadAction(
+  productId: string,
+  request: ProductImageUploadRequest,
+) {
+  await requirePermission("products.manage_media");
+  validateProductImageMetadata(request);
+  validateImagePurpose(request.purpose);
+  const db = createSupabaseAdminClient();
+  const { data: product, error: productError } = await db
+    .from("products")
+    .select("id")
+    .eq("id", productId)
+    .maybeSingle();
+  if (productError || !product) throw new Error("Product not found.");
+
+  const path = buildProductImagePath(productId, request.type);
+  const { data, error } = await db.storage
+    .from("product-media")
+    .createSignedUploadUrl(path);
+  if (error || !data?.token) throw new Error("Unable to prepare this image upload.");
+  return { path, token: data.token };
+}
+
+export async function cleanupPreparedProductImageUploadAction(productId: string, path: string) {
+  await requirePermission("products.manage_media");
+  if (!path.startsWith(`${productId}/`)) return;
+  await createSupabaseAdminClient().storage.from("product-media").remove([path]);
+}
+
+export async function finalizeProductImageUploadAction(
+  productId: string,
+  upload: PreparedProductImageUpload,
+) {
+  const { profile } = await requirePermission("products.manage_media");
+  validateProductImageMetadata(upload);
+  validateImagePurpose(upload.purpose);
+  validatePreparedImagePath(productId, upload.path, upload.type);
+
+  const db = createSupabaseAdminClient();
+  const [{ data: product, error: productError }, { data: stored, error: storedError }] = await Promise.all([
+    db.from("products").select("id,slug").eq("id", productId).maybeSingle(),
+    db.storage.from("product-media").info(upload.path),
+  ]);
+  if (productError || !product) {
+    await db.storage.from("product-media").remove([upload.path]);
+    throw new Error("Product not found.");
+  }
+  const storedMetadata = stored?.metadata as Record<string, unknown> | undefined;
+  const storedSize = Number(stored?.size ?? storedMetadata?.size);
+  const storedType = String(stored?.contentType ?? storedMetadata?.mimetype ?? "");
+  if (storedError || !stored || storedSize !== upload.size || storedType !== upload.type) {
+    await db.storage.from("product-media").remove([upload.path]);
+    throw new Error("The uploaded image could not be verified.");
+  }
+
+  const { data: lastMedia } = await db
+    .from("product_media")
+    .select("sort_order")
+    .eq("product_id", productId)
+    .order("sort_order", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const { data: created, error: insertError } = await db.from("product_media").insert({
+    product_id: productId,
+    storage_path: upload.path,
+    original_file_name: sanitizeMediaFileName(upload.name),
+    media_type: "image",
+    media_purpose: upload.purpose === "main_product_image" ? "gallery_image" : upload.purpose,
+    visibility: "public",
+    mime_type: upload.type,
+    file_size: upload.size,
+    alt_text: String(upload.altText || upload.name).trim().slice(0, 200),
+    is_primary: false,
+    sort_order: Number(lastMedia?.sort_order ?? -1) + 1,
+    uploaded_by: profile.id,
+  }).select("id").single();
+  if (insertError || !created) {
+    await db.storage.from("product-media").remove([upload.path]);
+    throw new Error("Unable to save this image.");
+  }
+
+  if (upload.purpose === "main_product_image") {
+    const { data: previousMain } = await db
+      .from("product_media")
+      .select("id")
+      .eq("product_id", productId)
+      .eq("media_type", "image")
+      .eq("is_primary", true)
+      .maybeSingle();
+    const { error: demoteError } = await db
+      .from("product_media")
+      .update({ is_primary: false, media_purpose: "gallery_image" })
+      .eq("product_id", productId)
+      .eq("media_type", "image")
+      .eq("is_primary", true);
+    const { error: promoteError } = demoteError
+      ? { error: demoteError }
+      : await db
+        .from("product_media")
+        .update({ is_primary: true, media_purpose: "main_product_image" })
+        .eq("id", created.id);
+    if (promoteError) {
+      if (previousMain?.id) {
+        await db.from("product_media").update({
+          is_primary: true,
+          media_purpose: "main_product_image",
+        }).eq("id", previousMain.id);
+      }
+      await db.from("product_media").delete().eq("id", created.id);
+      await db.storage.from("product-media").remove([upload.path]);
+      throw new Error("Unable to set the main product image.");
+    }
+  }
+
+  await writeAuditLog({
+    actorId: profile.id,
+    actorRole: profile.role,
+    action: "product.media_added",
+    module: "products",
+    entityType: "product",
+    entityId: productId,
+    description: "Product image added through a signed direct upload.",
+    newValues: {
+      media_purpose: upload.purpose,
+      storage_path: upload.path,
+      file_size: upload.size,
+    },
+  });
+  revalidatePath(`/admin/products/${productId}`);
+  revalidatePath("/admin/products");
+  revalidatePath("/products");
+  revalidatePath(`/products/${product.slug}`);
+  return { mediaId: created.id };
+}
