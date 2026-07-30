@@ -119,7 +119,7 @@ export async function receivePurchaseOrderAction(purchaseId: string, form: FormD
   try {
     items = items.map((item, index) => ({
       ...item,
-      quantity_received: parseWholeNumber(item.quantity_received, `Receipt item ${index + 1} quantity`, { required: true, minimum: 0 }),
+      quantity: parseWholeNumber(item.quantity, `Receipt item ${index + 1} quantity`, { required: true, minimum: 0 }),
     }));
   } catch (error) {
     redirect(target(purchaseId, "error", error instanceof Error ? error.message : "Receipt quantities are invalid."));

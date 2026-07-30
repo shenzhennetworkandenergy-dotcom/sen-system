@@ -18,7 +18,7 @@ type Snapshot = {
 };
 
 const text = (value: unknown, fallback = "") => String(value ?? fallback);
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 8;
 
 function SenDocumentHeader({
   title,
@@ -58,7 +58,7 @@ function SenDocumentHeader({
             <h1 className="text-lg font-black tracking-tight">
               SHENZHEN ENERGY AND NETWORKS
             </h1>
-            <p className="mt-1 max-w-[390px] text-[10px] leading-4 text-white/85">
+            <p className="mt-1 max-w-[390px] text-xs leading-5 text-white/90">
               House- 67, Level-3, Laboratory Road, New Elephant Road
               (Backside of Multiplan Center), Dhaka- 1205
               <br />
@@ -70,11 +70,11 @@ function SenDocumentHeader({
         <div className="text-right">
           <h2 className="text-2xl font-black tracking-[0.08em]">{title}</h2>
           <p className="mt-1 font-mono text-xs">{number}</p>
-          <p className="mt-1 text-[10px] text-white/80">
+          <p className="mt-1 text-xs text-white/85">
             Issue: {new Date(createdAt).toLocaleDateString("en-GB")}
           </p>
           {pages > 1 ? (
-            <p className="text-[10px] text-white/70">
+            <p className="text-xs text-white/75">
               Page {page} of {pages}
             </p>
           ) : null}
@@ -101,18 +101,18 @@ function AddressBlock({
 }) {
   return (
     <div>
-      <p className="border-b border-slate-400 pb-1 text-[10px] font-black uppercase tracking-[0.16em] text-indigo-800">
+      <p className="border-b border-slate-400 pb-1 text-xs font-black uppercase tracking-[0.14em] text-indigo-800">
         {title}
       </p>
       <p className="mt-2 text-sm font-black">{name}</p>
       {company ? <p className="text-xs">{company}</p> : null}
       {lines?.filter(Boolean).map((line) => (
-        <p key={line} className="text-[11px] leading-4 text-slate-700">
+        <p key={line} className="text-xs leading-5 text-slate-700">
           {line}
         </p>
       ))}
-      {phone ? <p className="text-[11px] text-slate-700">{phone}</p> : null}
-      {email ? <p className="text-[11px] text-slate-700">{email}</p> : null}
+      {phone ? <p className="text-xs text-slate-700">{phone}</p> : null}
+      {email ? <p className="text-xs text-slate-700">{email}</p> : null}
     </div>
   );
 }
@@ -202,13 +202,13 @@ export default async function SaleDocumentPage({
         }
       `}</style>
 
-      <div className="bg-slate-200 py-5 print:bg-white print:py-0">
+      <div className="overflow-x-auto bg-slate-200 py-5 print:overflow-visible print:bg-white print:py-0">
         {pages.map((items, pageIndex) => {
           const lastPage = pageIndex === pages.length - 1;
           return (
             <main
               key={pageIndex}
-              className="document-page mx-auto mb-5 flex min-h-[297mm] w-[210mm] flex-col overflow-hidden bg-white text-slate-900 shadow-2xl break-after-page last:mb-0 last:break-after-auto print:shadow-none"
+              className="document-page mx-auto mb-5 flex min-h-[297mm] w-[210mm] flex-col overflow-hidden bg-white text-[13px] text-slate-900 shadow-2xl break-after-page last:mb-0 last:break-after-auto print:shadow-none"
             >
               <SenDocumentHeader
                 title={title}
@@ -249,7 +249,7 @@ export default async function SaleDocumentPage({
 
               <section className="px-6">
                 <div className="overflow-hidden border border-slate-300">
-                  <table className="w-full table-fixed text-left text-[11px]">
+                  <table className="w-full table-fixed text-left text-xs">
                     <thead className="bg-slate-900 text-white">
                       <tr>
                         <th className="w-[7%] px-2 py-2 text-center">No.</th>
@@ -276,7 +276,7 @@ export default async function SaleDocumentPage({
                           </td>
                           <td className="px-2 py-2 align-top">
                             <b>{text(item.product_name_snapshot)}</b>
-                            <span className="block font-mono text-[9px] text-slate-500">
+                            <span className="block font-mono text-[11px] leading-5 text-slate-600">
                               SKU {text(item.sku_snapshot, "—")}
                               {[item.brand_snapshot, item.model_number_snapshot]
                                 .filter(Boolean)
@@ -306,7 +306,7 @@ export default async function SaleDocumentPage({
               {lastPage ? (
                 <section className="px-6 pt-4">
                   {isInvoice ? (
-                    <div className="ml-auto w-[46%] text-[11px]">
+                    <div className="ml-auto w-[48%] text-xs">
                       {[
                         ["Subtotal", order.subtotal],
                         ["Discount", order.discount_amount],
@@ -334,7 +334,7 @@ export default async function SaleDocumentPage({
                         <span>Remaining balance</span>
                         <span>{money(remainingBalance, currency)}</span>
                       </p>
-                      <p className="mt-1 text-right text-[9px] font-semibold uppercase text-slate-500">
+                      <p className="mt-1 text-right text-[11px] font-semibold uppercase text-slate-600">
                         Payment:{" "}
                         {paidAmount === 0
                           ? "Unpaid"
@@ -347,10 +347,10 @@ export default async function SaleDocumentPage({
 
                   {isInvoice && payments?.length ? (
                     <div className="mt-4">
-                      <p className="text-[10px] font-black uppercase tracking-wide text-indigo-900">
+                      <p className="text-xs font-black uppercase tracking-wide text-indigo-900">
                         Payment history
                       </p>
-                      <table className="mt-1 w-full border-collapse text-[9px]">
+                      <table className="mt-1 w-full border-collapse text-[11px]">
                         <thead className="bg-slate-100 text-slate-700">
                           <tr>
                             <th className="border px-2 py-1 text-left">Amount paid</th>
@@ -383,10 +383,10 @@ export default async function SaleDocumentPage({
 
                   {snapshot.serials.length ? (
                     <div className="mt-3 border-t border-slate-300 pt-2">
-                      <p className="text-[10px] font-black uppercase tracking-wide">
+                      <p className="text-xs font-black uppercase tracking-wide">
                         Assigned serial numbers
                       </p>
-                      <p className="mt-1 text-[9px] leading-4 text-slate-600">
+                      <p className="mt-1 text-[11px] leading-5 text-slate-600">
                         {snapshot.serials
                           .map((serial) => text(serial.sen_serial))
                           .join(" · ")}
@@ -394,7 +394,7 @@ export default async function SaleDocumentPage({
                     </div>
                   ) : null}
 
-                  <div className="mt-8 grid grid-cols-2 gap-16 text-center text-[10px]">
+                  <div className="mt-8 grid grid-cols-2 gap-16 text-center text-xs">
                     <p className="border-t border-slate-500 pt-1 font-semibold">
                       Authorized signature
                     </p>
@@ -405,7 +405,7 @@ export default async function SaleDocumentPage({
                 </section>
               ) : null}
 
-              <footer className="mt-auto border-t border-slate-200 px-6 py-3 text-center text-[9px] text-slate-500">
+              <footer className="mt-auto border-t border-slate-200 px-6 py-3 text-center text-[11px] text-slate-600">
                 Thank you for choosing SEN · +8801805226599 · sen.com.bd ·
                 szwaqia@vip.163.com
                 <span className="ml-2">

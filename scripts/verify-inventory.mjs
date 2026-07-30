@@ -8,6 +8,8 @@ const hardening = await readFile(new URL("supabase/migrations/202607200004_inven
 const navigation = await readFile(new URL("lib/navigation/dashboard.ts", root), "utf8");
 const stock = await readFile(new URL("lib/inventory/stock.ts", root), "utf8");
 const inventoryActions = await readFile(new URL("app/admin/inventory/actions.ts", root), "utf8");
+const productListData = await readFile(new URL("lib/inventory/products.ts", root), "utf8");
+const productListPage = await readFile(new URL("app/admin/products/page.tsx", root), "utf8");
 const tables = ["product_categories", "brands", "attributes", "attribute_values", "warehouses", "warehouse_locations", "products", "product_variations", "product_media", "inventory_balances", "inventory_movements", "inventory_movement_items", "inventory_reservations", "serial_numbers"];
 for (const table of tables) assert.match(foundation, new RegExp(`create table public\\.${table}\\b`), `Missing ${table}`);
 for (const fn of ["admin_adjust_inventory", "admin_transfer_inventory"]) assert.match(foundation, new RegExp(`function public\\.${fn}\\b`), `Missing ${fn}`);
@@ -31,6 +33,11 @@ for (const parameter of ["actor_profile_id", "requested_warehouse_id", "requeste
 for (const parameter of ["source_id", "destination_id", "transfer_quantity"]) assert.ok(inventoryActions.includes(parameter), `Transfer RPC is missing ${parameter}`);
 assert.doesNotMatch(inventoryActions, /40P01[\s\S]{0,300}(retry|admin_transfer_inventory)/i);
 assert.match(stock, /export function deriveStockStatus/);
+assert.match(productListData, /const stockFilteredProducts = stockFilter/);
+assert.match(productListData, /stockFilteredProducts\.slice\(\(page - 1\) \* size, page \* size\)/);
+assert.match(productListData, /count: stockFilter \? stockFilteredProducts\.length : count \?\? 0/);
+assert.match(productListData, /export function productListPageHref/);
+assert.match(productListPage, /productListPageHref\(params,/);
 const labels = ["Overview", "Users", "Permissions", "Team Activity", "Employees", "Employee Activity", "CRM", "Products", "Orders", "Sales", "Quotations", "Inventory", "Warehouses", "Serial Tracking", "Work Locations", "Tracking Statuses", "Shipments", "Purchasing", "Suppliers", "Accounting", "HR", "Manufacturing", "Projects", "Support", "Reports", "AI Assistant", "Settings"];
 for (const label of labels) assert.ok(navigation.includes(`label:"${label}"`), `Navigation is missing ${label}`);
 for (const planned of ["Manufacturing", "Projects", "Reports", "AI Assistant"]) assert.ok(navigation.includes(`label:"${planned}",route:null`), `Planned item ${planned} needs a disabled route`);

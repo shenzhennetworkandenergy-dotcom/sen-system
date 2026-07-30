@@ -55,24 +55,69 @@ try {
   expect(Boolean(availableProduct), "No priced Bangladesh-stock product is available for exact search testing.");
 
   const sessionId = crypto.randomUUID();
+  const broad = await request(`/api/chatbot/search?q=740&sessionId=${sessionId}`, {
+    headers: { origin },
+  });
+  expect(broad.response.status === 200, "Broad 740 search did not return HTTP 200.");
+  expect(broad.json?.matchType === "suggestions", "Broad 740 search did not return suggestions.");
+  expect(
+    broad.json?.products?.length >= 1 && broad.json.products.length <= 6,
+    "Broad 740 search returned the wrong number of suggestions.",
+  );
+  expect(
+    broad.json?.products?.every((product) => product.name.toLowerCase().includes("740")),
+    "Broad 740 search returned a product whose title does not contain 740.",
+  );
+  const broadProduct = broad.json?.products?.find(
+    (product) => product.modelNumber === "DELL-R740" || product.sku === "DELL-R740",
+  ) ?? broad.json?.products?.[0];
+  if (broadProduct) {
+    const exactIdentifier = broadProduct.modelNumber || broadProduct.sku;
+    const exactProduct = await request(`/api/chatbot/search?q=${encodeURIComponent(exactIdentifier)}&sessionId=${sessionId}`, {
+      headers: { origin },
+    });
+    expect(exactProduct.json?.matchType === "confirmation", "Exact identifier did not require confirmation.");
+    expect(exactProduct.json?.product?.id === broadProduct.id, "Exact search returned the wrong product.");
+    expect(exactProduct.json?.product?.name === broadProduct.name, "Exact search omitted the complete product title.");
+    const allowedProductKeys = new Set([
+      "id", "variationId", "name", "slug", "sku", "modelNumber",
+      "shortDescription", "productType", "price", "priceMax",
+      "currency", "available", "availability", "variationLabel", "attributes",
+    ]);
+    expect(
+      Object.keys(exactProduct.json?.product ?? {}).every((key) => allowedProductKeys.has(key)),
+      "Product search exposed an unapproved field.",
+    );
+  }
   if (availableProduct) {
     const searchValue = availableProduct.model_number || availableProduct.name;
     const exact = await request(`/api/chatbot/search?q=${encodeURIComponent(searchValue)}&sessionId=${sessionId}`, {
       headers: { origin },
     });
     expect(exact.response.status === 200, "Exact product search did not return HTTP 200.");
-    expect(exact.json?.matchType === "exact" && exact.json?.available === true, "Exact product search was not classified as available.");
-    expect(Number(exact.json?.price) === Number(availableProduct.sale_price ?? availableProduct.regular_price), "Exact product search returned the wrong price.");
-    expect(
-      Object.keys(exact.json ?? {}).every((key) => ["matchType", "available", "price", "currency"].includes(key)),
-      "Product search exposed unnecessary fields.",
-    );
+    expect(exact.json?.matchType === "confirmation" && exact.json?.product?.available === true, "Exact product search was not classified as available.");
+    expect(Number(exact.json?.product?.price) === Number(availableProduct.sale_price ?? availableProduct.regular_price), "Exact product search returned the wrong price.");
   }
 
   const noMatch = await request(`/api/chatbot/search?q=${encodeURIComponent(`nonexistent-${crypto.randomUUID()}`)}&sessionId=${sessionId}`, {
     headers: { origin },
   });
   expect(noMatch.json?.matchType === "none", "A random nonexistent product did not return no match.");
+
+  const invalidContext = await request("/api/chatbot/inquiry/start", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      productQuery: "740",
+      selectedProducts: [{ productId: "not-a-uuid" }],
+      searchHistory: Array.from({ length: 21 }, () => ({ query: "740", resultProductIds: [] })),
+      sessionId: crypto.randomUUID(),
+      submissionKey: crypto.randomUUID(),
+      sourcePage: "/automated-chatbot-test",
+      website: "",
+    }),
+  });
+  expect(invalidContext.response.status === 400, "Invalid or excessive chatbot context was accepted.");
 
   const noOrigin = await request("/api/chatbot/inquiry/start", {
     method: "POST",
@@ -82,11 +127,25 @@ try {
   expect(noOrigin.response.status === 403, "Inquiry creation accepted a request without a same-origin header.");
 
   const submissionKey = crypto.randomUUID();
+  const selectedForInquiry = broadProduct;
   const draft = await request("/api/chatbot/inquiry/start", {
     method: "POST",
     headers,
     body: JSON.stringify({
-      productQuery: "CHATBOT AUTOMATED TEST unavailable product",
+      productQuery: "740",
+      selectedProducts: selectedForInquiry ? [{
+        productId: selectedForInquiry.id,
+        variationId: selectedForInquiry.variationId,
+        name: "FORGED PRODUCT TITLE",
+        price: 1,
+      }] : [],
+      searchHistory: [
+        { query: "740", resultProductIds: broad.json?.products?.map((product) => product.id) ?? [] },
+        {
+          query: selectedForInquiry?.modelNumber || selectedForInquiry?.sku || "R740",
+          resultProductIds: selectedForInquiry ? [selectedForInquiry.id] : [],
+        },
+      ],
       sessionId,
       submissionKey,
       sourcePage: "/automated-chatbot-test",
@@ -101,7 +160,7 @@ try {
     method: "POST",
     headers,
     body: JSON.stringify({
-      productQuery: "CHATBOT AUTOMATED TEST unavailable product",
+      productQuery: "740",
       sessionId,
       submissionKey,
       sourcePage: "/automated-chatbot-test",
@@ -124,11 +183,14 @@ try {
   });
   expect(wrongToken.response.status === 404, "A visitor could update an inquiry using the wrong token.");
 
-  for (const payload of [
-    { step: "phone", phoneNumber: "+8801712345678" },
-    { step: "whatsapp", whatsapp: "+8801712345678" },
-    { step: "consent" },
-  ]) {
+  const invalidWhatsapp = await request(`/api/chatbot/inquiry/${draft.json.inquiryId}`, {
+    method: "PATCH",
+    headers,
+    body: JSON.stringify({ step: "whatsapp", whatsapp: "invalid", updateToken: draft.json.updateToken, website: "" }),
+  });
+  expect(invalidWhatsapp.response.status === 400, "Invalid WhatsApp number was accepted.");
+
+  for (const payload of [{ step: "whatsapp", whatsapp: "+8801712345678" }, { step: "consent" }]) {
     const update = await request(`/api/chatbot/inquiry/${draft.json.inquiryId}`, {
       method: "PATCH",
       headers,
@@ -139,11 +201,15 @@ try {
 
   const { data: completed } = await admin
     .from("crm_chatbot_inquiries")
-    .select("status,phone_number,whatsapp,consent_to_contact,completed_at")
+    .select("status,phone_number,whatsapp,consent_to_contact,completed_at,search_history,selected_products")
     .eq("id", draft.json.inquiryId)
     .single();
   expect(completed?.status === "new" && completed.consent_to_contact === true, "Consent did not complete the inquiry.");
-  expect(completed?.phone_number === "+8801712345678" && completed.whatsapp === "+8801712345678", "Phone and WhatsApp were not stored separately.");
+  expect(completed?.phone_number === null && completed.whatsapp === "+8801712345678", "The WhatsApp-only contact was not stored correctly.");
+  expect(completed?.search_history?.length === 2, "Search history was not stored.");
+  expect(completed?.selected_products?.[0]?.id === selectedForInquiry?.id, "Selected product ID was not stored.");
+  expect(completed?.selected_products?.[0]?.name === selectedForInquiry?.name, "Selected product title was not rebuilt by the server.");
+  expect(completed?.selected_products?.[0]?.price !== 1, "A forged client product price was stored.");
   expect(Boolean(completed?.completed_at), "Completed inquiry has no completion timestamp.");
 
   const cancelSession = crypto.randomUUID();

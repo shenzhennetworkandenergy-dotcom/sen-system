@@ -1,4 +1,5 @@
 import { searchProductsForChatbot } from "@/lib/chatbot/search";
+import { searchWebsiteKnowledge } from "@/lib/chatbot/site-knowledge";
 import {
   clientIpHash,
   rateLimit,
@@ -25,6 +26,8 @@ export async function GET(request: Request) {
     return safeJsonResponse({ error: "Please wait a moment before searching again." }, { status: 429 });
   }
   try {
+    const websiteAnswer = searchWebsiteKnowledge(query);
+    if (websiteAnswer) return safeJsonResponse(websiteAnswer);
     return safeJsonResponse(await searchProductsForChatbot(query));
   } catch {
     return safeJsonResponse({ error: "Product search is temporarily unavailable." }, { status: 500 });

@@ -55,6 +55,27 @@ for (const product of products ?? []) {
     .eq("status", "active");
   if (variationError) throw variationError;
   expect((count ?? 0) > 0, `${product.name} has no active variations.`);
+  const { data: assignments, error: attributeError } = await db
+    .from("product_attributes")
+    .select("is_variation,attributes(name)")
+    .eq("product_id", product.id);
+  if (attributeError) throw attributeError;
+  const variationAttributes = (assignments ?? [])
+    .filter((assignment) => assignment.is_variation)
+    .map((assignment) => {
+      const relation = assignment.attributes;
+      return (Array.isArray(relation) ? relation[0] : relation)?.name;
+    })
+    .filter(Boolean);
+  if (product.name.includes("RAM")) {
+    expect(variationAttributes.includes("Capacity"), "RAM is missing the Capacity attribute.");
+    expect(variationAttributes.includes("Frequency"), "RAM is missing the Frequency attribute.");
+    expect(!variationAttributes.includes("Delivery Type"), "RAM incorrectly uses Delivery Type as a variation attribute.");
+  }
+  if (product.name.includes("SAS HDD")) {
+    expect(variationAttributes.includes("Storage Capacity"), "SAS HDD is missing Storage Capacity.");
+    expect(variationAttributes.includes("Form Factor"), "SAS HDD is missing Form Factor.");
+  }
 }
 
 if (checks.length) {

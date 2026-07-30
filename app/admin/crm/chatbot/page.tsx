@@ -12,6 +12,16 @@ const label = (value: string) =>
   value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 const dateTime = (value: string | null) =>
   value ? new Intl.DateTimeFormat("en-BD", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Dhaka" }).format(new Date(value)) : "—";
+const selectedProductNames = (value: unknown) =>
+  (Array.isArray(value) ? value : [])
+    .map((item) => (item as Record<string, unknown>).name)
+    .filter((name): name is string => typeof name === "string")
+    .join("\n") || "—";
+const searchQueries = (value: unknown) =>
+  (Array.isArray(value) ? value : [])
+    .map((item) => (item as Record<string, unknown>).query)
+    .filter((query): query is string => typeof query === "string")
+    .join(" → ") || "—";
 
 export default async function ChatbotInquiriesPage({
   searchParams,
@@ -27,7 +37,7 @@ export default async function ChatbotInquiriesPage({
   const size = 40;
   let query = createSupabaseAdminClient()
     .from("crm_chatbot_inquiries")
-    .select("id,inquiry_number,product_query,phone_number,whatsapp,status,consent_to_contact,source_page,created_at,completed_at", { count: "exact" })
+    .select("id,inquiry_number,product_query,search_history,selected_products,phone_number,whatsapp,status,consent_to_contact,source_page,created_at,completed_at", { count: "exact" })
     .order("created_at", { ascending: false })
     .range((page - 1) * size, page * size - 1);
   if (status) query = query.eq("status", status);
@@ -57,15 +67,17 @@ export default async function ChatbotInquiriesPage({
         <button className="rounded-lg border px-4 py-2 font-bold">Apply filters</button>
       </form>
       <div className="overflow-x-auto rounded-2xl border bg-[var(--surface)]">
-        <table className="w-full min-w-[1250px] text-left text-sm">
+        <table className="w-full min-w-[1500px] text-left text-sm">
           <thead className="bg-[var(--muted-surface)]">
-            <tr>{["Reference","Product request","Phone","WhatsApp","Status","Consent","Source page","Created","Completed",""].map((head) => <th key={head} className="p-3">{head}</th>)}</tr>
+            <tr>{["Reference","Product request","Selected products","Search history","Phone","WhatsApp","Status","Consent","Source page","Created","Completed",""].map((head) => <th key={head} className="p-3">{head}</th>)}</tr>
           </thead>
           <tbody>
             {(data ?? []).map((item) => (
               <tr key={item.id} className="border-t align-top">
                 <td className="p-3 font-semibold">{item.inquiry_number}</td>
                 <td className="max-w-md whitespace-pre-wrap p-3">{item.product_query}</td>
+                <td className="max-w-md whitespace-pre-wrap p-3">{selectedProductNames(item.selected_products)}</td>
+                <td className="max-w-sm p-3">{searchQueries(item.search_history)}</td>
                 <td className="p-3">{item.phone_number ?? "—"}</td>
                 <td className="p-3">{item.whatsapp ?? "—"}</td>
                 <td className="p-3">{label(item.status)}</td>

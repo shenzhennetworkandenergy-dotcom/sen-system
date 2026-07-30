@@ -37,6 +37,13 @@ yarn-error.log*
 # local duplicate source asset (the tracked copy lives in public/brand)
 /SEN Logo (2).png
 
+# local WooCommerce source/import artifacts (products and media are imported
+# into Supabase; these archives are not required by Next.js or Vercel)
+/2025.zip
+/2026.zip
+/data/woocommerce-import-2026-07-24/
+/data/woocommerce-media-source/
+
 # env files (can opt-in for committing if needed)
 .env*
 

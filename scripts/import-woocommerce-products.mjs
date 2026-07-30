@@ -143,7 +143,13 @@ function approvedImagesFor(staged, manifest, review) {
 function attributesFor(row) {
   const result = [];
   for (let index = 1; index <= 3; index++) {
-    const name = textValue(row[`Attribute ${index} name`]);
+    const rawName = textValue(row[`Attribute ${index} name`]);
+    const name =
+      normalized(rawName) === "frequency mhz"
+        ? "Frequency"
+        : normalized(rawName) === "storage size form factors"
+          ? "Form Factor"
+          : rawName;
     const values = splitList(row[`Attribute ${index} value(s)`]).map((value) => value.replace(/^"|"$/g, ""));
     if (name && values.length) result.push({ name, values, visible: truthy(row[`Attribute ${index} visible`]), global: truthy(row[`Attribute ${index} global`]) });
   }
@@ -463,14 +469,14 @@ async function attachTags(db, productId, staged, caches) {
   }
 }
 
-async function attachAttributes(db, productId, staged, caches, isVariable) {
+async function attachAttributes(db, productId, staged, caches, variationAttributeNames) {
   const result = new Map();
   for (const [index, attribute] of staged.attributes.entries()) {
     const ensured = await ensureAttribute(db, attribute, caches);
     await one(db, db.from("product_attributes").upsert({
       product_id: productId,
       attribute_id: ensured.attributeId,
-      is_variation: isVariable,
+      is_variation: variationAttributeNames.has(normalized(attribute.name)),
       is_visible: attribute.visible,
       sort_order: index,
     }, { onConflict: "product_id,attribute_id" }), "Unable to assign a product attribute");
@@ -564,12 +570,17 @@ async function importProducts() {
     parentMap.set(staged.sourceId, product.id);
     await attachCategories(db, product.id, staged, caches);
     await attachTags(db, product.id, staged, caches);
+    const variationAttributeNames = new Set(
+      (childrenByParent.get(staged.sourceId) ?? [])
+        .flatMap((child) => child.attributes)
+        .map((attribute) => normalized(attribute.name)),
+    );
     await attachAttributes(
       db,
       product.id,
       { ...staged, attributes: mergedAttributes(staged, childrenByParent.get(staged.sourceId) ?? []) },
       caches,
-      hasChildren || staged.sourceType === "variable",
+      variationAttributeNames,
     );
     await uploadImages(db, product.id, null, staged, manifest, review);
     imported.push({

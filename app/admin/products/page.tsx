@@ -5,7 +5,7 @@ import { archiveProductAction } from "@/app/admin/products/actions";
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { ProductQuickEdit } from "@/components/inventory/ProductQuickEdit";
 import { requirePermission } from "@/lib/auth/permissions";
-import { getProductList, getProductOptions, type ProductListParams } from "@/lib/inventory/products";
+import { getProductList, getProductOptions, productListPageHref, type ProductListParams } from "@/lib/inventory/products";
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +48,6 @@ export default async function ProductsPage({searchParams}:{searchParams:Promise<
       </tr>})}</tbody>
     </table></div>:<p className="rounded-xl border bg-[var(--surface)] p-8 text-center text-[var(--muted-text)]">No products match these filters.</p>}
     <button form="bulk-archive-form" className="mt-4 rounded-lg border px-4 py-2 font-semibold">Archive selected</button>
-    <nav className="mt-5 flex justify-between"><a aria-disabled={page<=1} href={`?page=${Math.max(1,page-1)}`} className="rounded border px-3 py-2 aria-disabled:pointer-events-none aria-disabled:opacity-50">Previous</a><span>Page {page} of {pages}</span><a aria-disabled={page>=pages} href={`?page=${Math.min(pages,page+1)}`} className="rounded border px-3 py-2 aria-disabled:pointer-events-none aria-disabled:opacity-50">Next</a></nav>
+    <nav className="mt-5 flex justify-between"><a aria-disabled={page<=1} href={productListPageHref(params,Math.max(1,page-1))} className="rounded border px-3 py-2 aria-disabled:pointer-events-none aria-disabled:opacity-50">Previous</a><span>Page {page} of {pages}</span><a aria-disabled={page>=pages} href={productListPageHref(params,Math.min(pages,page+1))} className="rounded border px-3 py-2 aria-disabled:pointer-events-none aria-disabled:opacity-50">Next</a></nav>
   </DashboardShell>
 }
