@@ -18,6 +18,9 @@ const requiredHeaderTokens = [
   "sen-header-actions",
   "sen-menu-box",
   "sen-profile-box",
+  "sen-header-search",
+  "Enterprise technology · Energy · Medical · Global sourcing",
+  "China → Bangladesh → Worldwide",
 ];
 const requiredMobileTokens = [
   "sen-mobile-menu-trigger",
@@ -25,7 +28,6 @@ const requiredMobileTokens = [
   "sen-mobile-menu-link",
 ];
 const requiredSearchTokens = [
-  "sen-header-search",
   "sen-search-form",
   "sen-search-input",
   "sen-search-button",
