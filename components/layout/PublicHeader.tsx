@@ -84,7 +84,7 @@ export async function PublicHeader() {
 
   return (
     <>
-      <header className="sen-header sticky top-0 z-40">
+      <header className="sen-header sticky top-0 z-[80]">
         <div className="sen-header-shell">
           <div className="sen-announcement">
         <Container className="flex items-center justify-between gap-4 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] sm:text-xs">

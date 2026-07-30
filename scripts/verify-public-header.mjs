@@ -19,6 +19,7 @@ const requiredHeaderTokens = [
   "sen-menu-box",
   "sen-profile-box",
   "sen-header-search",
+  "z-[80]",
   "Enterprise technology · Energy · Medical · Global sourcing",
   "China → Bangladesh → Worldwide",
 ];
