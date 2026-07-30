@@ -60,7 +60,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/sanitize-html": "^2.16.0",
-    "eslint": "^10.8.0",
+    "eslint": "^9.39.2",
     "eslint-config-next": "16.2.12",
     "supabase": "^2.109.1",
     "tailwindcss": "^4",
