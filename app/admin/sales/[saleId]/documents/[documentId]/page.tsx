@@ -4,6 +4,7 @@ import { connection } from "next/server";
 
 import { PrintDocumentButton } from "@/components/sales/PrintDocumentButton";
 import { requireAnyPermission } from "@/lib/auth/permissions";
+import { calculateDocumentDiscounts } from "@/lib/documents/commercial-totals";
 import { dateTime, label, money } from "@/lib/orders/types";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -149,6 +150,10 @@ export default async function SaleDocumentPage({
 
   const snapshot = data.snapshot as Snapshot;
   const order = snapshot.order;
+  const discounts = calculateDocumentDiscounts(
+    snapshot.items,
+    order.discount_amount,
+  );
   const customer = snapshot.customer;
   const address = (order.shipping_address_snapshot ?? {}) as Record<
     string,
@@ -253,11 +258,16 @@ export default async function SaleDocumentPage({
                     <thead className="bg-slate-900 text-white">
                       <tr>
                         <th className="w-[7%] px-2 py-2 text-center">No.</th>
-                        <th className="w-[43%] px-2 py-2">Description</th>
-                        <th className="w-[12%] px-2 py-2 text-center">Qty</th>
+                        <th className={isInvoice ? "w-[36%] px-2 py-2" : "w-[43%] px-2 py-2"}>Description</th>
+                        <th className="w-[10%] px-2 py-2 text-center">Qty</th>
                         {isInvoice ? (
-                          <th className="w-[18%] px-2 py-2 text-right">
+                          <th className="w-[17%] px-2 py-2 text-right">
                             Unit price
+                          </th>
+                        ) : null}
+                        {isInvoice ? (
+                          <th className="w-[14%] px-2 py-2 text-right">
+                            Discount
                           </th>
                         ) : null}
                         <th className="px-2 py-2 text-right">
@@ -291,6 +301,11 @@ export default async function SaleDocumentPage({
                               {money(item.unit_price as number, currency)}
                             </td>
                           ) : null}
+                          {isInvoice ? (
+                            <td className="px-2 py-2 text-right align-top">
+                              {money(item.line_discount as number, currency)}
+                            </td>
+                          ) : null}
                           <td className="px-2 py-2 text-right align-top font-bold">
                             {isInvoice
                               ? money(item.line_total as number, currency)
@@ -309,7 +324,7 @@ export default async function SaleDocumentPage({
                     <div className="ml-auto w-[48%] text-xs">
                       {[
                         ["Subtotal", order.subtotal],
-                        ["Discount", order.discount_amount],
+                        ["Discount", discounts.totalDiscount],
                         ["Shipping", order.shipping_amount],
                         ["Service", order.service_amount],
                         ["VAT / tax", order.tax_amount],

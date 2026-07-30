@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { requirePermission } from "@/lib/auth/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
+import { defaultQuotationExpiration } from "@/lib/quotations/validity";
 import { parseWholeNumber, roundMoney } from "@/lib/validation/numbers";
 
 const statuses = new Set([
@@ -98,7 +99,7 @@ export async function createQuotationAction(form: FormData) {
     company_name: customer.company_name,
     assigned_to: profile.id,
     required_by: String(form.get("required_by") || "") || null,
-    expiration_date: String(form.get("expiration_date") || "") || null,
+    expiration_date: String(form.get("expiration_date") || defaultQuotationExpiration()),
     terms_and_conditions: String(form.get("terms_and_conditions") ?? "").slice(0, 5000) || null,
     payment_terms: String(form.get("payment_terms") ?? "").slice(0, 2000) || null,
     delivery_information: String(form.get("delivery_information") ?? "").slice(0, 2000) || null,
