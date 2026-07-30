@@ -1,32 +1,22 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  defaultQuotationExpirationDate,
-  resolveQuotationExpirationDate,
-} from "../lib/quotations/validity.ts";
+import { defaultQuotationExpiration } from "../lib/quotations/validity.ts";
 
-test("defaults quotation validity to five calendar days", () => {
-  assert.equal(defaultQuotationExpirationDate("2026-07-30"), "2026-08-04");
+test("defaults a quotation to five calendar days after its issue date", () => {
+  const issueDate = new Date("2026-07-30T00:00:00.000Z");
+
+  assert.equal(defaultQuotationExpiration(issueDate), "2026-08-04");
 });
 
-test("rolls the five-day validity across calendar years", () => {
-  assert.equal(defaultQuotationExpirationDate("2026-12-29"), "2027-01-03");
+test("keeps the five-day validity correct across year boundaries", () => {
+  const issueDate = new Date("2026-12-29T00:00:00.000Z");
+
+  assert.equal(defaultQuotationExpiration(issueDate), "2027-01-03");
 });
 
-test("preserves an administrator-selected expiration date", () => {
-  assert.equal(
-    resolveQuotationExpirationDate(
-      "2026-08-15",
-      "2026-07-30T04:00:00.000Z",
-    ),
-    "2026-08-15",
-  );
-});
+test("uses the Bangladesh business date around UTC day boundaries", () => {
+  const oneAmInBangladesh = new Date("2026-07-29T19:00:00.000Z");
 
-test("gives legacy quotations a five-day validity date", () => {
-  assert.equal(
-    resolveQuotationExpirationDate(null, "2026-07-30T04:00:00.000Z"),
-    "2026-08-04",
-  );
+  assert.equal(defaultQuotationExpiration(oneAmInBangladesh), "2026-08-04");
 });

@@ -2,7 +2,7 @@ import { connection } from "next/server";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { requirePermission } from "@/lib/auth/permissions";
-import { defaultQuotationExpirationDate } from "@/lib/quotations/validity";
+import { defaultQuotationExpiration } from "@/lib/quotations/validity";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 import { createQuotationAction } from "../actions";
@@ -12,6 +12,7 @@ export const dynamic = "force-dynamic";
 export default async function NewQuotationPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   await connection();
   const { profile, permissions } = await requirePermission("quotations.create");
+  const defaultExpiration = defaultQuotationExpiration();
   const params = await searchParams;
   const db = createSupabaseAdminClient();
   const [{ data: customers }, { data: products }] = await Promise.all([
@@ -28,7 +29,7 @@ export default async function NewQuotationPage({ searchParams }: { searchParams:
         <label className="font-semibold">Additional product<select name="product_id" className="mt-1 w-full rounded-xl border px-3 py-3"><option value="">Optional product</option>{(products ?? []).map((product) => <option key={`additional-${product.id}`} value={product.id}>{product.name} - {product.sku}</option>)}</select></label>
         <label className="font-semibold">Additional quantity<input name="quantity" type="number" min="1" step="1" placeholder="Optional quantity" className="mt-1 w-full rounded-xl border px-3 py-3" /></label>
         <label className="font-semibold">Required by<input name="required_by" type="date" className="mt-1 w-full rounded-xl border px-3 py-3" /></label>
-        <label className="font-semibold">Quotation expires<input name="expiration_date" type="date" defaultValue={defaultQuotationExpirationDate()} className="mt-1 w-full rounded-xl border px-3 py-3" /></label>
+        <label className="font-semibold">Quotation expires<input name="expiration_date" type="date" defaultValue={defaultExpiration} className="mt-1 w-full rounded-xl border px-3 py-3" /></label>
       </div>
       <label className="font-semibold">Quotation subject<input name="subject" placeholder="Quotation subject" className="mt-1 w-full rounded-xl border px-3 py-3" /></label>
       <div className="grid gap-4 md:grid-cols-2">
