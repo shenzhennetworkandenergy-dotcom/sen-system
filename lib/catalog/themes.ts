@@ -1,4 +1,5 @@
 import { contrastColor, normalizeThemeColor } from "./business-category-domain.ts";
+import type { CSSProperties } from "react";
 import type {
   BusinessCategory,
   BusinessCategoryRow,
@@ -50,7 +51,7 @@ export function categoryStyle(category: BusinessCategory) {
     "--category-color": category.themeColor,
     "--category-foreground": category.foregroundColor,
     "--theme-primary": category.themeColor,
-  } as const;
+  } as CSSProperties;
 }
 
 export function catalogueTheme(

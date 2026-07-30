@@ -569,6 +569,17 @@ html { scroll-behavior: smooth; }
 .sen-catalogue-card:hover { transform: translateY(-7px); border-color: rgb(37 184 255 / .5); box-shadow: 0 24px 52px rgb(32 53 112 / .15); }
 .sen-detail-media { position: relative; display: grid; min-height: 28rem; place-items: center; overflow: hidden; border: 1px solid #dce4f5; border-radius: 1.75rem; background: radial-gradient(circle at 50% 42%,white,#eaf1ff); box-shadow: 0 20px 55px rgb(32 53 112 / .09); }
 .catalogue-theme { --theme-primary:#245fc8;--theme-surface:#f4f8ff;--theme-panel:#fff; }
+.catalogue-theme-dynamic { --theme-surface:color-mix(in srgb,var(--category-color) 7%,#f7f9ff);--theme-panel:#fff;color:#10233f; }
+.catalogue-theme-dynamic .catalogue-category-hero { background:radial-gradient(circle at 78% 5%,color-mix(in srgb,var(--category-color) 78%,#fff),color-mix(in srgb,var(--category-color) 28%,#07102f) 48%,#07102f 78%);color:#fff; }
+.catalogue-theme-dynamic .sen-detail-media { background-color:color-mix(in srgb,var(--category-color) 12%,#f7f9ff);background-image:linear-gradient(color-mix(in srgb,var(--category-color) 12%,transparent) 1px,transparent 1px),linear-gradient(90deg,color-mix(in srgb,var(--category-color) 12%,transparent) 1px,transparent 1px);background-size:28px 28px; }
+.catalogue-theme-dynamic .sen-button-glow { background:linear-gradient(105deg,color-mix(in srgb,var(--category-color) 86%,#07102f),var(--category-color)) !important;color:var(--category-foreground); }
+.catalogue-category-switch-dynamic { border-color:color-mix(in srgb,var(--category-color) 55%,transparent);background:color-mix(in srgb,var(--category-color) 16%,#07102f); }
+.catalogue-category-switch-dynamic:hover,.catalogue-category-switch-dynamic.is-active { border-color:var(--category-color);background:color-mix(in srgb,var(--category-color) 42%,#07102f);box-shadow:0 12px 30px color-mix(in srgb,var(--category-color) 28%,transparent); }
+.catalogue-card-dynamic { border-top:4px solid var(--category-color);background:linear-gradient(160deg,#fff,color-mix(in srgb,var(--category-color) 8%,#fff)); }
+.catalogue-card-dynamic .catalogue-card-badge { background:var(--category-color);color:var(--category-foreground); }
+.catalogue-card-dynamic .catalogue-card-brand,.catalogue-card-dynamic .catalogue-card-link { color:color-mix(in srgb,var(--category-color) 78%,#07102f); }
+.sen-business-category-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,16rem),1fr));gap:1.25rem; }
+.sen-dynamic-category-card { border-top:4px solid var(--category-color); }
 .catalogue-theme-networking { --theme-primary:#007d9f;--theme-surface:#effaff;--theme-panel:#fff;color:#10233f; }
 .catalogue-theme-energy { --theme-primary:#0a9d62;--theme-surface:#f3fbef;--theme-panel:#fffdf4;color:#183323; }
 .catalogue-theme-medical { --theme-primary:#007f9e;--theme-surface:#eefcff;--theme-panel:#fff;color:#123143; }

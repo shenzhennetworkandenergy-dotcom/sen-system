@@ -26,7 +26,7 @@ export async function GET(request: Request) {
     return safeJsonResponse({ error: "Please wait a moment before searching again." }, { status: 429 });
   }
   try {
-    const websiteAnswer = searchWebsiteKnowledge(query);
+    const websiteAnswer = await searchWebsiteKnowledge(query);
     if (websiteAnswer) return safeJsonResponse(websiteAnswer);
     return safeJsonResponse(await searchProductsForChatbot(query));
   } catch {

@@ -1,14 +1,7 @@
 import { routes } from "@/lib/constants/routes";
-import type { BusinessCategory } from "@/types/category";
 import type { NavigationItem } from "@/types/navigation";
 
 export type LinkItem = { label: string; href: string; description?: string };
-export type BusinessCategoryConfig = BusinessCategory & {
-  description: string;
-  examples: readonly string[];
-  href: string;
-  accent: "blue" | "green" | "teal" | "slate";
-};
 export type SolutionArea = LinkItem & { useCase: string };
 export type FooterGroup = { title: string; links: readonly LinkItem[] };
 
@@ -23,7 +16,6 @@ export type SiteConfig = {
   routes: typeof routes;
   navigation: readonly NavigationItem[];
   publicCtas: { requestQuote: LinkItem; exploreProducts: LinkItem; contact: LinkItem; learnAbout: LinkItem };
-  businessCategories: readonly BusinessCategoryConfig[];
   solutionAreas: readonly SolutionArea[];
   footerGroups: readonly FooterGroup[];
 };
@@ -49,12 +41,6 @@ export const siteConfig = {
     contact: { label: "Contact SEN", href: routes.contact },
     learnAbout: { label: "Learn About SEN", href: routes.about },
   },
-  businessCategories: [
-    { slug: "networking", label: "Networking", href: "/products?category=Networking", accent: "blue", description: "Enterprise connectivity, data center and ISP infrastructure sourced for reliable project delivery.", examples: ["Enterprise networking", "Servers and data center", "Fiber-optic equipment", "Switching and routing", "ISP infrastructure"] },
-    { slug: "energy", label: "Energy", href: "/products?category=Energy", accent: "green", description: "Power continuity, renewable energy and industrial electrical systems for business-critical facilities.", examples: ["Solar and renewable energy", "UPS and backup power", "Batteries and inverters", "Industrial power systems", "Energy infrastructure"] },
-    { slug: "medical-equipment", label: "Medical Equipment", href: "/products?category=Medical%20Equipment", accent: "teal", description: "Healthcare and laboratory technologies supported through structured sourcing and quotation workflows.", examples: ["Diagnostic equipment", "Hospital technology", "Laboratory systems", "Patient monitoring", "Healthcare solutions"] },
-    { slug: "others", label: "Others", href: "/products?category=Others", accent: "slate", description: "Specialized industrial, electronics and project equipment procurement for custom requirements.", examples: ["Industrial automation", "Electronics", "Custom sourcing", "Project equipment", "Specialized procurement"] },
-  ],
   solutionAreas: [
     { label: "Enterprise Network Infrastructure", href: "/solutions/enterprise-network", description: "Switching, routing, fiber and wireless foundations for resilient business connectivity.", useCase: "Corporate networks, ISPs and campus infrastructure" },
     { label: "Data Center and Server Solutions", href: "/solutions/data-center", description: "Server, rack, power and connectivity sourcing for modern compute environments.", useCase: "Data centers and enterprise IT rooms" },
@@ -65,7 +51,6 @@ export const siteConfig = {
   ],
   footerGroups: [
     { title: "Company", links: [{ label: "About", href: routes.about }, { label: "Contact", href: routes.contact }, { label: "Careers", href: "/careers" }] },
-    { title: "Products", links: [{ label: "Networking", href: "/products?category=Networking" }, { label: "Energy", href: "/products?category=Energy" }, { label: "Medical Equipment", href: "/products?category=Medical%20Equipment" }, { label: "Others", href: "/products?category=Others" }] },
     { title: "Solutions", links: [{ label: "Enterprise Network", href: "/solutions/enterprise-network" }, { label: "Data Center", href: "/solutions/data-center" }, { label: "Industrial Automation", href: "/solutions/industrial-automation" }, { label: "Sourcing and Procurement", href: "/solutions/sourcing-procurement" }] },
     { title: "Support", links: [{ label: "Request a Quote", href: routes.requestQuote }, { label: "Customer Login", href: routes.login }, { label: "Order/serial tracking", href: "/tracking" }] },
     { title: "Legal", links: [{ label: "Privacy Policy", href: "/privacy" }, { label: "Terms", href: "/terms" }] },
