@@ -30,6 +30,7 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 /.codex-logs/
+/.worktrees/
 /.next-dev.log
 /.next-dev-error.log
 /.next-dev.pid
