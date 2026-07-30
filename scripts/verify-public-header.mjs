@@ -36,7 +36,13 @@ const requiredCssTokens = [
   "@keyframes sen-header-enter",
   ".sen-menu-box::before",
   ".sen-mobile-menu-panel",
+  ".sen-header-actions",
+  ".sen-menu-box:hover",
+  ".sen-menu-box:focus-visible",
+  ".sen-profile-box",
+  "@media (max-width: 1279px)",
   "@media (prefers-reduced-motion: reduce)",
+  "animation: none",
 ];
 
 for (const token of requiredHeaderTokens) {
@@ -56,6 +62,12 @@ assert.ok(header.includes('aria-label="Public navigation"'));
 assert.ok(search.includes('role="search"'));
 assert.ok(mobile.includes("<summary"));
 assert.ok(css.includes("prefers-reduced-motion"));
+assert.ok(
+  css.match(
+    /prefers-reduced-motion:[\s\S]*?\.sen-menu-box[\s\S]*?animation:\s*none/,
+  ),
+  "Reduced-motion rules must disable header animation",
+);
 
 const parsedPackage = JSON.parse(packageJson);
 assert.equal(parsedPackage.dependencies?.["framer-motion"], undefined);

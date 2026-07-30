@@ -181,7 +181,7 @@ export async function PublicHeader() {
           cartCount={cartCount}
         />
           </Container>
-          <Container className="pb-3 lg:hidden">
+          <Container className="pb-3 xl:hidden">
             <ProductSearch compact className="sen-header-search" />
           </Container>
         </div>
