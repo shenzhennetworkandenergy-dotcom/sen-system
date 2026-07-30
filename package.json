@@ -27,6 +27,7 @@
     "test:favicon": "node scripts/verify-favicon.mjs",
     "test:public-header": "node scripts/verify-public-header.mjs",
     "test:admin-deletion": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/deletion-policy.test.mts",
+    "test:business-categories": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/business-category-domain.test.mts && node scripts/verify-business-category-migration.mjs",
     "favicon:generate": "node scripts/generate-favicon.mjs",
     "products:repair-variable-attributes": "node scripts/repair-variable-product-attributes.mjs",
     "products:repair-seo-data": "node scripts/repair-product-seo-data.mjs",

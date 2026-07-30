@@ -54,7 +54,7 @@ Commit message: `feat: add business category domain validation`
 ### Task 2: Additive database migration and compatibility
 
 **Files:**
-- Create: `supabase/migrations/202607300001_dynamic_business_categories.sql`
+- Create: `supabase/migrations/202607300005_dynamic_business_categories.sql`
 - Create: `scripts/verify-business-category-migration.mjs`
 - Modify: `package.json`
 
@@ -283,4 +283,3 @@ Check create/edit/reorder/theme/product field/product save/homepage/catalogue/de
 - [ ] **Step 5: Commit**
 
 Commit message: `docs: document dynamic category operations`
-
