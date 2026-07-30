@@ -3,10 +3,14 @@
 import { useMemo, useState } from "react";
 
 import { createSaleAction } from "@/app/admin/sales/actions";
+import {
+  SaleProductPicker,
+  type SalePickerProduct,
+} from "@/components/sales/SaleProductPicker";
 import { roundMoney } from "@/lib/validation/numbers";
 
 type Customer = { id:string; full_name:string|null; email:string; phone:string|null; company_name:string|null };
-type Product = { id:string; name:string; sku:string; model_number:string|null; brand_id:string|null; product_type:string; regular_price:number|null; sale_price:number|null; serial_tracking_required:boolean };
+type Product = SalePickerProduct;
 type Variation = { id:string; product_id:string; name:string|null; sku:string; regular_price:number|null; sale_price:number|null };
 type Balance = { product_id:string; variation_id:string|null; warehouse_id:string; available:number };
 type Address = { id:string; profile_id:string; recipient_name:string; address_line_1:string; city:string; country_code:string; is_default_shipping:boolean };
@@ -25,7 +29,6 @@ export function SaleBuilder({
   const [customerSearch, setCustomerSearch] = useState("");
   const [warehouseId, setWarehouseId] = useState(warehouses[0]?.id ?? "");
   const [addressId, setAddressId] = useState("");
-  const [search, setSearch] = useState("");
   const [rows, setRows] = useState<Row[]>([{
     key: crypto.randomUUID(), product_id:"", variation_id:"", quantity:"1", unit_price:"0",
     line_discount:"0", discount_percent:"0", reason:"", catalogue_price:0,
@@ -36,10 +39,6 @@ export function SaleBuilder({
   const customerChoices = customers.filter((item) =>
     `${item.full_name ?? ""} ${item.email} ${item.phone ?? ""} ${item.company_name ?? ""}`.toLowerCase().includes(customerSearch.toLowerCase()),
   ).slice(0, 20);
-  const productChoices = products.filter((item) =>
-    `${item.name} ${item.sku} ${item.model_number ?? ""}`.toLowerCase().includes(search.toLowerCase()),
-  ).slice(0, 150);
-
   const selected = useMemo(() => rows.map((row) => {
     const product = products.find((item) => item.id === row.product_id);
     const variation = variations.find((item) => item.id === row.variation_id);
@@ -107,9 +106,17 @@ export function SaleBuilder({
     </section>
 
     <section className="rounded-xl border bg-[var(--surface)] p-4">
-      <div className="flex flex-wrap justify-between gap-3"><div><h2 className="font-bold">Products and pricing</h2><p className="text-sm text-[var(--muted-text)]">Search by product name, model or SKU. Product details and price fill automatically.</p></div><input value={search} onChange={(event)=>setSearch(event.target.value)} placeholder="Search products" className="rounded-lg border px-3 py-2"/></div>
+      <div><h2 className="font-bold">Products and pricing</h2><p className="text-sm text-[var(--muted-text)]">Search by product name, model or SKU. Product details and price fill automatically.</p></div>
       <div className="mt-3 space-y-3">{selected.map((row)=><article key={row.key} className="grid gap-2 rounded-xl border p-3 lg:grid-cols-[2fr_1fr_.6fr_.8fr_.7fr_.7fr_auto]">
-        <label className="text-xs font-semibold">Product<select value={row.product_id} onChange={(event)=>{const product=products.find((item)=>item.id===event.target.value),price=Math.round(Number(product?.sale_price??product?.regular_price??0)*100)/100;update(row.key,{product_id:event.target.value,variation_id:"",unit_price:String(price),catalogue_price:price})}} className={field} required><option value="">Choose product</option>{productChoices.map((item)=><option key={item.id} value={item.id}>{item.name} · {item.sku}{item.serial_tracking_required?" · Serialized":""}</option>)}</select>{row.product?<span className="mt-1 block text-[var(--muted-text)]">SKU {row.product.sku}{row.product.model_number?` · Model ${row.product.model_number}`:""}</span>:null}</label>
+        <SaleProductPicker
+          products={products}
+          selectedProduct={row.product}
+          onClear={() => update(row.key, { product_id:"", variation_id:"", unit_price:"0", catalogue_price:0 })}
+          onSelect={(product) => {
+            const price = Math.round(Number(product.sale_price ?? product.regular_price ?? 0) * 100) / 100;
+            update(row.key, { product_id:product.id, variation_id:"", unit_price:String(price), catalogue_price:price });
+          }}
+        />
         <label className="text-xs font-semibold">Variation<select value={row.variation_id} onChange={(event)=>{const variation=variations.find((item)=>item.id===event.target.value),price=Math.round(Number(variation?.sale_price??variation?.regular_price??row.catalogue_price)*100)/100;update(row.key,{variation_id:event.target.value,unit_price:String(price),catalogue_price:price})}} className={field}><option value="">None</option>{variations.filter((item)=>item.product_id===row.product_id).map((item)=><option key={item.id} value={item.id}>{item.name||item.sku}</option>)}</select></label>
         <label className="text-xs font-semibold">Qty<input type="number" min="1" max={row.available} step="1" value={row.quantity} onChange={(event)=>update(row.key,{quantity:String(Math.max(1,Math.trunc(Number(event.target.value)||1)))})} className={field}/><span className={Number(row.quantity)>row.available?"text-red-700":"text-[var(--muted-text)]"}>Available {row.available}</span></label>
         <label className="text-xs font-semibold">Unit BDT<input type="number" inputMode="decimal" min="0" step=".01" value={row.unit_price} onChange={(event)=>update(row.key,{unit_price:event.target.value})} onBlur={()=>update(row.key,{unit_price:String(roundMoney(Number(row.unit_price)||0))})} className={field}/></label>
