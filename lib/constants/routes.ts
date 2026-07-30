@@ -22,6 +22,7 @@ export const routes = {
   adminShipments: "/admin/shipments",
   adminPurchasing: "/admin/purchasing",
   adminSuppliers: "/admin/suppliers",
+  adminSupplierCategories: "/admin/supplier-categories",
   adminAccounting: "/admin/accounting",
   adminHr: "/admin/hr",
   adminCrm: "/admin/crm",
