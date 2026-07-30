@@ -268,4 +268,173 @@ on public.business_category_fields for all to authenticated
 using (public.current_user_has_permission('products.edit'))
 with check (public.current_user_has_permission('products.edit'));
 
+create or replace function public.admin_save_business_category(
+  actor_profile_id uuid,
+  requested_category_id uuid,
+  requested_category jsonb,
+  requested_fields jsonb
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  saved_id uuid;
+  required_permission text;
+begin
+  required_permission := case
+    when requested_category_id is null then 'products.create'
+    else 'products.edit'
+  end;
+  if not exists (
+    select 1
+    from public.effective_permissions_for_profile(actor_profile_id)
+    where permission_key = required_permission
+  ) then
+    raise exception 'Permission denied';
+  end if;
+  if jsonb_typeof(requested_category) <> 'object'
+     or jsonb_typeof(requested_fields) <> 'array' then
+    raise exception 'Invalid business category data';
+  end if;
+
+  if requested_category_id is null then
+    insert into public.business_categories (
+      name, slug, description, tagline, theme_color, icon, image_path,
+      is_active, sort_order, created_by, updated_by
+    )
+    values (
+      requested_category->>'name',
+      requested_category->>'slug',
+      requested_category->>'description',
+      requested_category->>'tagline',
+      requested_category->>'theme_color',
+      requested_category->>'icon',
+      requested_category->>'image_path',
+      coalesce((requested_category->>'is_active')::boolean, true),
+      coalesce((requested_category->>'sort_order')::integer, 0),
+      actor_profile_id,
+      actor_profile_id
+    )
+    returning id into saved_id;
+  else
+    update public.business_categories
+       set name = requested_category->>'name',
+           slug = requested_category->>'slug',
+           description = requested_category->>'description',
+           tagline = requested_category->>'tagline',
+           theme_color = requested_category->>'theme_color',
+           icon = requested_category->>'icon',
+           image_path = requested_category->>'image_path',
+           is_active = coalesce((requested_category->>'is_active')::boolean, true),
+           sort_order = coalesce((requested_category->>'sort_order')::integer, 0),
+           updated_by = actor_profile_id,
+           updated_at = now()
+     where id = requested_category_id
+       and archived_at is null
+     returning id into saved_id;
+    if saved_id is null then
+      raise exception 'Business category not found';
+    end if;
+  end if;
+
+  delete from public.business_category_fields
+   where business_category_id = saved_id;
+
+  insert into public.business_category_fields (
+    business_category_id, field_key, label, field_type, placeholder,
+    help_text, unit, options, is_required, is_filterable,
+    use_for_variations, is_active, sort_order
+  )
+  select
+    saved_id, field_key, label, field_type, placeholder, help_text, unit,
+    coalesce(options, '[]'::jsonb), is_required, is_filterable,
+    use_for_variations, is_active, sort_order
+  from jsonb_to_recordset(requested_fields) as field_rows(
+    field_key text,
+    label text,
+    field_type text,
+    placeholder text,
+    help_text text,
+    unit text,
+    options jsonb,
+    is_required boolean,
+    is_filterable boolean,
+    use_for_variations boolean,
+    is_active boolean,
+    sort_order integer
+  );
+
+  return saved_id;
+end
+$$;
+
+create or replace function public.admin_move_business_category(
+  actor_profile_id uuid,
+  requested_category_id uuid,
+  requested_direction text
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  current_order integer;
+  neighbor_id uuid;
+  neighbor_order integer;
+begin
+  if requested_direction not in ('up','down') then
+    raise exception 'Invalid move direction';
+  end if;
+  if not exists (
+    select 1
+    from public.effective_permissions_for_profile(actor_profile_id)
+    where permission_key = 'products.edit'
+  ) then
+    raise exception 'Permission denied';
+  end if;
+
+  with ranked as (
+    select id, row_number() over (order by sort_order, name, id)::integer * 10 as position
+    from public.business_categories
+    where archived_at is null
+  )
+  update public.business_categories category
+     set sort_order = ranked.position
+    from ranked
+   where category.id = ranked.id;
+
+  select sort_order into current_order
+  from public.business_categories
+  where id = requested_category_id and archived_at is null
+  for update;
+  if current_order is null then raise exception 'Business category not found'; end if;
+
+  if requested_direction = 'up' then
+    select id, sort_order into neighbor_id, neighbor_order
+    from public.business_categories
+    where archived_at is null and sort_order < current_order
+    order by sort_order desc limit 1 for update;
+  else
+    select id, sort_order into neighbor_id, neighbor_order
+    from public.business_categories
+    where archived_at is null and sort_order > current_order
+    order by sort_order limit 1 for update;
+  end if;
+
+  if neighbor_id is not null then
+    update public.business_categories
+       set sort_order = case
+         when id = requested_category_id then neighbor_order
+         when id = neighbor_id then current_order
+       end,
+       updated_by = actor_profile_id,
+       updated_at = now()
+     where id in (requested_category_id, neighbor_id);
+  end if;
+end
+$$;
+
 commit;

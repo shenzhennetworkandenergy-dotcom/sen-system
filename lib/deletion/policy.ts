@@ -3,6 +3,7 @@ export const archiveEntityTypes = [
   "user",
   "brand",
   "attribute",
+  "business_category",
 ] as const;
 
 export type ArchiveEntityType = (typeof archiveEntityTypes)[number];
