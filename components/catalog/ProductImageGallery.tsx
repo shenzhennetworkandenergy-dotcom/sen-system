@@ -73,6 +73,9 @@ export function ProductImageGallery({
         <img
           src={selected.url}
           alt={selected.alt}
+          width={1200}
+          height={900}
+          decoding="async"
           draggable={false}
           className={`h-full w-full object-contain p-6 transition duration-200 sm:p-10 ${
             zooming ? "opacity-0" : "opacity-100"
@@ -113,6 +116,10 @@ export function ProductImageGallery({
                   <img
                     src={image.url}
                     alt={image.alt}
+                    width={240}
+                    height={240}
+                    loading="lazy"
+                    decoding="async"
                     className="h-full w-full object-contain p-2"
                   />
                 </button>

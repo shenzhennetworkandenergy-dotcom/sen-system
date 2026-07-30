@@ -6,7 +6,7 @@ export const routes = {
   about: "/about",
   contact: "/contact",
   search: "/search",
-  requestQuote: "/request-quote",
+  requestQuote: "/request-quote/general",
   login: "/login",
   register: "/register",
   forgotPassword: "/forgot-password",

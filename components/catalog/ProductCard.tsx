@@ -1,6 +1,15 @@
 /* eslint-disable @next/next/no-img-element */
 import type { AwaitedReturn } from "@/types/catalog";
 
+function plainText(value: string | null) {
+  return value
+    ?.replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function ProductCard({ product }: { product: AwaitedReturn }) {
   const price = product.sale_price ?? product.regular_price;
   const theme =
@@ -22,6 +31,10 @@ export function ProductCard({ product }: { product: AwaitedReturn }) {
             <img
               src={product.imageUrl}
               alt={product.imageAlt}
+              width={900}
+              height={675}
+              loading="lazy"
+              decoding="async"
               className="h-full w-full object-contain p-4 transition duration-700 group-hover:scale-110"
             />
           ) : (
@@ -29,19 +42,19 @@ export function ProductCard({ product }: { product: AwaitedReturn }) {
               Product image coming soon
             </div>
           )}
-          <span className="absolute left-3 top-3 rounded-full bg-[#07102f]/90 px-3 py-1 text-xs font-semibold text-cyan-200">
+          <span className="catalogue-card-badge absolute left-3 top-3 rounded-full px-3 py-1 text-xs font-semibold">
             {product.sen_business_category}
           </span>
         </div>
         <div className="p-1 pt-5">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-cyan-700">
+          <p className="catalogue-card-brand text-xs font-semibold uppercase tracking-[0.14em]">
             {product.brand ?? "SEN sourced"}
           </p>
           <h2 className="mt-2 text-xl font-semibold text-[#10152f] transition group-hover:text-[#245fc8]">
             {product.name}
           </h2>
           <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600">
-            {product.short_description ??
+            {plainText(product.short_description) ??
               "Enterprise-grade equipment sourced and supported by SEN."}
           </p>
           <div className="mt-5 flex items-end justify-between gap-3">
@@ -75,7 +88,7 @@ export function ProductCard({ product }: { product: AwaitedReturn }) {
                 : "Contact for availability"}
             </span>
           </div>
-          <span className="mt-5 inline-flex font-semibold text-[#245fc8]">
+          <span className="catalogue-card-link mt-5 inline-flex font-semibold">
             View full details{" "}
             <span className="ml-2 transition-transform group-hover:translate-x-1">
               →

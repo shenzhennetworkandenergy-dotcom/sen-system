@@ -8,6 +8,7 @@ import { PublicHeader } from "@/components/layout/PublicHeader";
 import { ProductImageGallery } from "@/components/catalog/ProductImageGallery";
 import { ProductPurchasePanel } from "@/components/catalog/ProductPurchasePanel";
 import { Container } from "@/components/ui/Container";
+import { JsonLd } from "@/components/seo/JsonLd";
 import { getPublicProduct } from "@/lib/catalog/products";
 import { catalogueTheme } from "@/lib/catalog/themes";
 import { addToCartAction, orderNowAction } from "@/app/cart/actions";
@@ -25,6 +26,16 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   return {
     title: product.name,
     description: plainText(product.short_description) ?? plainText(product.description)?.slice(0, 155) ?? `Explore ${product.name} from SEN.`,
+    alternates: { canonical: `/products/${product.slug}` },
+    openGraph: {
+      title: product.name,
+      description: plainText(product.short_description) ?? `Explore ${product.name} from SEN.`,
+      type: "website",
+      url: `/products/${product.slug}`,
+      images: product.images[0]
+        ? [{ url: product.images[0].url, alt: product.images[0].alt }]
+        : undefined,
+    },
   };
 }
 
@@ -52,7 +63,37 @@ export default async function PublicProductDetailPage({ params, searchParams }: 
     ["Serial tracking", product.serial_tracking_required ? "Required" : "Not required"],
   ];
 
+  const productSchema = {
+    "@context": "https://schema.org",
+    "@type": "Product",
+    name: product.name,
+    sku: product.sku,
+    mpn: product.manufacturer_part_number || undefined,
+    brand: product.brand?.name
+      ? { "@type": "Brand", name: product.brand.name }
+      : undefined,
+    description:
+      plainText(product.short_description) ?? plainText(product.description),
+    image: product.images.map((image) => image.url),
+    category: product.sen_business_category,
+    url: `https://sen.com.bd/products/${product.slug}`,
+    offers:
+      price !== null
+        ? {
+            "@type": "Offer",
+            price,
+            priceCurrency: product.currency,
+            availability:
+              product.available > 0
+                ? "https://schema.org/InStock"
+                : "https://schema.org/PreOrder",
+            url: `https://sen.com.bd/products/${product.slug}`,
+          }
+        : undefined,
+  };
+
   return <div className={`public-experience catalogue-theme catalogue-theme-${theme.key}`}>
+    <JsonLd data={productSchema} />
     <PublicHeader />
     <main className="catalogue-theme-surface">
       <Container className="py-6"><nav className="text-sm text-slate-500" aria-label="Breadcrumb"><a href="/">Home</a><span className="mx-2">/</span><a href="/products">Products</a><span className="mx-2">/</span><span className="text-slate-800">{product.name}</span></nav></Container>
@@ -63,7 +104,7 @@ export default async function PublicProductDetailPage({ params, searchParams }: 
         />
         <div className="catalogue-theme-panel rounded-3xl border p-6 shadow-sm sm:p-8">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-700">{product.brand?.name ?? "SEN sourced technology"}</p>
-          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-[#10152f] sm:text-5xl">{product.name}</h1>
+          <h1 className="mt-3 break-words text-2xl font-semibold leading-tight tracking-tight text-[#10152f] sm:text-4xl">{product.name}</h1>
           {product.short_description ? <div className="product-rich-content mt-5 text-base leading-7 text-slate-600 sm:text-lg" dangerouslySetInnerHTML={{ __html: product.short_description }} /> : <p className="mt-5 text-slate-600">Enterprise-grade equipment sourced, verified and supported through SEN.</p>}
           <div className="mt-6 flex flex-wrap gap-3"><span className={`rounded-full px-4 py-2 text-sm font-semibold ${product.available > 0 ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900"}`}>{product.available > 0 ? `${product.available} available` : product.incoming > 0 ? `${product.incoming} incoming` : "Contact for availability"}</span><span className="rounded-full bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700">SKU: {product.sku}</span>{product.model_number ? <span className="rounded-full bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-800">Model: {product.model_number}</span> : null}</div>
           <div className="mt-7 border-y py-6">{price ? <div className="flex items-end gap-3"><strong className="text-3xl text-[#10152f]">{money(price, product.currency)}</strong>{product.sale_price && product.regular_price ? <span className="pb-1 text-lg text-slate-400 line-through">{money(product.regular_price, product.currency)}</span> : null}</div> : <strong className="text-2xl text-[#10152f]">Price on request</strong>}<p className="mt-2 text-sm text-slate-500">Final pricing may vary by configuration, quantity, delivery and project requirements.</p></div>

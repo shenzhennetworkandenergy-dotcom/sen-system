@@ -11,6 +11,16 @@ assert.match(migration,/security definer set search_path=''/);
 assert.match(migration,/revoke all on function public\.receive_purchase_order/);
 const routes=["app/admin/purchasing/page.tsx","app/admin/purchasing/new/page.tsx","app/admin/purchasing/[id]/page.tsx","app/admin/purchasing/[id]/edit/page.tsx","app/admin/purchasing/[id]/receive/page.tsx","app/admin/purchasing/export/route.ts","app/admin/suppliers/page.tsx","app/admin/suppliers/[id]/page.tsx"];
 await Promise.all(routes.map((route)=>access(new URL(route,root))));
+const [receiptFormSource,purchasingActionsSource]=await Promise.all([
+  readFile(new URL("components/purchasing/PurchaseReceiptForm.tsx",root),"utf8"),
+  readFile(new URL("app/admin/purchasing/actions.ts",root),"utf8"),
+]);
+const receiptActionSource=purchasingActionsSource.slice(
+  purchasingActionsSource.indexOf("export async function receivePurchaseOrderAction"),
+  purchasingActionsSource.indexOf("export async function createSupplierAction"),
+);
+assert.match(receiptFormSource,/purchase_order_item_id:\s*item\.id,[\s\S]*?quantity:\s*value\.quantity/, "Receipt form must submit the database RPC quantity field.");
+assert.match(receiptActionSource,/quantity:\s*parseWholeNumber\(item\.quantity,/, "Receipt action must validate and forward the form's quantity field.");
 
 const envText=await readFile(new URL(".env.local",root),"utf8");
 const env=Object.fromEntries(envText.split(/\r?\n/).map((line)=>line.trim()).filter((line)=>line&&!line.startsWith("#")&&line.includes("=")).map((line)=>{const index=line.indexOf("=");return [line.slice(0,index),line.slice(index+1).replace(/^['"]|['"]$/g,"")];}));

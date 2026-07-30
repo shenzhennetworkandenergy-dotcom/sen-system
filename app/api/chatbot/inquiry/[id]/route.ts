@@ -63,12 +63,12 @@ export async function PATCH(
     update = { phone_number: phone };
   } else if (step === "whatsapp") {
     const whatsapp = validPhone(body.whatsapp);
-    if (!whatsapp || !inquiry.phone_number || inquiry.status !== "collecting_contact") {
+    if (!whatsapp || inquiry.status !== "collecting_contact") {
       return safeJsonResponse({ ok: false, field: "whatsapp" }, { status: 400 });
     }
     update = { whatsapp };
   } else if (step === "consent") {
-    if (!inquiry.phone_number || !inquiry.whatsapp || inquiry.status !== "collecting_contact") {
+    if (!inquiry.whatsapp || inquiry.status !== "collecting_contact") {
       return safeJsonResponse({ ok: false }, { status: 400 });
     }
     update = { consent_to_contact: true, status: "new", completed_at: new Date().toISOString() };

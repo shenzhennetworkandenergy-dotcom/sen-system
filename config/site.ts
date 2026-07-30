@@ -65,7 +65,7 @@ export const siteConfig = {
   ],
   footerGroups: [
     { title: "Company", links: [{ label: "About", href: routes.about }, { label: "Contact", href: routes.contact }, { label: "Careers", href: "/careers" }] },
-    { title: "Products", links: [{ label: "Networking", href: "/products/networking" }, { label: "Energy", href: "/products/energy" }, { label: "Medical Equipment", href: "/products/medical-equipment" }, { label: "Others", href: "/products/others" }] },
+    { title: "Products", links: [{ label: "Networking", href: "/products?category=Networking" }, { label: "Energy", href: "/products?category=Energy" }, { label: "Medical Equipment", href: "/products?category=Medical%20Equipment" }, { label: "Others", href: "/products?category=Others" }] },
     { title: "Solutions", links: [{ label: "Enterprise Network", href: "/solutions/enterprise-network" }, { label: "Data Center", href: "/solutions/data-center" }, { label: "Industrial Automation", href: "/solutions/industrial-automation" }, { label: "Sourcing and Procurement", href: "/solutions/sourcing-procurement" }] },
     { title: "Support", links: [{ label: "Request a Quote", href: routes.requestQuote }, { label: "Customer Login", href: routes.login }, { label: "Order/serial tracking", href: "/tracking" }] },
     { title: "Legal", links: [{ label: "Privacy Policy", href: "/privacy" }, { label: "Terms", href: "/terms" }] },

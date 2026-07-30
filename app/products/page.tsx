@@ -15,13 +15,33 @@ import {
 } from "@/lib/catalog/themes";
 
 export const dynamic = "force-dynamic";
-export const metadata: Metadata = {
-  title: "Products",
-  description:
-    "Explore SEN enterprise technology, networking, energy, medical and specialist equipment.",
-};
-
 const categories = Object.keys(categoryThemes) as BusinessCategory[];
+
+export async function generateMetadata({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string; category?: string }>;
+}): Promise<Metadata> {
+  const params = await searchParams;
+  const category = categories.includes(params.category as BusinessCategory)
+    ? (params.category as BusinessCategory)
+    : null;
+  const title = category ? `${category} Products` : "Products";
+  const description = category
+    ? `Explore SEN ${category.toLowerCase()} products, verified sourcing, pricing and professional support.`
+    : "Explore SEN enterprise networking, energy, medical and specialist equipment.";
+  return {
+    title,
+    description,
+    alternates: {
+      canonical: category
+        ? `/products?category=${encodeURIComponent(category)}`
+        : "/products",
+    },
+    openGraph: { title, description, type: "website", url: "/products" },
+    robots: params.q ? { index: false, follow: true } : undefined,
+  };
+}
 
 export default async function PublicProductsPage({
   searchParams,

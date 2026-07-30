@@ -4,6 +4,16 @@ import { deriveStockStatus, quantity } from "@/lib/inventory/stock";
 
 export type ProductListParams = { q?: string; category?: string; brand?: string; type?: string; stock?: string; status?: string; sort?: string; page?: string };
 
+export function productListPageHref(params: ProductListParams, page: number) {
+  const search = new URLSearchParams();
+  for (const key of ["q", "category", "brand", "type", "stock", "status", "sort"] as const) {
+    const value = params[key];
+    if (value) search.set(key, value);
+  }
+  search.set("page", String(Math.max(1, page)));
+  return `?${search.toString()}`;
+}
+
 export async function getProductOptions() {
   const db = createSupabaseAdminClient();
   const [{ data: categories }, { data: brands }, { data: attributes }] = await Promise.all([
@@ -16,6 +26,7 @@ export async function getProductOptions() {
 
 export async function getProductList(params: ProductListParams) {
   const db = createSupabaseAdminClient(), page = Math.max(1, Number.parseInt(params.page ?? "1") || 1), size = 25;
+  const stockFilter = params.stock && ["in_stock", "low_stock", "out_of_stock", "on_backorder"].includes(params.stock) ? params.stock : null;
   let allowedIds: string[] | null = null;
   if (params.category) {
     const { data } = await db.from("product_category_assignments").select("product_id").eq("category_id", params.category);
@@ -29,7 +40,12 @@ export async function getProductList(params: ProductListParams) {
   if (params.status && ["draft", "active", "archived"].includes(params.status)) query = query.eq("status", params.status);
   if (allowedIds) query = query.in("id", allowedIds);
   const ascending = params.sort === "name";
-  const { data, error, count } = await query.order(ascending ? "name" : "updated_at", { ascending }).range((page - 1) * size, page * size - 1);
+  const orderedQuery = query.order(ascending ? "name" : "updated_at", { ascending });
+  // Stock state is derived from live warehouse balances, so those candidates
+  // must be hydrated and filtered before applying list pagination.
+  const { data, error, count } = stockFilter
+    ? await orderedQuery.limit(1000)
+    : await orderedQuery.range((page - 1) * size, page * size - 1);
   if (error) throw new Error("Unable to load products.");
   const ids = (data ?? []).map((item) => item.id);
   const related = ids.length ? await Promise.all([
@@ -53,5 +69,11 @@ export async function getProductList(params: ProductListParams) {
     const image = primaryMedia ? { ...primaryMedia, signedUrl: mediaUrlMap.get(primaryMedia.storage_path) ?? null } : null;
     return { ...product, brand: product.brand_id ? brandMap.get(product.brand_id) ?? null : null, category: primary ? categoryMap.get(primary.category_id) ?? null : null, available, warehouseSummary, derivedStock: deriveStockStatus(available, quantity(product.low_stock_threshold), product.allow_backorders), image, variationCount: variations.filter((item) => item.product_id === product.id).length };
   });
-  return { products: params.stock ? products.filter((item) => item.derivedStock === params.stock) : products, count: count ?? 0, page, size };
+  const stockFilteredProducts = stockFilter ? products.filter((item) => item.derivedStock === stockFilter) : products;
+  return {
+    products: stockFilter ? stockFilteredProducts.slice((page - 1) * size, page * size) : stockFilteredProducts,
+    count: stockFilter ? stockFilteredProducts.length : count ?? 0,
+    page,
+    size,
+  };
 }
