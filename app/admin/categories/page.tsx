@@ -254,13 +254,13 @@ export default async function CategoriesPage({
             <label>
               Business category
               <select
-                name="sen_business_category"
+                name="business_category_id"
                 className="mt-1 w-full rounded border bg-white p-2"
               >
                 {businessCategories
                   .filter((category) => category.active)
                   .map((category) => (
-                    <option key={category.id} value={category.name}>
+                    <option key={category.id} value={category.id}>
                       {category.name}
                     </option>
                   ))}
@@ -288,4 +288,3 @@ export default async function CategoriesPage({
     </DashboardShell>
   );
 }
-

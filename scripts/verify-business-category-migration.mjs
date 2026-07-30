@@ -2,11 +2,15 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const migrationUrl = new URL(
-  "../supabase/migrations/202607300005_dynamic_business_categories.sql",
+  "../supabase/migrations/202607300009_dynamic_business_categories.sql",
   import.meta.url,
 );
 
-const sql = await readFile(migrationUrl, "utf8");
+const grantsUrl = new URL(
+  "../supabase/migrations/202607300010_dynamic_business_category_api_grants.sql",
+  import.meta.url,
+);
+const sql = `${await readFile(migrationUrl, "utf8")}\n${await readFile(grantsUrl, "utf8")}`;
 
 const requiredPatterns = [
   [/create table (if not exists )?public\.business_categories/i, "business category table"],
@@ -30,6 +34,10 @@ const requiredPatterns = [
   [/raise exception[\s\S]*business categor/i, "unresolved-row transaction guard"],
   [/insert into public\.business_category_fields/i, "default dynamic fields"],
   [/create unique index[\s\S]*business_categories[\s\S]*lower\(name\)/i, "case-insensitive name uniqueness"],
+  [/grant all on table public\.business_categories to service_role/i, "service-role category access"],
+  [/grant select on table public\.business_categories to authenticated/i, "authenticated category access"],
+  [/grant execute on function public\.admin_save_business_category/i, "category save RPC access"],
+  [/notify pgrst, 'reload schema'/i, "PostgREST schema reload"],
 ];
 
 for (const [pattern, label] of requiredPatterns) {
@@ -40,4 +48,3 @@ assert.match(sql, /^\s*begin\s*;/i, "Migration must be transactional.");
 assert.match(sql, /commit\s*;\s*$/i, "Migration must commit explicitly.");
 
 console.log("Dynamic business-category migration verification passed.");
-

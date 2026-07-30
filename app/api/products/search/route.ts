@@ -13,7 +13,7 @@ export async function GET(request: Request) {
   if (!escaped) return NextResponse.json({ products: [] });
   const { data, error } = await createSupabaseAdminClient()
     .from("products")
-    .select("id,name,slug,sku,model_number,sen_business_category")
+    .select("id,name,slug,sku,model_number,business_categories!products_business_category_id_fkey(name,slug)")
     .eq("status", "active")
     .eq("public_catalogue_visible", true)
     .or(
@@ -32,12 +32,16 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.json({
-    products: (data ?? []).map((product) => ({
-      id: product.id,
-      name: product.name,
-      slug: product.slug,
-      sku: product.sku,
-      category: product.sen_business_category,
-    })),
+    products: (data ?? []).map((product) => {
+      const category = product.business_categories[0];
+      return {
+        id: product.id,
+        name: product.name,
+        slug: product.slug,
+        sku: product.sku,
+        category: category?.name ?? "Products",
+        categorySlug: category?.slug ?? null,
+      };
+    }),
   });
 }

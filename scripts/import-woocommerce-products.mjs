@@ -333,13 +333,33 @@ async function ensureBrand(db, name, caches) {
   return brand.id;
 }
 
-async function ensureCategoryPath(db, categoryPath, business, caches) {
+async function ensureBusinessCategory(db, requestedName, caches) {
+  const key = normalized(requestedName || "Others");
+  if (caches.businessCategories.has(key)) return caches.businessCategories.get(key);
+  let category = await one(
+    db,
+    db.from("business_categories").select("id,name").eq("is_active", true).is("archived_at", null).ilike("name", requestedName || "Others").maybeSingle(),
+    `Unable to read business category ${requestedName || "Others"}`,
+  );
+  if (!category) {
+    category = await one(
+      db,
+      db.from("business_categories").select("id,name").eq("slug", "others").eq("is_active", true).is("archived_at", null).maybeSingle(),
+      "Unable to read the fallback business category",
+    );
+  }
+  if (!category) throw new Error("No active fallback business category is available.");
+  caches.businessCategories.set(key, category);
+  return category;
+}
+
+async function ensureCategoryPath(db, categoryPath, businessCategory, caches) {
   let parentId = null;
   let leaf = null;
   const rawParts = categoryPath.split(">").map((value) => textValue(value)).filter(Boolean);
   const parts = rawParts.length > 1 ? [rawParts[0], rawParts.at(-1)] : rawParts;
   for (const part of unique(parts)) {
-    const cacheKey = `${parentId ?? "root"}:${normalized(part)}`;
+    const cacheKey = `${businessCategory.id}:${parentId ?? "root"}:${normalized(part)}`;
     if (caches.categories.has(cacheKey)) {
       leaf = caches.categories.get(cacheKey);
       parentId = leaf;
@@ -348,8 +368,8 @@ async function ensureCategoryPath(db, categoryPath, business, caches) {
     let category = await one(
       db,
       parentId
-        ? db.from("product_categories").select("id,sen_business_category").eq("parent_id", parentId).ilike("name", part).maybeSingle()
-        : db.from("product_categories").select("id,sen_business_category").is("parent_id", null).ilike("name", part).maybeSingle(),
+        ? db.from("product_categories").select("id,business_category_id").eq("business_category_id", businessCategory.id).eq("parent_id", parentId).ilike("name", part).maybeSingle()
+        : db.from("product_categories").select("id,business_category_id").eq("business_category_id", businessCategory.id).is("parent_id", null).ilike("name", part).maybeSingle(),
       `Unable to read category ${part}`,
     );
     if (!category) {
@@ -357,14 +377,9 @@ async function ensureCategoryPath(db, categoryPath, business, caches) {
         name: part,
         slug: `${slugify(part)}-${crypto.randomUUID().slice(0, 6)}`,
         parent_id: parentId,
-        sen_business_category: business,
+        business_category_id: businessCategory.id,
+        sen_business_category: businessCategory.name,
       }).select("id").single(), `Unable to create category ${part}`);
-    } else if (category.sen_business_category !== business) {
-      await one(
-        db,
-        db.from("product_categories").update({ sen_business_category: business }).eq("id", category.id),
-        `Unable to update category ${part}`,
-      );
     }
     leaf = category.id;
     parentId = category.id;
@@ -397,7 +412,7 @@ async function ensureAttribute(db, attribute, caches) {
   return { attributeId, values };
 }
 
-function productPayload(staged, existing, hasChildren, brandId, internalNote) {
+function productPayload(staged, existing, hasChildren, brandId, businessCategory, internalNote) {
   const row = staged.raw;
   const regularPrice = optionalNumber(row["Regular price"]);
   const salePrice = optionalNumber(row["Sale price"]);
@@ -409,7 +424,8 @@ function productPayload(staged, existing, hasChildren, brandId, internalNote) {
     product_type: hasChildren || staged.sourceType === "variable" ? "variable" : "simple",
     status: "draft",
     featured: truthy(row["Is featured?"]),
-    sen_business_category: businessCategory(row),
+    business_category_id: businessCategory.id,
+    sen_business_category: businessCategory.name,
     brand_id: brandId,
     short_description: decodeHtml(row["Short description"]),
     description: decodeHtml(row.Description),
@@ -434,10 +450,10 @@ function productPayload(staged, existing, hasChildren, brandId, internalNote) {
   };
 }
 
-async function attachCategories(db, productId, staged, caches) {
+async function attachCategories(db, productId, staged, businessCategory, caches) {
   const paths = splitList(staged.raw.Categories).sort((left, right) => right.split(">").length - left.split(">").length);
   if (!paths.length) return;
-  const categoryId = await ensureCategoryPath(db, paths[0], businessCategory(staged.raw), caches);
+  const categoryId = await ensureCategoryPath(db, paths[0], businessCategory, caches);
   if (!categoryId) return;
   await one(db, db.from("product_category_assignments").delete().eq("product_id", productId), "Unable to replace product categories");
   await one(db, db.from("product_category_assignments").insert({ product_id: productId, category_id: categoryId, is_primary: true }), "Unable to assign a product category");
@@ -538,7 +554,7 @@ async function importProducts() {
     const match = product.internal_notes?.match(/WooCommerce source ID:\s*(\d+)/i);
     if (match) existingBySourceId.set(match[1], product);
   }
-  const caches = { brands: new Map(), categories: new Map(), attributes: new Map(), attributeValues: new Map(), tags: new Map() };
+  const caches = { brands: new Map(), businessCategories: new Map(), categories: new Map(), attributes: new Map(), attributeValues: new Map(), tags: new Map() };
   const parentRows = manifest.rows.filter((row) => row.sourceType !== "variation" && !excludedSourceIds.has(row.sourceId));
   const variationRows = manifest.rows.filter((row) => row.sourceType === "variation" && !excludedSourceIds.has(row.sourceId));
   const imageMissing = [...parentRows, ...variationRows].filter(
@@ -561,14 +577,15 @@ async function importProducts() {
     const hasChildren = childrenByParent.has(staged.sourceId);
     const existing = existingBySourceId.get(staged.sourceId) ?? existingBySku.get(staged.sku.toLowerCase()) ?? existingByName.get(normalized(staged.name)) ?? null;
     const brandId = await ensureBrand(db, inferBrand(staged.raw), caches);
+    const resolvedBusinessCategory = await ensureBusinessCategory(db, businessCategory(staged.raw), caches);
     const sourceNote = `WooCommerce source ID: ${staged.sourceId}\nImported from sen.com.bd on ${new Date().toISOString().slice(0, 10)}.`;
     const internalNote = existing?.internal_notes?.includes(`WooCommerce source ID: ${staged.sourceId}`) ? existing.internal_notes : [existing?.internal_notes, sourceNote].filter(Boolean).join("\n\n");
-    const payload = productPayload(staged, existing, hasChildren, brandId, internalNote);
+    const payload = productPayload(staged, existing, hasChildren, brandId, resolvedBusinessCategory, internalNote);
     let product;
     if (existing) product = await one(db, db.from("products").update(payload).eq("id", existing.id).select("id,sku,slug").single(), `Unable to update ${staged.name}`);
     else product = await one(db, db.from("products").insert(payload).select("id,sku,slug").single(), `Unable to create ${staged.name}`);
     parentMap.set(staged.sourceId, product.id);
-    await attachCategories(db, product.id, staged, caches);
+    await attachCategories(db, product.id, staged, resolvedBusinessCategory, caches);
     await attachTags(db, product.id, staged, caches);
     const variationAttributeNames = new Set(
       (childrenByParent.get(staged.sourceId) ?? [])
