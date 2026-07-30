@@ -5,6 +5,8 @@ import { requirePermission } from "@/lib/auth/permissions";
 import { requireProfile } from "@/lib/auth/session";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
+import { registerArchiveEntry, removeArchiveEntry } from "@/lib/deletion/archive";
+import { getDeletionMode } from "@/lib/deletion/settings";
 import { checked, optionalMoney, optionalNumber, optionalText, optionalWholeNumber, productStatuses, productTypes, requiredText, slugify, uuidOrNull, businessCategories } from "@/lib/inventory/validation";
 import { sanitizeProductHtml } from "@/lib/inventory/html";
 import { automaticSku, normalizeIdentifier } from "@/lib/inventory/identifiers";
@@ -147,12 +149,136 @@ export async function updateProductAction(productId: string, form: FormData) {
   try { await saveProduct(profile.id, productId, form, profile.role==="admin"||permissions.has("products.manage_identifiers")); } catch (error) { const message = error instanceof Error ? error.message : "Unknown"; console.error("Product update failed", { message }); redirect(target(productId, "error", /required|Invalid|price|JSON|Currency|variations|already exists|Permission/i.test(message) ? message : safeProductError(message))); }
   revalidatePath(`/admin/products/${productId}`); revalidatePath("/admin/products"); revalidatePath("/products"); if(form.get("submit_intent")==="save_generate") redirect(`/admin/products/${productId}/serials/new`); redirect(target(productId, "success", "Product updated."));
 }
-export async function archiveProductAction(form: FormData) { const { profile } = await requirePermission("products.archive"); const ids = [...new Set(form.getAll("productIds").map(String))].filter((item) => /^[0-9a-f-]{36}$/i.test(item)).slice(0, 100); if (!ids.length) redirect(target(undefined, "error", "Select at least one product.")); const db = createSupabaseAdminClient(); const { error } = await db.from("products").update({ status: "archived", updated_by: profile.id, updated_at: new Date().toISOString() }).in("id", ids); if (error) redirect(target(undefined, "error", "Unable to archive products.")); await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "product.archived", module: "products", entityType: "product", description: "Products archived.", newValues: { product_ids: ids, count: ids.length } }); revalidatePath("/admin/products"); redirect(target(undefined, "success", `${ids.length} product(s) archived.`)); }
+export async function archiveProductAction(form: FormData) {
+  const { profile } = await requirePermission("products.archive");
+  const ids = [...new Set(form.getAll("productIds").map(String))]
+    .filter((item) => /^[0-9a-f-]{36}$/i.test(item))
+    .slice(0, 100);
+  if (!ids.length)
+    redirect(target(undefined, "error", "Select at least one product."));
+  const db = createSupabaseAdminClient();
+  const { data: products, error: lookupError } = await db
+    .from("products")
+    .select("id,name,sku,status")
+    .in("id", ids);
+  if (lookupError || !products?.length)
+    redirect(target(undefined, "error", "Unable to load selected products."));
+  const archivedAt = new Date().toISOString();
+  const { error } = await db
+    .from("products")
+    .update({
+      status: "archived",
+      public_catalogue_visible: false,
+      archived_at: archivedAt,
+      archived_by: profile.id,
+      archive_reason: "Archived from the product list",
+      updated_by: profile.id,
+      updated_at: archivedAt,
+    })
+    .in(
+      "id",
+      products.map((product) => product.id),
+    );
+  if (error)
+    redirect(target(undefined, "error", "Unable to archive products."));
+  try {
+    await Promise.all(
+      products.map((product) =>
+        registerArchiveEntry(profile.id, {
+          entityType: "product",
+          entityId: product.id,
+          displayName: product.name,
+          reason: "Archived from the product list",
+          metadata: { sku: product.sku, previous_status: product.status },
+        }),
+      ),
+    );
+  } catch {
+    redirect(
+      target(
+        undefined,
+        "error",
+        "Products were hidden, but the Archive index could not be updated.",
+      ),
+    );
+  }
+  await writeAuditLog({
+    actorId: profile.id,
+    actorRole: profile.role,
+    action: "product.archived",
+    module: "products",
+    entityType: "product",
+    description: "Products archived.",
+    newValues: {
+      product_ids: products.map((product) => product.id),
+      count: products.length,
+    },
+  });
+  revalidatePath("/admin/products");
+  revalidatePath("/admin/archive");
+  revalidatePath("/products");
+  redirect(
+    target(undefined, "success", `${products.length} product(s) archived.`),
+  );
+}
 export async function deleteProductAction(productId: string) {
   const { profile } = await requireProfile(["admin"]), db = createSupabaseAdminClient();
   if (!/^[0-9a-f-]{36}$/i.test(productId)) redirect(target(undefined, "error", "Invalid product."));
   const { data: product, error: productError } = await db.from("products").select("id,name,sku").eq("id", productId).maybeSingle();
   if (productError || !product) redirect(target(undefined, "error", "Product not found."));
+  const mode = await getDeletionMode();
+  if (mode.operation === "archive") {
+    const archivedAt = new Date().toISOString();
+    const reason = "Deleted while Permanent Deletion Mode was disabled";
+    const { error: archiveError } = await db
+      .from("products")
+      .update({
+        status: "archived",
+        public_catalogue_visible: false,
+        archived_at: archivedAt,
+        archived_by: profile.id,
+        archive_reason: reason,
+        updated_by: profile.id,
+        updated_at: archivedAt,
+      })
+      .eq("id", productId);
+    if (archiveError)
+      redirect(target(productId, "error", "Unable to archive this product."));
+    try {
+      await registerArchiveEntry(profile.id, {
+        entityType: "product",
+        entityId: productId,
+        displayName: product.name,
+        reason,
+        metadata: { sku: product.sku },
+      });
+    } catch {
+      redirect(
+        target(
+          productId,
+          "error",
+          "The product was hidden, but the Archive index could not be updated.",
+        ),
+      );
+    }
+    await writeAuditLog({
+      actorId: profile.id,
+      actorRole: profile.role,
+      action: "product.archived",
+      module: "products",
+      entityType: "product",
+      entityId: productId,
+      description:
+        "Product moved to the Archive while permanent deletion was disabled.",
+      oldValues: { name: product.name, sku: product.sku },
+    });
+    revalidatePath("/admin/products");
+    revalidatePath("/admin/archive");
+    revalidatePath("/products");
+    redirect(
+      target(undefined, "success", "Product moved to the Archive."),
+    );
+  }
   const checks = await Promise.all([
     db.from("inventory_balances").select("id", { count: "exact", head: true }).eq("product_id", productId),
     db.from("inventory_movement_items").select("id", { count: "exact", head: true }).eq("product_id", productId),
@@ -163,11 +289,13 @@ export async function deleteProductAction(productId: string) {
     db.from("product_variations").select("id", { count: "exact", head: true }).eq("product_id", productId),
   ]);
   if (checks.some((result) => result.error || (result.count ?? 0) > 0)) {
-    const {error:archiveError}=await db.from("products").update({status:"archived",public_catalogue_visible:false,archived_at:new Date().toISOString(),archived_by:profile.id,archive_reason:"Protected inventory, serial, order, or financial history",updated_by:profile.id,updated_at:new Date().toISOString()}).eq("id",productId);
-    if(archiveError) redirect(target(productId,"error","Unable to archive this product."));
-    await writeAuditLog({actorId:profile.id,actorRole:profile.role,action:"product.archived",module:"products",entityType:"product",entityId:productId,description:"Product archived because protected operational history exists.",oldValues:{name:product.name,sku:product.sku}});
-    revalidatePath("/admin/products"); revalidatePath("/products");
-    redirect(target(undefined,"success","Product archived. Inventory and business history were preserved."));
+    redirect(
+      target(
+        productId,
+        "error",
+        "This product has stock, serial, order, variation, or financial history. Remove that test history first or turn off Permanent Deletion Mode to archive it.",
+      ),
+    );
   }
   const { data: media } = await db.from("product_media").select("storage_path").eq("product_id", productId);
   const cleanupResults = await Promise.all([
@@ -177,10 +305,15 @@ export async function deleteProductAction(productId: string) {
   if (cleanupResults.some((result) => result.error)) redirect(target(productId, "error", "Unable to prepare this unused product for deletion."));
   const { error } = await db.from("products").delete().eq("id", productId);
   if (error) redirect(target(productId, "error", "Unable to delete this product. Archive it instead."));
+  try {
+    await removeArchiveEntry("product", productId);
+  } catch {
+    console.error("Deleted product archive entry cleanup failed", { productId });
+  }
   const storagePaths = (media ?? []).map((item) => item.storage_path);
   if (storagePaths.length) await db.storage.from("product-media").remove(storagePaths);
   await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "product.deleted", module: "products", entityType: "product", entityId: productId, description: "Unused product permanently deleted.", oldValues: { name: product.name, sku: product.sku } });
-  revalidatePath("/admin/products"); revalidatePath("/admin/inventory"); revalidatePath("/products");
+  revalidatePath("/admin/products"); revalidatePath("/admin/archive"); revalidatePath("/admin/inventory"); revalidatePath("/products");
   redirect(target(undefined, "success", "Unused product permanently deleted."));
 }
 export async function quickUpdateProductAction(productId:string,form:FormData){

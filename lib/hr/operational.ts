@@ -1,0 +1,137 @@
+import "server-only";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { parsePagination } from "./validation";
+
+const checked = <T>(message: string, result: { data: T; error: { code?: string; message?: string } | null }) => {
+  if (result.error) {
+    console.error(message, { code: result.error.code, message: result.error.message });
+    throw new Error(message);
+  }
+  return result.data;
+};
+
+export async function getHrReferences() {
+  const db = createSupabaseAdminClient();
+  const results = await Promise.all([
+    db.from("hr_departments").select("id,code,name,is_active,manager_profile_id").order("name"),
+    db.from("hr_teams").select("id,code,name,department_id,is_active").order("name"),
+    db.from("hr_designations").select("id,code,name,department_id,is_active").order("name"),
+    db.from("profiles").select("id,full_name,email,role,status").in("role", ["employee","admin"]).eq("status","active").is("archived_at", null).order("full_name"),
+    db.from("work_locations").select("id,name,code").eq("is_active", true).order("name"),
+    db.from("hr_leave_types").select("id,code,name,default_days,is_paid,requires_document,is_active").order("name"),
+    db.from("hr_attendance_devices").select("id,code,name,device_type,vendor,model,serial_number,is_active,last_seen_at,work_location_id").order("name"),
+  ]);
+  const error = results.find((result) => result.error)?.error ?? null;
+  if (error) checked("Unable to load HR reference data.", { data: null, error });
+  return {
+    departments: results[0].data ?? [], teams: results[1].data ?? [], designations: results[2].data ?? [],
+    profiles: results[3].data ?? [], locations: results[4].data ?? [], leaveTypes: results[5].data ?? [], devices: results[6].data ?? [],
+  };
+}
+
+export async function getIntegratedHrDashboard() {
+  const db = createSupabaseAdminClient();
+  const today = new Date().toISOString().slice(0, 10);
+  const results = await Promise.all([
+    db.from("hr_employee_records").select("id,employment_status,hire_date,department_id", { count:"exact" }).is("archived_at", null).limit(5000),
+    db.from("hr_departments").select("id,name,is_active").order("name"),
+    db.from("hr_attendance").select("id,status").eq("work_date", today).limit(5000),
+    db.from("hr_leave_requests").select("id").eq("status","pending").limit(1000),
+    db.from("hr_attendance_correction_requests").select("id").eq("status","pending").limit(1000),
+    db.from("audit_logs").select("id,action,description,created_at").eq("module","hr").order("created_at",{ ascending:false }).limit(8),
+  ]);
+  const error = results.find((result) => result.error)?.error ?? null;
+  if (error) checked("Unable to load the HR dashboard.", { data: null, error });
+  return {
+    employees: results[0].data ?? [], departments: results[1].data ?? [], attendance: results[2].data ?? [],
+    pendingLeave: results[3].data?.length ?? 0, pendingCorrections: results[4].data?.length ?? 0, activity: results[5].data ?? [],
+  };
+}
+
+export async function getHrEmployees(input: {
+  page?: unknown; pageSize?: unknown; q?: string; status?: string;
+  department?: string; designation?: string; location?: string;
+} = {}) {
+  const { page, pageSize } = parsePagination(input.page, input.pageSize);
+  const from = (page - 1) * pageSize;
+  const db = createSupabaseAdminClient();
+  const search = input.q?.trim().replace(/[,%()]/g, " ").replace(/\s+/g, " ").slice(0, 100);
+  let matchingProfileIds: string[] = [];
+  if (search) {
+    const profileResult = await db.from("profiles").select("id")
+      .or(`full_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%`)
+      .is("archived_at", null).limit(500);
+    matchingProfileIds = checked("Unable to search employee contact information.", profileResult)?.map((item) => item.id) ?? [];
+  }
+  let query = db.from("hr_employee_records")
+    .select("id,profile_id,employee_number,job_title,employment_type,employment_status,hire_date,base_salary,salary_currency,department_id,team_id,designation_id,work_location_id,manager_profile_id,emergency_contact_name,emergency_contact_phone,archived_at,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email,phone,country,avatar_kind,avatar_emoji,avatar_path),hr_departments(name),hr_teams(name),hr_designations(name),work_locations(name)", { count:"exact" })
+    .order("created_at",{ ascending:false }).range(from, from + pageSize - 1);
+  query = input.status === "archived" ? query.not("archived_at","is",null) : query.is("archived_at",null);
+  if (input.status && !["archived","all"].includes(input.status)) query = query.eq("employment_status",input.status);
+  if (input.department) query = query.eq("department_id",input.department);
+  if (input.designation) query = query.eq("designation_id",input.designation);
+  if (input.location) query = query.eq("work_location_id",input.location);
+  if (search) {
+    const profileClause = matchingProfileIds.length ? `,profile_id.in.(${matchingProfileIds.join(",")})` : "";
+    query = query.or(`employee_number.ilike.%${search}%,job_title.ilike.%${search}%${profileClause}`);
+  }
+  const result = await query;
+  const rows = checked("Unable to load the employee directory.", result);
+  return { rows: rows ?? [], count: result.count ?? 0, page, pageSize };
+}
+
+export async function getHrEmployee(id: string) {
+  const db = createSupabaseAdminClient();
+  const results = await Promise.all([
+    db.from("hr_employee_records").select("*,profiles:profiles!hr_employee_records_profile_id_fkey(id,full_name,email,phone,country,status),hr_departments(name),hr_teams(name),hr_designations(name),work_locations(name)").eq("id",id).single(),
+    db.from("hr_employee_profiles").select("*").eq("employee_record_id",id).maybeSingle(),
+    db.from("hr_attendance").select("*").eq("employee_record_id",id).order("work_date",{ ascending:false }).limit(30),
+    db.from("hr_leave_requests").select("*,hr_leave_types(name)").eq("employee_record_id",id).order("created_at",{ ascending:false }).limit(30),
+    db.from("hr_payroll_records").select("*").eq("employee_record_id",id).order("period_start",{ ascending:false }).limit(24),
+    db.from("hr_performance_reviews").select("*").eq("employee_record_id",id).order("review_period_end",{ ascending:false }).limit(20),
+    db.from("hr_performance_goals").select("*").eq("employee_record_id",id).order("created_at",{ ascending:false }).limit(30),
+    db.from("hr_employee_documents").select("*").eq("employee_record_id",id).is("archived_at",null).order("created_at",{ ascending:false }).limit(50),
+    db.from("audit_logs").select("id,action,description,old_values,new_values,created_at").eq("module","hr").eq("entity_id",id).order("created_at",{ ascending:false }).limit(30),
+  ]);
+  const error = results.find((result) => result.error)?.error ?? null;
+  if (error) checked("Unable to load employee HR information.", { data: null, error });
+  return { record: results[0].data, personal: results[1].data, attendance: results[2].data ?? [], leave: results[3].data ?? [], payroll: results[4].data ?? [], reviews: results[5].data ?? [], goals: results[6].data ?? [], documents: results[7].data ?? [], activity: results[8].data ?? [] };
+}
+
+export async function getHrAttendance(date = new Date().toISOString().slice(0,10)) {
+  const db = createSupabaseAdminClient();
+  const [rows, corrections] = await Promise.all([
+    db.from("hr_attendance").select("*,hr_employee_records(employee_number,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email))").eq("work_date",date).order("created_at",{ ascending:false }).limit(5000),
+    db.from("hr_attendance_correction_requests").select("*,hr_employee_records(employee_number,profile_id,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email))").order("created_at",{ ascending:false }).limit(100),
+  ]);
+  if (rows.error ?? corrections.error) checked("Unable to load attendance.", { data:null, error:rows.error ?? corrections.error });
+  return { date, rows: rows.data ?? [], corrections: corrections.data ?? [] };
+}
+
+export async function getHrLeave() {
+  const db = createSupabaseAdminClient();
+  const [requests, balances, types] = await Promise.all([
+    db.from("hr_leave_requests").select("*,hr_leave_types(name),hr_employee_records(employee_number,profile_id,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email))").order("created_at",{ ascending:false }).limit(500),
+    db.from("hr_leave_balances").select("*,hr_leave_types(name),hr_employee_records(employee_number,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email))").order("leave_year",{ ascending:false }).limit(1000),
+    db.from("hr_leave_types").select("*").order("name"),
+  ]);
+  if (requests.error ?? balances.error ?? types.error) checked("Unable to load leave management.", { data:null, error:requests.error ?? balances.error ?? types.error });
+  return { requests: requests.data ?? [], balances: balances.data ?? [], types: types.data ?? [] };
+}
+
+export async function getHrPayroll() {
+  const result = await createSupabaseAdminClient().from("hr_payroll_records")
+    .select("*,hr_employee_records(employee_number,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email)),hr_payroll_components(*)")
+    .order("period_start",{ ascending:false }).limit(500);
+  return checked("Unable to load payroll.",result) ?? [];
+}
+
+export async function getHrPerformance() {
+  const db = createSupabaseAdminClient();
+  const [reviews, goals] = await Promise.all([
+    db.from("hr_performance_reviews").select("*,hr_employee_records(employee_number,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email))").order("review_period_end",{ ascending:false }).limit(500),
+    db.from("hr_performance_goals").select("*,hr_employee_records(employee_number,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email))").order("created_at",{ ascending:false }).limit(500),
+  ]);
+  if (reviews.error ?? goals.error) checked("Unable to load performance records.", { data:null, error:reviews.error ?? goals.error });
+  return { reviews: reviews.data ?? [], goals: goals.data ?? [] };
+}

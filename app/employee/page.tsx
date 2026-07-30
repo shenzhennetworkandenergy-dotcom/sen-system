@@ -49,6 +49,12 @@ export default async function EmployeePage() {
         </article>
       </section>
 
+      <section className="mt-6 rounded-xl border border-blue-200 bg-blue-50 p-6">
+        <h2 className="text-xl font-semibold text-blue-950">My HR workspace</h2>
+        <p className="mt-2 text-blue-900">Review attendance and leave, submit correction requests, and follow administrator decisions.</p>
+        <a href={routes.employeeHr} className="mt-4 inline-block rounded-lg bg-blue-700 px-4 py-2 font-semibold text-white">Open My HR</a>
+      </section>
+
       <section className="mt-6 rounded-xl border bg-[var(--surface)] p-6">
         <h2 className="text-xl font-semibold">Permitted modules</h2>
         {permittedModules.length ? (

@@ -46,3 +46,9 @@ Automatic SKU/model identity, duplicate prevention, product-specific serialized 
 ## Offline review checkpoint — Inventory modernization Phase 2
 
 Customer addresses, staff-created customer orders, reservations, exact serial allocation, packing, multiple partial shipments, dispatch, recorded tracking checkpoints, delivery, restricted documents, and the customer Order Centre are implemented on the offline Phase 2 branch. Local migrations and the rollback-only order-to-delivery database workflow pass. GitHub, hosted Supabase, and Vercel remain unchanged pending user review.
+
+## Offline review checkpoint — Human Resources
+
+The integrated HR module is complete for local review. It includes administrator-only employee lifecycle management, departments, teams, designations, attendance, attendance corrections, leave, payroll, performance, private employee documents, reports, HR settings, audit history, and notifications. Employees have a separate self-service area for their own HR summary, attendance, correction requests, leave balances, and leave requests.
+
+The attendance integration boundary is ready for a future fingerprint or camera device. It stores only normalized attendance events and device mappings; raw fingerprints, face images, and reusable biometric templates are intentionally excluded. Local Supabase migration execution, rollback-safe database workflow, unit/static verification, authenticated administrator route checks, ESLint, and the production build pass. Physical-device testing and hosted Supabase deployment remain pending until hardware is purchased and the user approves release.
