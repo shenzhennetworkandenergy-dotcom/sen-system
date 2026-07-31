@@ -12,7 +12,7 @@
     "supabase:reset": "supabase db reset",
     "supabase:stop": "supabase stop",
     "test:phase3b": "node scripts/verify-phase3b.mjs",
-    "test:inventory": "node scripts/verify-inventory.mjs",
+    "test:inventory": "node scripts/verify-inventory.mjs && node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/product-editing.test.mts",
     "test:inventory-phase1": "node scripts/verify-inventory-phase1.mjs",
     "test:inventory-phase2": "node scripts/verify-inventory-phase2.mjs",
     "test:inventory-phase3": "node scripts/verify-inventory-phase3.mjs",

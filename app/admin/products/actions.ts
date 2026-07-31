@@ -22,6 +22,10 @@ import {
   validateProductImageMetadata,
   type ProductImageMetadata,
 } from "@/lib/inventory/product-media";
+import {
+  buildProductCategoryIdentity,
+  productSaveError,
+} from "@/lib/inventory/product-editing";
 
 function target(id?: string, type: "success" | "error" = "success", message = "Saved") { return id ? `/admin/products/${id}?${type}=${encodeURIComponent(message)}` : `/admin/products?${type}=${encodeURIComponent(message)}`; }
 function createErrorTarget(message: string) { return `/admin/products/new?error=${encodeURIComponent(message)}`; }
@@ -34,14 +38,7 @@ function payload(form: FormData) {
   const serialTracking = checked(form, "serial_tracking_required"), modelNumber = optionalText(form, "model_number", 160); if (serialTracking && !modelNumber) throw new Error("Model number is required for serial-tracked products.");
   return { name, sku, model_number: modelNumber, slug: slugify(String(form.get("slug") || name)), product_type, status, brand_id: uuidOrNull(form.get("brand_id")), barcode: optionalText(form, "barcode", 100), manufacturer_part_number: optionalText(form, "manufacturer_part_number", 100), short_description: sanitizeProductHtml(optionalText(form, "short_description", 4000)), description: sanitizeProductHtml(optionalText(form, "description", 20000)), specifications, internal_notes: optionalText(form, "internal_notes", 5000), warranty_information: optionalText(form, "warranty_information", 1000), purchase_cost: optionalMoney(form, "purchase_cost", "Purchase cost"), regular_price, sale_price, currency, weight: optionalNumber(form, "weight"), length: optionalNumber(form, "length"), width: optionalNumber(form, "width"), height: optionalNumber(form, "height"), country_of_origin: optionalText(form, "country_of_origin", 100), manage_stock: checked(form, "manage_stock"), stock_status, low_stock_threshold: optionalWholeNumber(form, "low_stock_threshold", "Low-stock threshold") ?? 0, allow_backorders: checked(form, "allow_backorders"), sold_individually: checked(form, "sold_individually"), serial_tracking_required: serialTracking, batch_tracking_enabled: checked(form, "batch_tracking_enabled"), featured: checked(form, "featured"), public_catalogue_visible: checked(form, "public_catalogue_visible") };
 }
-function safeProductError(message: string) {
-  if (/SKU already exists|duplicate key.*sku/i.test(message)) return "That SKU is already used by a product or variation.";
-  if (/duplicate key.*slug/i.test(message)) return "That product slug is already in use.";
-  if (/Stock cannot be managed|variations cannot|cannot be changed to a simple/i.test(message)) return "Stock cannot be managed by both a variable parent and its variations.";
-  if (/Active product category required/i.test(message)) return "Choose an active product category.";
-  if (/Product not found/i.test(message)) return "Product not found.";
-  return "Unable to save product.";
-}
+const safeProductError = productSaveError;
 async function validateProductStockModel(productId: string | null, data: ReturnType<typeof payload>) {
   if (!productId) return;
   const db = createSupabaseAdminClient();
@@ -109,8 +106,12 @@ async function saveProduct(actorId: string, productId: string | null, form: Form
   );
   const data = {
     ...baseData,
-    sen_business_category: businessCategory.name,
     specifications,
+    ...buildProductCategoryIdentity({
+      title: baseData.name,
+      businessCategoryId,
+      businessCategoryName: businessCategory.name,
+    }),
   };
   await validateProductStockModel(productId, data);
   if (!productId) data.public_catalogue_visible = true;
@@ -166,12 +167,12 @@ async function uploadFormImages(productId: string, actorId: string, form: FormDa
 export async function createProductAction(form: FormData) {
   const { profile, permissions } = await requirePermission("products.create");
   let savedId: string;
-  try { savedId = await saveProduct(profile.id, null, form, profile.role==="admin"||permissions.has("products.manage_identifiers")); } catch (error) { const message = error instanceof Error ? error.message : "Unknown"; console.error("Product create failed", { message }); redirect(createErrorTarget(/required|Invalid|price|JSON|Currency|already exists|Permission/i.test(message) ? message : safeProductError(message))); }
+  try { savedId = await saveProduct(profile.id, null, form, profile.role==="admin"||permissions.has("products.manage_identifiers")); } catch (error) { const message = error instanceof Error ? error.message : "Unknown"; console.error("Product create failed", { message }); redirect(createErrorTarget(/required|Invalid|price|JSON|Currency|already exists/i.test(message) ? message : safeProductError(message))); }
   revalidatePath("/admin/products"); revalidatePath("/products"); if(form.get("submit_intent")==="save_generate") redirect(`/admin/products/${savedId}/serials/new`); redirect(target(savedId, "success", "Product created. You can now add its main and gallery images below."));
 }
 export async function updateProductAction(productId: string, form: FormData) {
   const { profile, permissions } = await requirePermission("products.edit");
-  try { await saveProduct(profile.id, productId, form, profile.role==="admin"||permissions.has("products.manage_identifiers")); } catch (error) { const message = error instanceof Error ? error.message : "Unknown"; console.error("Product update failed", { message }); redirect(target(productId, "error", /required|Invalid|price|JSON|Currency|variations|already exists|Permission/i.test(message) ? message : safeProductError(message))); }
+  try { await saveProduct(profile.id, productId, form, profile.role==="admin"||permissions.has("products.manage_identifiers")); } catch (error) { const message = error instanceof Error ? error.message : "Unknown"; console.error("Product update failed", { message }); redirect(target(productId, "error", /required|Invalid|price|JSON|Currency|variations|already exists/i.test(message) ? message : safeProductError(message))); }
   revalidatePath(`/admin/products/${productId}`); revalidatePath("/admin/products"); revalidatePath("/products"); if(form.get("submit_intent")==="save_generate") redirect(`/admin/products/${productId}/serials/new`); redirect(target(productId, "success", "Product updated."));
 }
 export async function archiveProductAction(form: FormData) {
