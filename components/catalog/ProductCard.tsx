@@ -1,5 +1,6 @@
 /* eslint-disable @next/next/no-img-element */
 import type { AwaitedReturn } from "@/types/catalog";
+import { categoryStyle } from "@/lib/catalog/themes";
 
 function plainText(value: string | null) {
   return value
@@ -12,18 +13,11 @@ function plainText(value: string | null) {
 
 export function ProductCard({ product }: { product: AwaitedReturn }) {
   const price = product.sale_price ?? product.regular_price;
-  const theme =
-    product.sen_business_category === "Networking"
-      ? "networking"
-      : product.sen_business_category === "Energy"
-        ? "energy"
-        : product.sen_business_category === "Medical Equipment"
-          ? "medical"
-          : "others";
 
   return (
     <article
-      className={`sen-catalogue-card catalogue-card-${theme} group`}
+      className="sen-catalogue-card catalogue-card-dynamic group"
+      style={categoryStyle(product.businessCategory)}
     >
       <a href={`/products/${product.slug}`} className="block">
         <div className="relative aspect-[4/3] overflow-hidden rounded-2xl bg-[radial-gradient(circle_at_50%_35%,white,#eaf1ff)]">
@@ -43,7 +37,7 @@ export function ProductCard({ product }: { product: AwaitedReturn }) {
             </div>
           )}
           <span className="catalogue-card-badge absolute left-3 top-3 rounded-full px-3 py-1 text-xs font-semibold">
-            {product.sen_business_category}
+            {product.businessCategory.name}
           </span>
         </div>
         <div className="p-1 pt-5">

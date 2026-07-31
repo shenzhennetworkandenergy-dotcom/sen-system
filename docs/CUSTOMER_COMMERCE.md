@@ -11,7 +11,7 @@ accounting, HR or permission models.
 - Customers and administrators can edit their own public profile fields.
 - A profile picture can be an approved emoji or an uploaded JPG, PNG or WebP.
 - Uploaded images are resized and compressed in the browser before storage.
-- Saved addresses are summarized on **My Account** and remain manageable from
+- Saved addresses are summarized on **My Profile** and remain manageable from
   the existing address page.
 - Account pages expose orders, sales history, quotation requests and support
   conversations.
@@ -27,18 +27,17 @@ archive operation:
   history remains;
 - archive metadata records when and why the record was archived.
 
-## Catalogue and four category themes
+## Catalogue and dynamic category themes
 
-The public catalogue uses the product `sen_business_category` field to select
-one of four experiences automatically:
+The public catalogue reads active business categories from the database.
+Administrators can add, organize, activate, and theme categories without a
+source-code change. A category's configured color is applied to its homepage
+card, catalogue controls, product cards, and product page.
 
-- Networking: dark infrastructure and cyan data accents.
-- Energy: green, amber and industrial automation accents.
-- Medical Equipment: clinical white, teal and safety-focused styling.
-- Others: dark industrial surfaces with orange construction accents.
-
-No separate theme field is required. Selecting a business category while
-creating or editing a product controls its catalogue theme.
+Selecting a business category while creating or editing a product also loads
+that category's configured specification fields. See
+[`DYNAMIC_BUSINESS_CATEGORIES.md`](DYNAMIC_BUSINESS_CATEGORIES.md) for the
+administration and data-model details.
 
 ## Cart and orders
 
@@ -88,6 +87,6 @@ Apply the migration to local Supabase, then verify:
 4. an out-of-stock product can create a quotation and support conversation;
 5. the admin quotation and support inboxes load those records;
 6. profile editing, emoji selection and image upload render correctly;
-7. saved addresses appear on **My Account**;
+7. saved addresses appear on **My Profile**;
 8. payment settings list UddoktaPay, EPS and cash on delivery.
 

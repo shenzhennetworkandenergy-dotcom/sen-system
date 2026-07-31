@@ -1,6 +1,7 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { deriveStockStatus, quantity } from "@/lib/inventory/stock";
+import { getBusinessCategories } from "@/lib/catalog/business-categories";
 
 export type ProductListParams = { q?: string; category?: string; brand?: string; type?: string; stock?: string; status?: string; sort?: string; page?: string };
 
@@ -16,12 +17,13 @@ export function productListPageHref(params: ProductListParams, page: number) {
 
 export async function getProductOptions() {
   const db = createSupabaseAdminClient();
-  const [{ data: categories }, { data: brands }, { data: attributes }] = await Promise.all([
-    db.from("product_categories").select("id,name,parent_id").eq("is_active", true).order("name"),
+  const [{ data: categories }, { data: brands }, { data: attributes }, businessCategories] = await Promise.all([
+    db.from("product_categories").select("id,name,parent_id,business_category_id").eq("is_active", true).order("name"),
     db.from("brands").select("id,name").eq("is_active", true).order("name"),
     db.from("attributes").select("id,name").eq("is_active", true).order("sort_order"),
+    getBusinessCategories({ includeFields: true }),
   ]);
-  return { categories: categories ?? [], brands: brands ?? [], attributes: attributes ?? [] };
+  return { categories: categories ?? [], brands: brands ?? [], attributes: attributes ?? [], businessCategories };
 }
 
 export async function getProductList(params: ProductListParams) {

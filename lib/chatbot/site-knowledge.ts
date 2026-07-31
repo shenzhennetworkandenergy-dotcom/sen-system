@@ -1,6 +1,6 @@
 import "server-only";
 
-import { siteConfig } from "@/config/site";
+import { getBusinessCategories } from "@/lib/catalog/business-categories";
 import { normalizeProductSearch } from "@/lib/chatbot/search";
 
 export type WebsiteKnowledgeResult = {
@@ -16,10 +16,6 @@ type KnowledgeEntry = {
   answerEn: string;
 };
 
-const categoryNames = siteConfig.businessCategories
-  .map((category) => category.label)
-  .join(", ");
-
 const entries: KnowledgeEntry[] = [
   {
     terms: ["about", "company", "who", "business", "পরিচয়", "কোম্পানি"],
@@ -30,8 +26,8 @@ const entries: KnowledgeEntry[] = [
   },
   {
     terms: ["category", "categories", "products", "sell", "equipment", "পণ্য", "ক্যাটাগরি"],
-    answerBn: `আমাদের প্রধান চারটি product category হলো: ${categoryNames}। Product catalogue থেকে category নির্বাচন করে পণ্য দেখা ও search করা যায়।`,
-    answerEn: `Our four main product categories are ${categoryNames}. You can choose a category or search by product name, SKU, or model in the product catalogue.`,
+    answerBn: "আমাদের বর্তমান product categories হলো: {{CATEGORY_NAMES}}। Product catalogue থেকে category নির্বাচন করে পণ্য দেখা ও search করা যায়।",
+    answerEn: "Our current product categories are {{CATEGORY_NAMES}}. You can choose a category or search by product name, SKU, or model in the product catalogue.",
   },
   {
     terms: ["contact", "phone", "whatsapp", "email", "address", "location", "যোগাযোগ", "ফোন", "ঠিকানা"],
@@ -70,9 +66,9 @@ const entries: KnowledgeEntry[] = [
   },
 ];
 
-export function searchWebsiteKnowledge(
+export async function searchWebsiteKnowledge(
   query: string,
-): WebsiteKnowledgeResult | null {
+): Promise<WebsiteKnowledgeResult | null> {
   const normalized = normalizeProductSearch(query);
   const words = new Set(normalized.split(" "));
   const isQuestion =
@@ -93,10 +89,20 @@ export function searchWebsiteKnowledge(
     .sort((left, right) => right.score - left.score);
   if (!ranked[0]?.score) return null;
 
+  const selected = ranked[0].entry;
+  let answerBn = selected.answerBn;
+  let answerEn = selected.answerEn;
+  if (answerEn.includes("{{CATEGORY_NAMES}}")) {
+    const categoryNames = (await getBusinessCategories())
+      .map((category) => category.name)
+      .join(", ");
+    answerBn = answerBn.replace("{{CATEGORY_NAMES}}", categoryNames);
+    answerEn = answerEn.replace("{{CATEGORY_NAMES}}", categoryNames);
+  }
   return {
     matchType: "information",
     available: false,
-    answerBn: ranked[0].entry.answerBn,
-    answerEn: ranked[0].entry.answerEn,
+    answerBn,
+    answerEn,
   };
 }

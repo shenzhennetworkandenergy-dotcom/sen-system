@@ -10,7 +10,7 @@ import { ProductPurchasePanel } from "@/components/catalog/ProductPurchasePanel"
 import { Container } from "@/components/ui/Container";
 import { JsonLd } from "@/components/seo/JsonLd";
 import { getPublicProduct } from "@/lib/catalog/products";
-import { catalogueTheme } from "@/lib/catalog/themes";
+import { catalogueTheme, categoryStyle } from "@/lib/catalog/themes";
 import { addToCartAction, orderNowAction } from "@/app/cart/actions";
 import { startConversationAction } from "@/app/account/messages/actions";
 
@@ -49,7 +49,7 @@ export default async function PublicProductDetailPage({ params, searchParams }: 
   const product = await getPublicProduct((await params).slug);
   if (!product) notFound();
   const price = product.sale_price ?? product.regular_price;
-  const theme = catalogueTheme(product.sen_business_category);
+  const theme = catalogueTheme(product.businessCategory);
   const specifications = product.specifications && typeof product.specifications === "object" && !Array.isArray(product.specifications)
     ? Object.entries(product.specifications as Record<string, unknown>)
     : [];
@@ -58,7 +58,7 @@ export default async function PublicProductDetailPage({ params, searchParams }: 
     ["Model number", product.model_number],
     ["Manufacturer part number", product.manufacturer_part_number],
     ["Brand", product.brand?.name],
-    ["Category", product.sen_business_category],
+    ["Category", product.businessCategory.name],
     ["Country of origin", product.country_of_origin],
     ["Serial tracking", product.serial_tracking_required ? "Required" : "Not required"],
   ];
@@ -75,7 +75,7 @@ export default async function PublicProductDetailPage({ params, searchParams }: 
     description:
       plainText(product.short_description) ?? plainText(product.description),
     image: product.images.map((image) => image.url),
-    category: product.sen_business_category,
+    category: product.businessCategory.name,
     url: `https://sen.com.bd/products/${product.slug}`,
     offers:
       price !== null
@@ -92,7 +92,7 @@ export default async function PublicProductDetailPage({ params, searchParams }: 
         : undefined,
   };
 
-  return <div className={`public-experience catalogue-theme catalogue-theme-${theme.key}`}>
+  return <div className="public-experience catalogue-theme catalogue-theme-dynamic" style={categoryStyle(theme)}>
     <JsonLd data={productSchema} />
     <PublicHeader />
     <main className="catalogue-theme-surface">
@@ -100,7 +100,7 @@ export default async function PublicProductDetailPage({ params, searchParams }: 
       <section className="pb-14"><Container><div className="grid gap-8 lg:grid-cols-[1.05fr_.95fr]">
         <ProductImageGallery
           images={product.images}
-          category={product.sen_business_category}
+          category={product.businessCategory.name}
         />
         <div className="catalogue-theme-panel rounded-3xl border p-6 shadow-sm sm:p-8">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-cyan-700">{product.brand?.name ?? "SEN sourced technology"}</p>

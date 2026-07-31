@@ -1,36 +1,69 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SEN System
 
-## Getting Started
+SEN System is the commerce, inventory, sales, quotation, purchasing, CRM, HR,
+customer-service, and public catalogue platform for Shenzhen Energy & Networks.
+It uses Next.js 16, React 19, Supabase, and PostgreSQL.
 
-First, run the development server:
+## Local development
+
+Requirements:
+
+- Node.js 20 or newer
+- npm
+- Docker Desktop for the optional local Supabase stack
+- Supabase CLI access for database migrations
+
+Install the locked dependencies and create a local environment file:
 
 ```bash
+npm ci
+copy .env.example .env.local
+npm run supabase:start
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Replace the placeholders in `.env.local` with the values printed by the local
+Supabase status command. Never commit `.env.local` or production credentials.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Quality checks
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run test:release
+```
 
-## Learn More
+The release gate checks the project structure, database/category migrations,
+module verifiers, unit tests, lint rules, and a production build.
 
-To learn more about Next.js, take a look at the following resources:
+## Database migrations
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Database history is stored in `supabase/migrations`. Apply every pending
+migration before deploying application code:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```bash
+npx supabase link --project-ref YOUR_PROJECT_REF
+npx supabase db push --linked
+```
 
-## Deploy on Vercel
+Review the migration list before and after the push. Do not edit a migration
+that has already been applied to a shared environment; add a new migration.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Production deployment
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The supported production architecture is:
+
+- Vercel: Next.js application and server routes
+- Supabase: PostgreSQL, authentication, and storage
+
+Follow [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for environment setup, database
+promotion, deployment, verification, rollback, and operational checks.
+
+## Documentation
+
+- [Dynamic business categories](docs/DYNAMIC_BUSINESS_CATEGORIES.md)
+- [Deployment guide](docs/DEPLOYMENT.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Permissions](docs/PERMISSIONS.md)
+- [Inventory](docs/INVENTORY.md)
+- [Sales](docs/SALES.md)
+- [Customer commerce](docs/CUSTOMER_COMMERCE.md)
+

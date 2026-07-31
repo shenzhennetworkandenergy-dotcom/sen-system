@@ -3,6 +3,8 @@ import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { quantity } from "@/lib/inventory/stock";
 import { sanitizeProductHtml } from "@/lib/inventory/html";
+import { fallbackBusinessCategory, toBusinessCategory } from "@/lib/catalog/themes";
+import type { BusinessCategoryRow } from "@/types/category";
 
 const staticImages: Record<string, string> = {
   "dell-poweredge-r630-e5-2680-v4": "/products/servers/dell-r630.png",
@@ -21,6 +23,14 @@ const staticImages: Record<string, string> = {
 
 export type CatalogueParams = { q?: string; category?: string; sort?: string };
 
+function linkedBusinessCategory(value: unknown) {
+  const row = (Array.isArray(value) ? value[0] : value) as
+    | BusinessCategoryRow
+    | null
+    | undefined;
+  return row ? toBusinessCategory(row) : fallbackBusinessCategory;
+}
+
 async function signedMediaMap(paths: string[]) {
   if (!paths.length) return new Map<string, string>();
   const db = createSupabaseAdminClient();
@@ -31,9 +41,9 @@ async function signedMediaMap(paths: string[]) {
 
 export async function getPublicProducts(params: CatalogueParams = {}) {
   const db = createSupabaseAdminClient();
-  let query = db.from("products").select("id,name,slug,sku,short_description,regular_price,sale_price,currency,sen_business_category,brand_id,featured,stock_status,updated_at").eq("status", "active").eq("public_catalogue_visible", true);
+  let query = db.from("products").select("id,name,slug,sku,short_description,regular_price,sale_price,currency,sen_business_category,business_category_id,business_categories!products_business_category_id_fkey(id,name,slug,description,tagline,theme_color,icon,image_path,is_active,sort_order,archived_at),brand_id,featured,stock_status,updated_at").eq("status", "active").eq("public_catalogue_visible", true);
   if (params.q?.trim()) query = query.or(`name.ilike.%${params.q.slice(0, 80)}%,sku.ilike.%${params.q.slice(0, 80)}%,short_description.ilike.%${params.q.slice(0, 80)}%`);
-  if (params.category) query = query.eq("sen_business_category", params.category);
+  if (params.category) query = query.eq("business_category_id", params.category);
   query = params.sort === "price_low" ? query.order("sale_price", { ascending: true, nullsFirst: false }) : params.sort === "name" ? query.order("name") : query.order("featured", { ascending: false }).order("updated_at", { ascending: false });
   const { data, error } = await query.limit(100);
   if (error) throw new Error("Unable to load the public product catalogue.");
@@ -50,13 +60,13 @@ export async function getPublicProducts(params: CatalogueParams = {}) {
   return products.map((product) => {
     const image = (media ?? []).find((item) => item.product_id === product.id && item.is_primary) ?? (media ?? []).find((item) => item.product_id === product.id);
     const available = (balances ?? []).filter((balance) => balance.product_id === product.id).reduce((sum, balance) => sum + quantity(balance.available), 0);
-    return { ...product, brand: product.brand_id ? brandMap.get(product.brand_id) ?? null : null, imageUrl: image ? signed.get(image.storage_path) ?? staticImages[product.slug] ?? null : staticImages[product.slug] ?? null, imageAlt: image?.alt_text ?? product.name, available };
+    return { ...product, businessCategory: linkedBusinessCategory(product.business_categories), brand: product.brand_id ? brandMap.get(product.brand_id) ?? null : null, imageUrl: image ? signed.get(image.storage_path) ?? staticImages[product.slug] ?? null : staticImages[product.slug] ?? null, imageAlt: image?.alt_text ?? product.name, available };
   });
 }
 
 export async function getPublicProduct(slug: string) {
   const db = createSupabaseAdminClient();
-  const { data: product, error } = await db.from("products").select("id,name,slug,sku,model_number,barcode,manufacturer_part_number,product_type,short_description,description,specifications,warranty_information,datasheet_url,regular_price,sale_price,currency,weight,length,width,height,country_of_origin,stock_status,allow_backorders,serial_tracking_required,sen_business_category,brand_id,updated_at").eq("slug", slug).eq("status", "active").eq("public_catalogue_visible", true).maybeSingle();
+  const { data: product, error } = await db.from("products").select("id,name,slug,sku,model_number,barcode,manufacturer_part_number,product_type,short_description,description,specifications,warranty_information,datasheet_url,regular_price,sale_price,currency,weight,length,width,height,country_of_origin,stock_status,allow_backorders,serial_tracking_required,sen_business_category,business_category_id,business_categories!products_business_category_id_fkey(id,name,slug,description,tagline,theme_color,icon,image_path,is_active,sort_order,archived_at),brand_id,updated_at").eq("slug", slug).eq("status", "active").eq("public_catalogue_visible", true).maybeSingle();
   if (error) throw new Error("Unable to load this product.");
   if (!product) return null;
   const [{ data: brand }, { data: assignments }, { data: media }, { data: variations }, { data: balances }] = await Promise.all([
@@ -79,5 +89,5 @@ export async function getPublicProduct(slug: string) {
       incoming: variationBalances.reduce((sum, balance) => sum + quantity(balance.incoming), 0),
     };
   });
-  return { ...product, short_description:sanitizeProductHtml(product.short_description),description:sanitizeProductHtml(product.description), brand, categories: (assignments ?? []).map((item) => item.product_categories as unknown as { name: string; slug: string }).filter(Boolean), images, variations: variationsWithStock, available, incoming };
+  return { ...product, businessCategory: linkedBusinessCategory(product.business_categories), short_description:sanitizeProductHtml(product.short_description),description:sanitizeProductHtml(product.description), brand, categories: (assignments ?? []).map((item) => item.product_categories as unknown as { name: string; slug: string }).filter(Boolean), images, variations: variationsWithStock, available, incoming };
 }

@@ -18,9 +18,12 @@ function parseEnvironment(source) {
   return values;
 }
 
-const environment = parseEnvironment(
-  await readFile(new URL("../.env.local", import.meta.url), "utf8"),
-);
+const environment = {
+  ...parseEnvironment(
+    await readFile(new URL("../.env.local", import.meta.url), "utf8").catch(() => ""),
+  ),
+  ...process.env,
+};
 const supabaseUrl = environment.NEXT_PUBLIC_SUPABASE_URL;
 const publishableKey = environment.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
 const adminKey = environment.SUPABASE_SECRET_KEY ?? environment.SUPABASE_SERVICE_ROLE_KEY;

@@ -7,15 +7,16 @@ import { ProductSearch } from "@/components/catalog/ProductSearch";
 import { PublicFooter } from "@/components/layout/PublicFooter";
 import { PublicHeader } from "@/components/layout/PublicHeader";
 import { Container } from "@/components/ui/Container";
+import { getBusinessCategories } from "@/lib/catalog/business-categories";
+import { resolvePublicCategory } from "@/lib/catalog/business-category-view";
 import { getPublicProducts } from "@/lib/catalog/products";
 import {
   catalogueTheme,
-  categoryThemes,
-  type BusinessCategory,
+  categoryStyle,
+  fallbackBusinessCategory,
 } from "@/lib/catalog/themes";
 
 export const dynamic = "force-dynamic";
-const categories = Object.keys(categoryThemes) as BusinessCategory[];
 
 export async function generateMetadata({
   searchParams,
@@ -23,19 +24,18 @@ export async function generateMetadata({
   searchParams: Promise<{ q?: string; category?: string }>;
 }): Promise<Metadata> {
   const params = await searchParams;
-  const category = categories.includes(params.category as BusinessCategory)
-    ? (params.category as BusinessCategory)
-    : null;
-  const title = category ? `${category} Products` : "Products";
+  const categories = await getBusinessCategories();
+  const category = resolvePublicCategory(categories, params.category);
+  const title = category ? `${category.name} Products` : "Products";
   const description = category
-    ? `Explore SEN ${category.toLowerCase()} products, verified sourcing, pricing and professional support.`
-    : "Explore SEN enterprise networking, energy, medical and specialist equipment.";
+    ? `Explore SEN ${category.name.toLowerCase()} products, verified sourcing, pricing and professional support.`
+    : "Explore SEN enterprise products across every active business category.";
   return {
     title,
     description,
     alternates: {
       canonical: category
-        ? `/products?category=${encodeURIComponent(category)}`
+        ? `/products?category=${encodeURIComponent(category.slug)}`
         : "/products",
     },
     openGraph: { title, description, type: "website", url: "/products" },
@@ -50,17 +50,18 @@ export default async function PublicProductsPage({
 }) {
   await connection();
   const params = await searchParams;
-  const selectedCategory = categories.includes(
-    params.category as BusinessCategory,
-  )
-    ? (params.category as BusinessCategory)
-    : null;
-  const theme = catalogueTheme(selectedCategory);
-  const products = await getPublicProducts(params);
+  const categories = await getBusinessCategories();
+  const selectedCategory = resolvePublicCategory(categories, params.category);
+  const theme = catalogueTheme(selectedCategory ?? fallbackBusinessCategory);
+  const products = await getPublicProducts({
+    ...params,
+    category: selectedCategory?.id,
+  });
 
   return (
     <div
-      className={`public-experience catalogue-theme catalogue-theme-${theme.key}`}
+      className="public-experience catalogue-theme catalogue-theme-dynamic"
+      style={categoryStyle(theme)}
     >
       <PublicHeader />
       <main className="catalogue-theme-surface min-h-screen">
@@ -68,35 +69,35 @@ export default async function PublicProductsPage({
           <div className="sen-grid" aria-hidden="true" />
           <Container className="relative z-10 py-16 sm:py-24">
             <p className="sen-kicker">
-              {selectedCategory ?? "SEN product catalogue"}
+              {selectedCategory?.name ?? "SEN product catalogue"}
             </p>
             <h1 className="mt-6 max-w-4xl text-4xl font-semibold tracking-tight sm:text-6xl">
               {selectedCategory
-                ? categoryThemes[selectedCategory].tagline
-                : "Four industries. Four distinct product experiences."}
+                ? selectedCategory.tagline
+                : `${categories.length} industries. Distinct product experiences.`}
             </h1>
             <p className="mt-5 max-w-2xl text-lg leading-8 opacity-80">
               {selectedCategory
-                ? `Explore SEN ${selectedCategory.toLowerCase()} products, sourcing and professional support.`
+                ? `Explore SEN ${selectedCategory.name.toLowerCase()} products, sourcing and professional support.`
                 : "Choose a category to enter its dedicated visual catalogue, or browse everything together."}
             </p>
             <nav
               aria-label="Product categories"
-              className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
+              className="mt-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-[repeat(auto-fit,minmax(13rem,1fr))]"
             >
               {categories.map((category) => {
-                const categoryTheme = categoryThemes[category];
-                const active = selectedCategory === category;
+                const active = selectedCategory?.id === category.id;
                 return (
                   <Link
-                    key={category}
-                    href={`/products?category=${encodeURIComponent(category)}`}
-                    className={`catalogue-category-switch catalogue-category-switch-${categoryTheme.key} ${
+                    key={category.id}
+                    href={`/products?category=${encodeURIComponent(category.slug)}`}
+                    className={`catalogue-category-switch catalogue-category-switch-dynamic ${
                       active ? "is-active" : ""
                     }`}
+                    style={categoryStyle(category)}
                   >
-                    <span>{category}</span>
-                    <small>{categoryTheme.tagline}</small>
+                    <span>{category.name}</span>
+                    <small>{category.tagline}</small>
                   </Link>
                 );
               })}
@@ -105,19 +106,24 @@ export default async function PublicProductsPage({
         </section>
         <section className="py-10 sm:py-14">
           <Container>
-            <ProductSearch defaultValue={params.q ?? ""} className="catalogue-theme-panel mb-3 rounded-2xl border p-4 shadow-sm" />
+            <ProductSearch
+              defaultValue={params.q ?? ""}
+              className="catalogue-theme-panel mb-3 rounded-2xl border p-4 shadow-sm"
+            />
             <form className="catalogue-theme-panel grid gap-3 rounded-2xl border p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-[15rem_13rem_auto]">
               <input type="hidden" name="q" value={params.q ?? ""} />
               <label className="text-sm font-semibold">
                 Category
                 <select
                   name="category"
-                  defaultValue={selectedCategory ?? ""}
+                  defaultValue={selectedCategory?.slug ?? ""}
                   className="mt-1 w-full rounded-xl border border-slate-300 bg-white p-3 font-normal text-slate-950"
                 >
                   <option value="">All categories</option>
                   {categories.map((category) => (
-                    <option key={category}>{category}</option>
+                    <option key={category.id} value={category.slug}>
+                      {category.name}
+                    </option>
                   ))}
                 </select>
               </label>
@@ -140,7 +146,7 @@ export default async function PublicProductsPage({
             <div className="mt-8 flex flex-wrap items-end justify-between gap-3">
               <div>
                 <p className="catalogue-theme-tagline text-sm font-semibold uppercase tracking-[0.14em]">
-                  {selectedCategory ?? "Live catalogue"}
+                  {selectedCategory?.name ?? "Live catalogue"}
                 </p>
                 <h2 className="mt-1 text-3xl font-semibold">
                   {products.length} products
@@ -176,3 +182,4 @@ export default async function PublicProductsPage({
     </div>
   );
 }
+

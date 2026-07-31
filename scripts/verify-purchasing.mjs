@@ -22,8 +22,9 @@ const receiptActionSource=purchasingActionsSource.slice(
 assert.match(receiptFormSource,/purchase_order_item_id:\s*item\.id,[\s\S]*?quantity:\s*value\.quantity/, "Receipt form must submit the database RPC quantity field.");
 assert.match(receiptActionSource,/quantity:\s*parseWholeNumber\(item\.quantity,/, "Receipt action must validate and forward the form's quantity field.");
 
-const envText=await readFile(new URL(".env.local",root),"utf8");
-const env=Object.fromEntries(envText.split(/\r?\n/).map((line)=>line.trim()).filter((line)=>line&&!line.startsWith("#")&&line.includes("=")).map((line)=>{const index=line.indexOf("=");return [line.slice(0,index),line.slice(index+1).replace(/^['"]|['"]$/g,"")];}));
+const envText=await readFile(new URL(".env.local",root),"utf8").catch(()=>"");
+const fileEnv=Object.fromEntries(envText.split(/\r?\n/).map((line)=>line.trim()).filter((line)=>line&&!line.startsWith("#")&&line.includes("=")).map((line)=>{const index=line.indexOf("=");return [line.slice(0,index),line.slice(index+1).replace(/^['"]|['"]$/g,"")];}));
+const env={...fileEnv,...process.env};
 const url=env.NEXT_PUBLIC_SUPABASE_URL;
 const key=env.SUPABASE_SECRET_KEY||env.SUPABASE_SERVICE_ROLE_KEY;
 assert.ok(url&&key,"Local Supabase URL and server key are required.");
