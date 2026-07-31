@@ -49,6 +49,7 @@ export async function recordSelfAttendanceAction(form: FormData) {
       "already checked out",
       "Check in before",
       "does not allow check in",
+      "non-working day",
       "active employee HR record",
       "timezone is invalid",
     ].find((message) => result.error.message.includes(message));

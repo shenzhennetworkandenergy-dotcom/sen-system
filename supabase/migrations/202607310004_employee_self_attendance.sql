@@ -46,6 +46,7 @@ declare
   current_attendance public.hr_attendance%rowtype;
   location_timezone text;
   schedule_timezone text;
+  schedule_is_working boolean;
   v_schedule_start time;
   v_schedule_end time;
   v_scheduled_start_at timestamptz;
@@ -55,6 +56,7 @@ declare
   recorded_at timestamptz := clock_timestamp();
   resolved_timezone text;
   resolved_work_date date;
+  candidate_work_date date;
   result_id uuid;
 begin
   if requested_event not in ('check_in', 'check_out') then
@@ -90,7 +92,6 @@ begin
 
   resolved_timezone := coalesce(
     nullif(trim(location_timezone), ''),
-    nullif(trim(requested_timezone), ''),
     'Asia/Dhaka'
   );
   if not exists (
@@ -101,8 +102,12 @@ begin
 
   resolved_work_date := (recorded_at at time zone resolved_timezone)::date;
 
-  select schedule.timezone, schedule.workday_start, schedule.workday_end
-  into schedule_timezone, v_schedule_start, v_schedule_end
+  select
+    schedule.timezone, schedule.is_working,
+    schedule.workday_start, schedule.workday_end
+  into
+    schedule_timezone, schedule_is_working,
+    v_schedule_start, v_schedule_end
   from public.hr_employee_work_schedules schedule
   where schedule.employee_record_id = employee.id
     and schedule.weekday =
@@ -114,9 +119,10 @@ begin
   end if;
 
   select
+    schedule.is_working,
     coalesce(schedule.workday_start, settings.workday_start),
     coalesce(schedule.workday_end, settings.workday_end)
-  into v_schedule_start, v_schedule_end
+  into schedule_is_working, v_schedule_start, v_schedule_end
   from public.hr_settings settings
   left join public.hr_employee_work_schedules schedule
     on schedule.employee_record_id = employee.id
@@ -132,6 +138,23 @@ begin
       + v_schedule_end
     ) at time zone resolved_timezone;
 
+  if requested_event = 'check_in' and schedule_is_working is false then
+    raise exception 'Today is configured as a non-working day';
+  end if;
+
+  if requested_event = 'check_out' then
+    select attendance.work_date
+    into candidate_work_date
+    from public.hr_attendance attendance
+    where attendance.employee_record_id = employee.id
+      and attendance.check_in is not null
+      and attendance.check_out is null
+      and attendance.work_date between resolved_work_date - 1 and resolved_work_date
+    order by attendance.work_date desc
+    limit 1;
+    resolved_work_date := coalesce(candidate_work_date, resolved_work_date);
+  end if;
+
   perform pg_advisory_xact_lock(
     hashtextextended(employee.id::text || ':' || resolved_work_date::text, 0)
   );
@@ -142,6 +165,18 @@ begin
   where employee_record_id = employee.id
     and hr_attendance.work_date = resolved_work_date
   for update;
+
+  if current_attendance.id is not null then
+    resolved_timezone := current_attendance.timezone;
+    v_scheduled_start_at := coalesce(
+      current_attendance.scheduled_start_at,
+      v_scheduled_start_at
+    );
+    v_scheduled_end_at := coalesce(
+      current_attendance.scheduled_end_at,
+      v_scheduled_end_at
+    );
+  end if;
 
   if requested_event = 'check_in' then
     if current_attendance.check_in is not null then
@@ -225,6 +260,7 @@ begin
       'event', requested_event,
       'eventAt', recorded_at,
       'timezone', resolved_timezone,
+      'browserTimezone', nullif(trim(requested_timezone), ''),
       'workDate', resolved_work_date,
       'source', 'self_service'
     )
@@ -239,3 +275,179 @@ revoke all on function public.hr_record_self_attendance(uuid,text,text)
   from public, anon, authenticated;
 grant execute on function public.hr_record_self_attendance(uuid,text,text)
   to service_role;
+
+create or replace function public.hr_apply_device_attendance_event(
+  requested_employee_id uuid,
+  requested_event_type text,
+  requested_occurred_at timestamptz,
+  requested_timezone text,
+  requested_start_time time,
+  requested_end_time time,
+  requested_late_grace integer default 0
+) returns table (
+  attendance_id uuid,
+  applied_work_date date,
+  applied_timezone text
+)
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  current_attendance public.hr_attendance%rowtype;
+  candidate_work_date date;
+  resolved_work_date date;
+  resolved_timezone text := nullif(trim(requested_timezone), '');
+  v_scheduled_start_at timestamptz;
+  v_scheduled_end_at timestamptz;
+  resulting_check_in timestamptz;
+  resulting_check_out timestamptz;
+  check_in_difference integer;
+  check_out_difference integer;
+  resulting_status text;
+  result_id uuid;
+begin
+  if requested_event_type not in ('check_in', 'check_out') then
+    raise exception 'Device attendance event is invalid';
+  end if;
+  if requested_occurred_at is null then
+    raise exception 'Device attendance timestamp is required';
+  end if;
+  if resolved_timezone is null
+     or not exists (
+       select 1 from pg_timezone_names where name = resolved_timezone
+     ) then
+    raise exception 'Device attendance timezone is invalid';
+  end if;
+  if not exists (
+    select 1 from public.hr_employee_records employee
+    where employee.id = requested_employee_id
+      and employee.archived_at is null
+  ) then
+    raise exception 'Device employee record was not found';
+  end if;
+
+  resolved_work_date :=
+    (requested_occurred_at at time zone resolved_timezone)::date;
+
+  if requested_event_type = 'check_out' then
+    select attendance.work_date
+    into candidate_work_date
+    from public.hr_attendance attendance
+    where attendance.employee_record_id = requested_employee_id
+      and attendance.check_in is not null
+      and attendance.check_out is null
+      and attendance.work_date between resolved_work_date - 1 and resolved_work_date
+    order by attendance.work_date desc
+    limit 1;
+    resolved_work_date := coalesce(candidate_work_date, resolved_work_date);
+  end if;
+
+  perform pg_advisory_xact_lock(
+    hashtextextended(
+      requested_employee_id::text || ':' || resolved_work_date::text,
+      0
+    )
+  );
+
+  select *
+  into current_attendance
+  from public.hr_attendance attendance
+  where attendance.employee_record_id = requested_employee_id
+    and attendance.work_date = resolved_work_date
+  for update;
+
+  if current_attendance.id is not null then
+    resolved_timezone := current_attendance.timezone;
+  end if;
+  v_scheduled_start_at := coalesce(
+    current_attendance.scheduled_start_at,
+    (resolved_work_date + requested_start_time) at time zone resolved_timezone
+  );
+  v_scheduled_end_at := coalesce(
+    current_attendance.scheduled_end_at,
+    (
+      resolved_work_date
+      + case when requested_end_time <= requested_start_time then 1 else 0 end
+      + requested_end_time
+    ) at time zone resolved_timezone
+  );
+
+  resulting_check_in := current_attendance.check_in;
+  resulting_check_out := current_attendance.check_out;
+  if requested_event_type = 'check_in' then
+    resulting_check_in := case
+      when resulting_check_in is null
+        or requested_occurred_at < resulting_check_in
+      then requested_occurred_at
+      else resulting_check_in
+    end;
+  else
+    resulting_check_out := case
+      when resulting_check_out is null
+        or requested_occurred_at > resulting_check_out
+      then requested_occurred_at
+      else resulting_check_out
+    end;
+  end if;
+
+  if resulting_check_in is not null
+     and resulting_check_out is not null
+     and resulting_check_out < resulting_check_in then
+    raise exception 'Device check-out cannot be before check-in';
+  end if;
+
+  check_in_difference := case
+    when resulting_check_in is null then null
+    else round(
+      extract(epoch from (resulting_check_in - v_scheduled_start_at)) / 60
+    )::integer
+  end;
+  check_out_difference := case
+    when resulting_check_out is null then null
+    else round(
+      extract(epoch from (resulting_check_out - v_scheduled_end_at)) / 60
+    )::integer
+  end;
+  resulting_status := case
+    when current_attendance.status in ('overtime', 'holiday_overtime')
+      then current_attendance.status
+    when coalesce(check_in_difference, 0)
+      > greatest(coalesce(requested_late_grace, 0), 0)
+      then 'late'
+    else 'present'
+  end;
+
+  insert into public.hr_attendance (
+    employee_record_id, work_date, status, check_in, check_out, source,
+    timezone, scheduled_start_at, scheduled_end_at,
+    check_in_variance_minutes, check_out_variance_minutes, minutes_late
+  ) values (
+    requested_employee_id, resolved_work_date, resulting_status,
+    resulting_check_in, resulting_check_out, 'device', resolved_timezone,
+    v_scheduled_start_at, v_scheduled_end_at, check_in_difference,
+    check_out_difference, greatest(coalesce(check_in_difference, 0), 0)
+  )
+  on conflict (employee_record_id, work_date) do update set
+    status = excluded.status,
+    check_in = excluded.check_in,
+    check_out = excluded.check_out,
+    source = excluded.source,
+    timezone = excluded.timezone,
+    scheduled_start_at = excluded.scheduled_start_at,
+    scheduled_end_at = excluded.scheduled_end_at,
+    check_in_variance_minutes = excluded.check_in_variance_minutes,
+    check_out_variance_minutes = excluded.check_out_variance_minutes,
+    minutes_late = excluded.minutes_late,
+    updated_at = clock_timestamp()
+  returning id into result_id;
+
+  return query select result_id, resolved_work_date, resolved_timezone;
+end $$;
+
+revoke all on function public.hr_apply_device_attendance_event(
+  uuid,text,timestamptz,text,time,time,integer
+) from public, anon, authenticated;
+grant execute on function public.hr_apply_device_attendance_event(
+  uuid,text,timestamptz,text,time,time,integer
+) to service_role;

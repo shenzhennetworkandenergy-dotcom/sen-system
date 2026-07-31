@@ -37,15 +37,23 @@ test("self attendance migration uses server time and preserves device-ready sour
   assert.match(migration, /for update/i);
   assert.match(migration, /self_service/i);
   assert.match(migration, /fingerprint|camera|device/i);
+  assert.match(migration, /hr_apply_device_attendance_event/i);
+  assert.match(migration, /non-working day/i);
+  assert.match(migration, /resolved_work_date\s*-\s*1/i);
+  assert.doesNotMatch(
+    migration,
+    /resolved_timezone\s*:=\s*coalesce\([\s\S]{0,160}requested_timezone/i,
+  );
   assert.match(migration, /grant execute[\s\S]*to service_role/i);
   assert.match(migration, /revoke all[\s\S]*authenticated/i);
 });
 
 test("attendance page exposes automatic-timezone check-in and check-out controls", async () => {
-  const [page, actions, control] = await Promise.all([
+  const [page, actions, control, deviceRoute] = await Promise.all([
     readFile("app/employee/hr/attendance/page.tsx", "utf8"),
     readFile("app/employee/hr/actions.ts", "utf8"),
     readFile("components/hr/AttendanceClockControls.tsx", "utf8"),
+    readFile("app/api/hr/attendance-events/route.ts", "utf8"),
   ]);
 
   assert.match(page, /AttendanceClockControls/);
@@ -55,4 +63,7 @@ test("attendance page exposes automatic-timezone check-in and check-out controls
   assert.match(control, /resolvedOptions\(\)\.timeZone/);
   assert.match(control, /Check in/);
   assert.match(control, /Check out/);
+  assert.match(page, /openAttendance/);
+  assert.match(deviceRoute, /hr_apply_device_attendance_event/);
+  assert.doesNotMatch(deviceRoute, /from\("hr_attendance"\)[\s\S]*\.upsert/);
 });

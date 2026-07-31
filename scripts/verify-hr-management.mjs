@@ -111,7 +111,7 @@ assert.match(hrActions, /hr_replace_employee_schedule/);
 assert.match(hrActions, /actionOutcomeUrl\(destination,outcome\)/);
 assert.match(employeeActions, /finish\(form, fallback, kind, message\)/);
 assert.match(deviceEvents, /resolveAttendanceWorkDate/);
-assert.match(deviceEvents, /calculateAttendanceVariance/);
+assert.match(deviceEvents, /hr_apply_device_attendance_event/);
 assert.match(attendanceReport, /check_in_variance_minutes/);
 assert.match(operationalQueries, /profiles!hr_employee_records_profile_id_fkey/);
 assert.doesNotMatch(

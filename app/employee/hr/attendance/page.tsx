@@ -12,7 +12,15 @@ export default async function EmployeeAttendancePage({ searchParams }: { searchP
   await connection();
   const [data,params] = await Promise.all([getEmployeeHrWorkspace(),searchParams]);
   const instant = new Date().toISOString();
-  const todayAttendance = data.attendance.find(
+  const openAttendance = data.attendance.find((row) => {
+    if (!row.check_in || row.check_out) return false;
+    const localToday = resolveAttendanceWorkDate(instant, row.timezone);
+    const previous = new Date(`${localToday}T00:00:00.000Z`);
+    previous.setUTCDate(previous.getUTCDate() - 1);
+    return row.work_date === localToday
+      || row.work_date === previous.toISOString().slice(0, 10);
+  });
+  const todayAttendance = openAttendance ?? data.attendance.find(
     (row) => row.work_date === resolveAttendanceWorkDate(instant, row.timezone),
   ) ?? null;
   const availability = getSelfAttendanceAvailability(todayAttendance);
