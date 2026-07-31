@@ -39,6 +39,7 @@
     "products:repair-seo-data": "node scripts/repair-product-seo-data.mjs",
     "test:chatbot": "node scripts/verify-chatbot.mjs",
     "test:chatbot-conversation": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/chatbot-conversation.test.mts",
+    "test:crm-inquiry-unread": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/crm-inquiry-unread.test.mts",
     "products:stage-woocommerce": "node scripts/import-woocommerce-products.mjs --stage",
     "products:import-woocommerce": "node scripts/import-woocommerce-products.mjs --import",
     "products:verify-woocommerce": "node scripts/import-woocommerce-products.mjs --verify"

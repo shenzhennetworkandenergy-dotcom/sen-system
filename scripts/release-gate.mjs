@@ -26,6 +26,7 @@ const checks = [
   "test:admin-deletion",
   "test:business-categories",
   "test:chatbot-conversation",
+  "test:crm-inquiry-unread",
   "test:production-database",
   "lint",
   "build",

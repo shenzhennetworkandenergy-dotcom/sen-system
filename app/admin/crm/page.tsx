@@ -2,6 +2,7 @@
 import { connection } from "next/server";
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { requirePermission } from "@/lib/auth/permissions";
+import { getUnreadChatbotInquiryCount } from "@/lib/crm/chatbot-inquiries";
 import { getCrmDashboard } from "@/lib/crm/data";
 import { crmLeadStatuses } from "@/lib/crm/types";
 
@@ -13,7 +14,10 @@ export default async function CrmPage({ searchParams }: { searchParams: Promise<
   await connection();
   const { profile, permissions } = await requirePermission("crm.view");
   const params = await searchParams;
-  const data = await getCrmDashboard(params);
+  const [data, unreadInquiries] = await Promise.all([
+    getCrmDashboard(params),
+    getUnreadChatbotInquiryCount(),
+  ]);
   const metrics = [
     ["Companies", data.metrics.companies], ["Contacts", data.metrics.contacts], ["Open leads", data.metrics.open],
     ["Won leads", data.metrics.won], ["Pipeline value", `BDT ${data.metrics.pipeline.toLocaleString("en-BD")}`],
@@ -24,7 +28,10 @@ export default async function CrmPage({ searchParams }: { searchParams: Promise<
       <a href="/admin/crm/leads/new" className="rounded-lg bg-[var(--primary)] px-4 py-2 font-bold text-[var(--primary-foreground)]">New lead</a>
       <a href="/admin/crm/companies" className="rounded-lg border bg-[var(--surface)] px-4 py-2 font-bold">Companies</a>
       <a href="/admin/crm/contacts" className="rounded-lg border bg-[var(--surface)] px-4 py-2 font-bold">Contacts</a>
-      <a href="/admin/crm/chatbot" className="rounded-lg border bg-[var(--surface)] px-4 py-2 font-bold">Product Assistant inquiries</a>
+      <a href="/admin/crm/chatbot" className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 font-bold ${unreadInquiries > 0 ? "border-red-300 bg-red-50 text-red-900 shadow-sm" : "bg-[var(--surface)]"}`}>
+        <span>Product Assistant inquiries</span>
+        {unreadInquiries > 0 ? <span className="rounded-full bg-red-500 px-2 py-0.5 text-xs font-bold text-white" aria-label={`${unreadInquiries} unread inquiries`}>{unreadInquiries}</span> : null}
+      </a>
       <a href="/admin/crm/export" className="rounded-lg border bg-[var(--surface)] px-4 py-2 font-bold">Export CSV</a>
     </div>
     <form className="grid gap-2 rounded-2xl border bg-[var(--surface)] p-3 md:grid-cols-3">
