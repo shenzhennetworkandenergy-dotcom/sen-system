@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAnyPermission, requirePermission } from "@/lib/auth/permissions";
 import { writeAuditLog } from "@/lib/audit/log";
+import { captureMutationOutcome } from "@/lib/actions/mutation-outcome";
 import { normalizeCurrencyCode } from "@/lib/currency/currencies";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { addressFromForm, jsonArray, optionalString, uuid } from "@/lib/orders/validation";
@@ -13,7 +14,7 @@ const safeMessage = (error: unknown, fallback: string) => error instanceof Error
 
 export async function createOrderAction(form: FormData) {
   const { profile } = await requirePermission("orders.create");
-  try {
+  const outcome = await captureMutationOutcome(async () => {
     const customerId = uuid(form.get("customer_id"), "Customer"), warehouseId = uuid(form.get("warehouse_id"), "Warehouse"), addressId = String(form.get("address_id") ?? "").trim();
     const requestedAddress = addressId ? {} : addressFromForm(form);
     const items = jsonArray(form, "items").map((item, index) => ({
@@ -37,8 +38,21 @@ export async function createOrderAction(form: FormData) {
       if (confirmed.error) throw new Error(confirmed.error.message);
       await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "order.confirmed", module: "orders", entityType: "sales_order", entityId: orderId, description: "Order confirmed and inventory reserved." });
     }
-    revalidatePath("/admin/orders"); redirect(orderTarget(orderId, "success", form.get("intent") === "confirm" ? "Order created and confirmed." : "Draft order created."));
-  } catch (error) { console.error("Order creation failed", { message: error instanceof Error ? error.message : "Unknown" }); redirect(orderTarget(null, "error", safeMessage(error, "Unable to create order."))); }
+    return {
+      orderId,
+      message: form.get("intent") === "confirm"
+        ? "Order created and confirmed."
+        : "Draft order created.",
+    };
+  });
+  if (!outcome.ok) {
+    console.error("Order creation failed", {
+      message: outcome.error instanceof Error ? outcome.error.message : "Unknown",
+    });
+    redirect(orderTarget(null, "error", safeMessage(outcome.error, "Unable to create order.")));
+  }
+  revalidatePath("/admin/orders");
+  redirect(orderTarget(outcome.value.orderId, "success", outcome.value.message));
 }
 
 export async function confirmOrderAction(orderId: string) {

@@ -77,6 +77,9 @@ const [
   productsWithoutCategory,
   classificationsWithoutCategory,
   buckets,
+  hrAttendanceSchema,
+  hrScheduleSchema,
+  notificationSchema,
 ] = await Promise.all([
   db.from("business_categories").select("id,slug,is_active,sort_order"),
   db.from("business_category_fields").select("id,business_category_id"),
@@ -89,9 +92,32 @@ const [
     .select("id", { count: "exact", head: true })
     .is("business_category_id", null),
   db.storage.listBuckets(),
+  db
+    .from("hr_attendance")
+    .select(
+      "timezone,scheduled_start_at,scheduled_end_at,check_in_variance_minutes,check_out_variance_minutes",
+      { head: true },
+    ),
+  db
+    .from("hr_employee_work_schedules")
+    .select(
+      "employee_record_id,weekday,is_working,workday_start,workday_end,timezone",
+      { head: true },
+    ),
+  db
+    .from("customer_notifications")
+    .select("read_at", { head: true }),
 ]);
 
-for (const result of [categories, fields, productsWithoutCategory, classificationsWithoutCategory]) {
+for (const result of [
+  categories,
+  fields,
+  productsWithoutCategory,
+  classificationsWithoutCategory,
+  hrAttendanceSchema,
+  hrScheduleSchema,
+  notificationSchema,
+]) {
   assert.equal(result.error, null, result.error?.message);
 }
 assert.equal(buckets.error, null, buckets.error?.message);

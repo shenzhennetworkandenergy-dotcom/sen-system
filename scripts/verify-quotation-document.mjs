@@ -26,15 +26,17 @@ for (const requirement of [
   "+8801805226599",
   "sen.com.bd",
   "szwaqia@vip.163.com",
-  'className="h-12 w-12"',
+  "width={48}",
   "Unit price",
   "Total quoted amount",
-  "Payment terms",
-  "Delivery information",
-  "Terms and conditions",
+  "data.payment_terms",
+  "data.delivery_information",
+  "data.terms_and_conditions",
   "Authorized signature",
   "Customer acceptance",
-  "resolveQuotationExpirationDate",
+  "defaultQuotationExpiration",
+  "paginateQuotationItems",
+  "calculateDocumentDiscounts",
   "downloadName",
 ]) {
   assert.ok(
@@ -44,21 +46,21 @@ for (const requirement of [
 }
 
 assert.ok(
-  quotation.includes("from-rose-950") &&
-    quotation.includes("via-red-900") &&
-    quotation.includes("to-amber-700"),
-  "Printable quotation is missing its burgundy, copper, and gold theme.",
+  quotation.includes("bg-[#0f2747]") &&
+    quotation.includes("border-[#1d4ed8]") &&
+    quotation.includes("text-[#1d4ed8]"),
+  "Printable quotation is missing its navy and blue SEN document theme.",
 );
 assert.ok(
   !quotation.includes("internal_notes"),
   "Printable quotation must not query or display internal notes.",
 );
 assert.ok(
-  newQuotation.includes("defaultQuotationExpirationDate()"),
+  newQuotation.includes("defaultQuotationExpiration()"),
   "Create Quotation must show the five-day expiration default.",
 );
 assert.ok(
-  quotationAction.includes("defaultQuotationExpirationDate()"),
+  quotationAction.includes("defaultQuotationExpiration()"),
   "Quotation creation must enforce the five-day expiration default.",
 );
 

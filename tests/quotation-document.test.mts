@@ -7,12 +7,12 @@ import {
   resolveQuotationTotals,
 } from "../lib/quotations/document.ts";
 
-test("paginates quotation items eight per A4 page", () => {
+test("paginates quotation items six per detailed A4 page", () => {
   const items = Array.from({ length: 17 }, (_, index) => ({ id: index + 1 }));
   const pages = paginateQuotationItems(items);
 
-  assert.deepEqual(pages.map((page) => page.length), [8, 8, 1]);
-  assert.equal(pages[2][0].id, 17);
+  assert.deepEqual(pages.map((page) => page.length), [6, 6, 5]);
+  assert.equal(pages[2][4].id, 17);
 });
 
 test("calculates legacy item amounts from target price and quantity", () => {
