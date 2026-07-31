@@ -31,6 +31,7 @@
     "test:standalone": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/*.mts",
     "test:crm": "node scripts/verify-crm.mjs",
     "test:variable-products": "node scripts/verify-variable-products.mjs",
+    "test:rich-text-editor": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/rich-text-editor-mode-buttons.test.mts",
     "test:favicon": "node scripts/verify-favicon.mjs",
     "test:public-header": "node scripts/verify-public-header.mjs",
     "test:public-products": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/public-product-stock.test.mts",
