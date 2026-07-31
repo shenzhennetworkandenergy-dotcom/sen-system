@@ -33,6 +33,7 @@
     "test:variable-products": "node scripts/verify-variable-products.mjs",
     "test:favicon": "node scripts/verify-favicon.mjs",
     "test:public-header": "node scripts/verify-public-header.mjs",
+    "test:public-products": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/public-product-stock.test.mts",
     "test:admin-deletion": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/deletion-policy.test.mts",
     "test:business-categories": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/business-category-domain.test.mts tests/business-category-theme.test.mts tests/business-category-actions.test.mts tests/product-category-specifications.test.mts tests/public-business-categories.test.mts && node scripts/verify-business-category-migration.mjs && node scripts/verify-dynamic-business-categories.mjs",
     "test:production-structure": "node scripts/verify-production-structure.mjs",

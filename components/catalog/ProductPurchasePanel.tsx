@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { publicStockLabel } from "@/lib/catalog/product-display";
 
 type Variation = {
   id: string;
@@ -80,12 +81,11 @@ export function ProductPurchasePanel({
           >
             {variations.map((variation) => {
               const price = variation.sale_price ?? variation.regular_price;
-              const availability =
-                variation.available > 0
-                  ? `${variation.available} available`
-                  : variation.incoming > 0
-                    ? `${variation.incoming} incoming`
-                    : "contact for availability";
+              const availability = `${publicStockLabel(variation.available)}${
+                variation.incoming > 0
+                  ? ` · Incoming: ${variation.incoming}`
+                  : ""
+              }`;
               return (
                 <option key={variation.id} value={variation.id}>
                   {variation.combination_key} — {money(price, currency)} — {availability}
@@ -103,6 +103,9 @@ export function ProductPurchasePanel({
           </span>
           <span className="rounded-full bg-slate-100 px-3 py-1.5 font-semibold text-slate-700">
             {money(selected.sale_price ?? selected.regular_price, currency)}
+          </span>
+          <span className="rounded-full bg-slate-100 px-3 py-1.5 font-semibold text-slate-700">
+            {publicStockLabel(selected.available)}
           </span>
         </div>
       ) : null}

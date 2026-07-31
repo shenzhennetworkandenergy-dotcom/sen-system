@@ -25,6 +25,7 @@ const checks = [
   "test:variable-products",
   "test:favicon",
   "test:public-header",
+  "test:public-products",
   "test:admin-deletion",
   "test:business-categories",
   "test:product-media-upload",
