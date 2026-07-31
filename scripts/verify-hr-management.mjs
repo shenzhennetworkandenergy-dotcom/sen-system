@@ -3,6 +3,10 @@ import { readFile } from "node:fs/promises";
 
 const migrationPath = new URL("../supabase/migrations/202607300004_integrated_hr_management.sql", import.meta.url);
 const migration = await readFile(migrationPath, "utf8").catch(() => "");
+const enhancementMigration = await readFile(
+  new URL("../supabase/migrations/202607310001_hr_attendance_workforce_enhancements.sql", import.meta.url),
+  "utf8",
+).catch(() => "");
 
 const requiredTables = [
   "hr_employee_profiles", "hr_teams", "hr_designations", "hr_leave_types",
@@ -34,6 +38,32 @@ assert.match(migration, /hr employee reads own profile/i);
 assert.match(migration, /hr admin manages attendance/i);
 assert.match(migration, /hr-documents/i);
 
+assert.match(enhancementMigration, /create table public\.hr_employee_work_schedules/i);
+assert.match(enhancementMigration, /unique\s*\(employee_record_id,\s*weekday\)/i);
+assert.match(enhancementMigration, /check\s*\(weekday between 0 and 6\)/i);
+assert.match(enhancementMigration, /overtime/i);
+assert.match(enhancementMigration, /holiday_overtime/i);
+for (const column of [
+  "timezone",
+  "scheduled_start_at",
+  "scheduled_end_at",
+  "check_in_variance_minutes",
+  "check_out_variance_minutes",
+]) {
+  assert.match(
+    enhancementMigration,
+    new RegExp(`add column if not exists ${column}\\b`, "i"),
+    `missing attendance snapshot column ${column}`,
+  );
+}
+assert.match(enhancementMigration, /function public\.hr_replace_employee_schedule/i);
+assert.match(enhancementMigration, /jsonb_array_length\(requested_schedule\)\s*<>\s*7/i);
+assert.match(enhancementMigration, /enable row level security/i);
+assert.match(enhancementMigration, /hr employee reads own work schedule/i);
+assert.match(enhancementMigration, /revoke all on function public\.hr_replace_employee_schedule/i);
+assert.match(enhancementMigration, /grant execute on function public\.hr_replace_employee_schedule/i);
+assert.match(enhancementMigration, /pg_timezone_names/i);
+
 const employeeDirectory = await readFile(new URL("../app/admin/hr/employees/page.tsx", import.meta.url), "utf8");
 const organizationPage = await readFile(new URL("../app/admin/hr/departments/page.tsx", import.meta.url), "utf8");
 const employeeDetail = await readFile(new URL("../app/admin/hr/employees/[id]/page.tsx", import.meta.url), "utf8");
@@ -43,6 +73,13 @@ const printReport = await readFile(new URL("../app/admin/hr/reports/print/page.t
 const printReportButton = await readFile(new URL("../components/hr/PrintReportButton.tsx", import.meta.url), "utf8").catch(() => "");
 const attendanceReport = await readFile(new URL("../app/admin/hr/reports/attendance.csv/route.ts", import.meta.url), "utf8").catch(() => "");
 const operationalQueries = await readFile(new URL("../lib/hr/operational.ts", import.meta.url), "utf8");
+const attendancePage = await readFile(new URL("../app/admin/hr/attendance/page.tsx", import.meta.url), "utf8");
+const payrollPage = await readFile(new URL("../app/admin/hr/payroll/page.tsx", import.meta.url), "utf8");
+const settingsPage = await readFile(new URL("../app/admin/hr/settings/page.tsx", import.meta.url), "utf8");
+const employeeForm = await readFile(new URL("../components/hr/EmployeeForm.tsx", import.meta.url), "utf8");
+const hrActions = await readFile(new URL("../app/admin/hr/hr-actions.ts", import.meta.url), "utf8");
+const employeeActions = await readFile(new URL("../app/employee/hr/actions.ts", import.meta.url), "utf8");
+const deviceEvents = await readFile(new URL("../app/api/hr/attendance-events/route.ts", import.meta.url), "utf8");
 
 assert.match(employeeDirectory, /Name, email, phone, number or job title/i);
 assert.match(employeeDirectory, /name="designation"/);
@@ -62,6 +99,20 @@ assert.doesNotMatch(
   /profiles:profile_id\(/,
   "HR queries must use the explicit employee-profile foreign key because hr_employee_records has multiple profile relationships",
 );
+assert.match(operationalQueries, /function getHrEmployeeOptions/);
+assert.match(operationalQueries, /\.limit\(5001\)/);
+for (const source of [attendancePage, payrollPage, settingsPage]) {
+  assert.match(source, /EmployeeCombobox/);
+}
+assert.match(employeeForm, /EmployeeScheduleEditor/);
+assert.match(employeeForm, /onboarding_documents/);
+assert.match(employeeForm, /\bmultiple\b/);
+assert.match(hrActions, /hr_replace_employee_schedule/);
+assert.match(hrActions, /actionOutcomeUrl\(destination,outcome\)/);
+assert.match(employeeActions, /finish\(form, fallback, kind, message\)/);
+assert.match(deviceEvents, /resolveAttendanceWorkDate/);
+assert.match(deviceEvents, /calculateAttendanceVariance/);
+assert.match(attendanceReport, /check_in_variance_minutes/);
 assert.match(operationalQueries, /profiles!hr_employee_records_profile_id_fkey/);
 assert.doesNotMatch(
   operationalQueries,

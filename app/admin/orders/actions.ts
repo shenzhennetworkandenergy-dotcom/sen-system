@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAnyPermission, requirePermission } from "@/lib/auth/permissions";
 import { writeAuditLog } from "@/lib/audit/log";
+import { normalizeCurrencyCode } from "@/lib/currency/currencies";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { addressFromForm, jsonArray, optionalString, uuid } from "@/lib/orders/validation";
 import { moneyFromForm, parseMoney, parseWholeNumber } from "@/lib/validation/numbers";
@@ -24,7 +25,7 @@ export async function createOrderAction(form: FormData) {
     const db = createSupabaseAdminClient();
     const { data, error } = await db.rpc("create_sales_order", {
       actor_profile_id: profile.id, requested_customer_id: customerId, requested_address_id: addressId || null, requested_address: requestedAddress,
-      requested_warehouse_id: warehouseId, requested_currency: String(form.get("currency") ?? "BDT").slice(0, 3).toUpperCase(),
+      requested_warehouse_id: warehouseId, requested_currency: normalizeCurrencyCode(form.get("currency") ?? "BDT"),
       requested_discount: moneyFromForm(form, "discount_amount", "Order discount") ?? 0, requested_shipping: moneyFromForm(form, "shipping_amount", "Shipping amount") ?? 0, requested_tax: moneyFromForm(form, "tax_amount", "Tax amount") ?? 0,
       requested_internal_notes: optionalString(form, "internal_notes", 2000), requested_customer_notes: optionalString(form, "customer_notes", 2000), requested_items: items,
     });

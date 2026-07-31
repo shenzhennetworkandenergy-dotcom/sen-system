@@ -3,7 +3,11 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { actionOutcomeUrl, type ActionOutcome } from "@/lib/actions/outcome";
 import { requireHrAdmin } from "@/lib/hr/admin";
+import { normalizeCurrencyCode } from "@/lib/currency/currencies";
+import { isValidTimeZone, parseEmployeeSchedule, zonedLocalDateTimeToIso } from "@/lib/hr/attendance";
+import { validateEmployeeDocuments } from "@/lib/hr/documents";
 import { parseAttendanceInput, parseEmployeeInput, parseMoney } from "@/lib/hr/validation";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -31,6 +35,9 @@ const audit = async (actorId: string, action: string, entityType: string, entity
 
 export async function saveEmployeeAction(form: FormData) {
   const { profile } = await requireHrAdmin();
+  let destination = safeReturn(form);
+  let outcome: ActionOutcome;
+  let employeePersisted = false;
   try {
     const input = parseEmployeeInput({
       profileId:text(form,"profile_id"), jobTitle:text(form,"job_title"), hireDate:text(form,"hire_date"),
@@ -40,8 +47,21 @@ export async function saveEmployeeAction(form: FormData) {
       baseSalary:nullable(form,"base_salary"), salaryCurrency:text(form,"salary_currency"),
       emergencyName:nullable(form,"emergency_name"), emergencyPhone:nullable(form,"emergency_phone"),
     });
+    const schedule = parseEmployeeSchedule(
+      Array.from({ length: 7 }, (_, weekday) => ({
+        weekday,
+        isWorking: checked(form,`schedule_${weekday}_working`),
+        startTime:text(form,`schedule_${weekday}_start`),
+        endTime:text(form,`schedule_${weekday}_end`),
+        timezone:text(form,`schedule_${weekday}_timezone`),
+      })),
+    );
+    const onboardingFiles = form.getAll("onboarding_documents")
+      .filter((file): file is File => file instanceof File && file.size > 0);
+    const validatedFiles = validateEmployeeDocuments(onboardingFiles);
     const employeeId = nullable(form,"employee_id");
-    const { data, error } = await createSupabaseAdminClient().rpc("hr_upsert_employee", {
+    const db = createSupabaseAdminClient();
+    const { data, error } = await db.rpc("hr_upsert_employee", {
       actor_profile_id:profile.id, requested_employee_id:employeeId, requested_profile_id:input.profileId,
       requested_department_id:input.departmentId, requested_team_id:input.teamId, requested_designation_id:input.designationId,
       requested_job_title:input.jobTitle, requested_employment_type:input.employmentType, requested_status:input.employmentStatus,
@@ -49,8 +69,10 @@ export async function saveEmployeeAction(form: FormData) {
       requested_base_salary:input.baseSalary, requested_currency:input.salaryCurrency,
       requested_emergency_name:input.emergencyName, requested_emergency_phone:input.emergencyPhone,
     });
-    if (report("Employee save failed",error)) return finish(form,"error","Unable to save employee record.");
+    if (report("Employee save failed",error)) throw new Error("Unable to save employee record.");
     const id = String(data);
+    employeePersisted = true;
+    destination = `/admin/hr/employees/${id}`;
     const personal = {
       employee_record_id:id, preferred_name:nullable(form,"preferred_name"), date_of_birth:nullable(form,"date_of_birth"),
       gender:nullable(form,"gender"), nationality:nullable(form,"nationality"), national_id:nullable(form,"national_id"),
@@ -62,12 +84,53 @@ export async function saveEmployeeAction(form: FormData) {
       bank_routing_number:nullable(form,"bank_routing_number"), tax_identifier:nullable(form,"tax_identifier"),
       notes:nullable(form,"personal_notes"), updated_by:profile.id,
     };
-    const personalResult = await createSupabaseAdminClient().from("hr_employee_profiles").upsert(personal,{ onConflict:"employee_record_id" });
-    if (report("Employee personal information save failed",personalResult.error)) return finish(form,"error","Employment record saved, but personal information could not be saved.");
-    redirect(`/admin/hr/employees/${id}?success=${encodeURIComponent("Employee record saved.")}`);
+    const personalResult = await db.from("hr_employee_profiles").upsert(personal,{ onConflict:"employee_record_id" });
+    if (report("Employee personal information save failed",personalResult.error)) {
+      throw new Error("Employment record saved, but personal information could not be saved.");
+    }
+    const scheduleResult = await db.rpc("hr_replace_employee_schedule", {
+      actor_profile_id:profile.id,
+      requested_employee_id:id,
+      requested_schedule:schedule,
+    });
+    if (report("Employee schedule save failed",scheduleResult.error)) {
+      throw new Error("Employee record saved, but the work schedule could not be saved.");
+    }
+    for (const validated of validatedFiles) {
+      const { file, safeName } = validated;
+      const path = `${id}/${randomUUID()}-${safeName}`;
+      const upload = await db.storage.from("hr-documents").upload(path,file,{ contentType:file.type,upsert:false });
+      if (report("Employee onboarding document upload failed",upload.error)) {
+        throw new Error(`Employee record saved, but ${file.name} could not be uploaded.`);
+      }
+      const inserted = await db.from("hr_employee_documents").insert({
+        employee_record_id:id,
+        document_type:"onboarding",
+        title:file.name.replace(/\.[^.]+$/,"").slice(0,160) || "Onboarding document",
+        storage_path:path,
+        mime_type:file.type,
+        size_bytes:file.size,
+        uploaded_by:profile.id,
+      });
+      if (inserted.error) {
+        await db.storage.from("hr-documents").remove([path]);
+        report("Employee onboarding document metadata save failed",inserted.error);
+        throw new Error(`Employee record saved, but ${file.name} could not be registered.`);
+      }
+    }
+    await audit(profile.id,"hr.employee_saved","employee_record",id,"Employee record, work schedule and onboarding documents saved.");
+    outcome = { kind:"success", message:validatedFiles.length
+      ? `Employee added successfully with ${validatedFiles.length} document(s).`
+      : "Employee saved successfully." };
   } catch (error) {
-    return finish(form,"error",error instanceof Error ? error.message : "Unable to save employee record.");
+    const message = error instanceof Error ? error.message : "Unable to save employee record.";
+    outcome = {
+      kind:employeePersisted ? "warning" : "error",
+      message,
+    };
   }
+  revalidatePath("/admin/hr","layout");
+  redirect(actionOutcomeUrl(destination,outcome));
 }
 
 export async function archiveEmployeeAction(form: FormData) {
@@ -112,22 +175,31 @@ export async function toggleOrganizationAction(form: FormData) {
 
 export async function recordAttendanceAction(form: FormData) {
   const { profile } = await requireHrAdmin();
+  let kind: "success" | "error" = "success";
+  let message = "Attendance saved.";
   try {
+    const timezone = text(form,"attendance_timezone") || "Asia/Dhaka";
+    if (!isValidTimeZone(timezone)) throw new Error("Attendance timezone is invalid.");
+    const localInstant = (key: string) => {
+      const local = nullable(form,key);
+      return local ? zonedLocalDateTimeToIso(local.slice(0,10),local.slice(11,16),timezone) : null;
+    };
     const input = parseAttendanceInput({
       employeeRecordId:text(form,"employee_record_id"), workDate:text(form,"work_date"), status:text(form,"status"),
-      checkIn:nullable(form,"check_in"), checkOut:nullable(form,"check_out"), notes:nullable(form,"notes"),
+      checkIn:localInstant("check_in"), checkOut:localInstant("check_out"), notes:nullable(form,"notes"),
     });
     const { error } = await createSupabaseAdminClient().rpc("hr_record_attendance", {
       actor_profile_id:profile.id, requested_employee_id:input.employeeRecordId, requested_work_date:input.workDate,
       requested_status:input.status, requested_check_in:input.checkIn, requested_check_out:input.checkOut,
-      requested_notes:input.notes, requested_source:"manual",
+      requested_notes:input.notes, requested_source:"manual", requested_timezone:timezone,
     });
-    if (report("Attendance save failed",error)) return finish(form,"error","Unable to save attendance.");
+    if (report("Attendance save failed",error)) throw new Error("Unable to save attendance.");
     await audit(profile.id,"hr.attendance_recorded","employee_record",input.employeeRecordId,`Attendance recorded for ${input.workDate}.`);
-    finish(form,"success","Attendance saved.");
   } catch (error) {
-    finish(form,"error",error instanceof Error ? error.message : "Unable to save attendance.");
+    kind = "error";
+    message = error instanceof Error ? error.message : "Unable to save attendance.";
   }
+  finish(form,kind,message);
 }
 
 const parseCsvRow = (line: string) => {
@@ -167,35 +239,49 @@ export async function importAttendanceCsvAction(form: FormData) {
   const employeeResult = await db.from("hr_employee_records").select("id,employee_number").in("employee_number",[...new Set(employeeNumbers)]);
   if (report("Attendance CSV employee lookup failed",employeeResult.error)) return finish(form,"error","Unable to validate CSV employees.");
   const employees = new Map((employeeResult.data ?? []).map((row) => [row.employee_number,row.id]));
-  const records = lines.slice(1).map((line,index) => {
-    const columns = parseCsvRow(line);
-    const employeeNumber = columns[headers.indexOf("employee_number")] ?? "";
-    const employeeRecordId = employees.get(employeeNumber);
-    if (!employeeRecordId) throw new Error(`Row ${index + 2}: employee ${employeeNumber || "(blank)"} was not found.`);
-    return parseAttendanceInput({
-      employeeRecordId,
-      workDate:columns[headers.indexOf("work_date")],
-      status:columns[headers.indexOf("status")],
-      checkIn:headers.includes("check_in") ? columns[headers.indexOf("check_in")] || null : null,
-      checkOut:headers.includes("check_out") ? columns[headers.indexOf("check_out")] || null : null,
-      notes:headers.includes("notes") ? columns[headers.indexOf("notes")] || null : null,
-    });
-  });
+  let records: Array<{ input: ReturnType<typeof parseAttendanceInput>; timezone: string | null }>;
   try {
-    for (const input of records) {
+    records = lines.slice(1).map((line,index) => {
+      const columns = parseCsvRow(line);
+      const employeeNumber = columns[headers.indexOf("employee_number")] ?? "";
+      const employeeRecordId = employees.get(employeeNumber);
+      if (!employeeRecordId) throw new Error(`Row ${index + 2}: employee ${employeeNumber || "(blank)"} was not found.`);
+      return {
+        input:parseAttendanceInput({
+          employeeRecordId,
+          workDate:columns[headers.indexOf("work_date")],
+          status:columns[headers.indexOf("status")],
+          checkIn:headers.includes("check_in") ? columns[headers.indexOf("check_in")] || null : null,
+          checkOut:headers.includes("check_out") ? columns[headers.indexOf("check_out")] || null : null,
+          notes:headers.includes("notes") ? columns[headers.indexOf("notes")] || null : null,
+        }),
+        timezone:headers.includes("timezone") ? columns[headers.indexOf("timezone")] || null : null,
+      };
+    });
+  } catch (error) {
+    return finish(form,"error",error instanceof Error ? error.message : "Attendance CSV is invalid.");
+  }
+  let importKind: "success" | "error" = "success";
+  let importMessage = `${records.length} attendance rows imported.`;
+  try {
+    for (const record of records) {
+      const { input, timezone } = record;
+      if (timezone && !isValidTimeZone(timezone)) throw new Error(`Timezone ${timezone} is invalid.`);
       const { error } = await db.rpc("hr_record_attendance", {
         actor_profile_id:profile.id, requested_employee_id:input.employeeRecordId,
         requested_work_date:input.workDate, requested_status:input.status,
         requested_check_in:input.checkIn, requested_check_out:input.checkOut,
         requested_notes:input.notes, requested_source:"csv",
+        requested_timezone:timezone,
       });
       if (error) throw new Error(error.message);
     }
     await audit(profile.id,"hr.attendance_csv_imported","attendance_import",randomUUID(),`${records.length} attendance rows imported.`);
-    finish(form,"success",`${records.length} attendance rows imported.`);
   } catch (error) {
-    finish(form,"error",error instanceof Error ? error.message : "Unable to import attendance.");
+    importKind = "error";
+    importMessage = error instanceof Error ? error.message : "Unable to import attendance.";
   }
+  finish(form,importKind,importMessage);
 }
 
 export async function reviewCorrectionAction(form: FormData) {
@@ -244,6 +330,8 @@ export async function saveLeaveBalanceAction(form: FormData) {
 
 export async function savePayrollAction(form: FormData) {
   const { profile } = await requireHrAdmin();
+  let payrollKind: "success" | "error" = "success";
+  let payrollMessage = "Payroll record created.";
   try {
     const base = parseMoney(text(form,"base_salary")); const allowance = parseMoney(text(form,"allowance") || 0);
     const bonus = parseMoney(text(form,"bonus") || 0); const deduction = parseMoney(text(form,"deduction") || 0);
@@ -251,10 +339,10 @@ export async function savePayrollAction(form: FormData) {
     const db = createSupabaseAdminClient();
     const { data,error } = await db.from("hr_payroll_records").insert({
       employee_record_id:text(form,"employee_record_id"),period_start:text(form,"period_start"),period_end:text(form,"period_end"),
-      base_salary:base,gross_pay:gross,deductions:deduction,net_pay:net,currency:text(form,"currency").toUpperCase() || "BDT",
+      base_salary:base,gross_pay:gross,deductions:deduction,net_pay:net,currency:normalizeCurrencyCode(text(form,"currency") || "BDT"),
       status:"draft",notes:nullable(form,"notes"),created_by:profile.id,
     }).select("id").single();
-    if (report("Payroll save failed",error) || !data) return finish(form,"error","Unable to create payroll record.");
+    if (report("Payroll save failed",error) || !data) throw new Error("Unable to create payroll record.");
     const components = [
       allowance ? { payroll_record_id:data.id,component_type:"earning",name:"Allowance",amount:allowance } : null,
       bonus ? { payroll_record_id:data.id,component_type:"earning",name:"Bonus",amount:bonus } : null,
@@ -262,8 +350,11 @@ export async function savePayrollAction(form: FormData) {
     ].filter((component): component is NonNullable<typeof component> => component !== null);
     if (components.length) await db.from("hr_payroll_components").insert(components);
     await audit(profile.id,"hr.payroll_created","payroll",String(data.id),"Payroll record created.");
-    finish(form,"success","Payroll record created.");
-  } catch (error) { finish(form,"error",error instanceof Error ? error.message : "Unable to create payroll."); }
+  } catch (error) {
+    payrollKind = "error";
+    payrollMessage = error instanceof Error ? error.message : "Unable to create payroll.";
+  }
+  finish(form,payrollKind,payrollMessage);
 }
 
 export async function updatePayrollStatusAction(form: FormData) {
@@ -350,10 +441,12 @@ export async function uploadEmployeeDocumentAction(form: FormData) {
   const employeeId = text(form,"employee_id");
   const file = form.get("file");
   if (!(file instanceof File) || !file.size) return finish(form,"error","Choose a document to upload.");
-  if (file.size > 10 * 1024 * 1024) return finish(form,"error","Document must be 10 MB or smaller.");
-  const allowed = new Set(["application/pdf","image/jpeg","image/png","image/webp"]);
-  if (!allowed.has(file.type)) return finish(form,"error","Only PDF, JPG, PNG and WebP documents are accepted.");
-  const safeName = file.name.replace(/[^a-zA-Z0-9._-]+/g,"-").slice(-120);
+  let safeName: string;
+  try {
+    safeName = validateEmployeeDocuments([file])[0].safeName;
+  } catch (error) {
+    return finish(form,"error",error instanceof Error ? error.message : "Document is invalid.");
+  }
   const path = `${employeeId}/${randomUUID()}-${safeName}`;
   const db = createSupabaseAdminClient();
   const upload = await db.storage.from("hr-documents").upload(path,file,{ contentType:file.type,upsert:false });

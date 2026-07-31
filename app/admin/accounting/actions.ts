@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requirePermission } from "@/lib/auth/permissions";
+import { normalizeCurrencyCode } from "@/lib/currency/currencies";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 const path = "/admin/accounting";
@@ -19,7 +20,7 @@ export async function createJournalAction(form: FormData) {
       requested_description: String(form.get("description") ?? "").trim(),
       requested_reference_type: "manual",
       requested_reference_id: null,
-      requested_currency: String(form.get("currency") ?? "BDT").toUpperCase(),
+      requested_currency: normalizeCurrencyCode(form.get("currency") ?? "BDT"),
       requested_lines: lines,
     });
     if (error) throw error;

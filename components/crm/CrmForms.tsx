@@ -1,4 +1,5 @@
 import { createCrmActivityAction, createCrmCompanyAction, createCrmContactAction, createCrmLeadAction, updateCrmLeadStatusAction } from "@/app/admin/crm/actions";
+import { CurrencyCombobox } from "@/components/forms/CurrencyCombobox";
 import { crmActivityTypes, crmLeadPriorities, crmLeadSources, crmLeadStatuses } from "@/lib/crm/types";
 
 const input = "w-full rounded-lg border bg-[var(--surface)] px-3 py-2";
@@ -42,7 +43,8 @@ export function LeadForm({ companies, contacts, staff }: { companies: {id:string
     <label className={label}>Contact<select className={input} name="contact_id"><option value="">Select contact</option>{contacts.map((item)=><option key={item.id} value={item.id}>{item.full_name}</option>)}</select></label>
     <label className={label}>Source<select className={input} name="source">{crmLeadSources.map((item)=><option key={item} value={item}>{title(item)}</option>)}</select></label>
     <label className={label}>Priority<select className={input} name="priority">{crmLeadPriorities.map((item)=><option key={item} value={item}>{title(item)}</option>)}</select></label>
-    <label className={label}>Estimated value (BDT)<input className={input} name="estimated_value" type="number" min="0" step="0.01" defaultValue="0"/></label>
+    <label className={label}>Estimated value<input className={input} name="estimated_value" type="number" min="0" step="0.01" defaultValue="0"/></label>
+    <label className={label}>Currency<CurrencyCombobox className={input} name="currency" defaultValue="BDT" required/></label>
     <label className={label}>Expected close date<input className={input} name="expected_close_date" type="date"/></label>
     <label className={`${label} md:col-span-2`}>Assigned to<select className={input} name="assigned_to"><option value="">Unassigned</option>{staff.map((item)=><option key={item.id} value={item.id}>{item.full_name || item.email}</option>)}</select></label>
     <label className={`${label} md:col-span-2`}>Description<textarea className={input} name="description" rows={4}/></label>

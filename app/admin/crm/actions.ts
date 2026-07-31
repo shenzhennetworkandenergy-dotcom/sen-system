@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requirePermission } from "@/lib/auth/permissions";
+import { normalizeCurrencyCode } from "@/lib/currency/currencies";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { crmActivityTypes, crmLeadPriorities, crmLeadSources, crmLeadStatuses } from "@/lib/crm/types";
 
@@ -71,7 +72,7 @@ export async function createCrmLeadAction(form: FormData) {
     requested_source: crmLeadSources.includes(source) ? source : "other",
     requested_priority: crmLeadPriorities.includes(priority) ? priority : "medium",
     requested_estimated_value: Math.max(0, Number(form.get("estimated_value") ?? 0)),
-    requested_currency: "BDT",
+    requested_currency: normalizeCurrencyCode(form.get("currency") ?? "BDT"),
     requested_expected_close_date: nullable(form, "expected_close_date", 10),
     requested_assigned_to: selectedUuid(form, "assigned_to"),
   });
