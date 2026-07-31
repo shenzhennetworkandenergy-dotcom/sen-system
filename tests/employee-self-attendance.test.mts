@@ -46,6 +46,16 @@ test("self attendance migration uses server time and preserves device-ready sour
   );
   assert.match(migration, /grant execute[\s\S]*to service_role/i);
   assert.match(migration, /revoke all[\s\S]*authenticated/i);
+
+  const reloadName = migrations.find((item) =>
+    item.includes("reload_attendance_rpc_schema"),
+  );
+  assert.ok(reloadName, "Attendance RPC schema-cache reload migration is missing.");
+  const reloadMigration = await readFile(
+    `supabase/migrations/${reloadName}`,
+    "utf8",
+  );
+  assert.match(reloadMigration, /notify\s+pgrst\s*,\s*'reload schema'/i);
 });
 
 test("attendance page exposes automatic-timezone check-in and check-out controls", async () => {
