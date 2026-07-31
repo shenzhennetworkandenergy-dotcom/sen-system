@@ -21,6 +21,7 @@
     "test:purchasing": "node scripts/verify-purchasing.mjs && node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/purchase-inbound-workflow.test.mts",
     "test:supplier-categories": "node scripts/verify-supplier-categories.mjs && node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/supplier-codes.test.mts",
     "test:accounting-hr": "node scripts/verify-accounting-hr.mjs",
+    "test:accounting-cashbook": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/accounting-cashbook.test.mts",
     "test:hr-management": "node scripts/verify-hr-management.mjs && node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/hr-validation.test.mts tests/hr-device-ingestion.test.mts",
     "test:hr-attendance-enhancements": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/hr-attendance.test.mts tests/currencies.test.mts tests/hr-documents.test.mts",
     "test:currency-inputs": "node scripts/verify-currency-inputs.mjs",

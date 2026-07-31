@@ -1,6 +1,12 @@
 import { connection } from "next/server";
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { JournalForm } from "@/components/accounting/JournalForm";
+import { QuickCashbook } from "@/components/accounting/QuickCashbook";
+import {
+  getBusinessDate,
+  getBusinessDateTimeLocal,
+  normalizeCashbookDate,
+} from "@/lib/accounting/cashbook";
 import { requirePermission } from "@/lib/auth/permissions";
 import { getAccountingDashboard } from "@/lib/accounting/data";
 import { postJournalAction } from "./actions";
@@ -8,18 +14,31 @@ import { postJournalAction } from "./actions";
 export const dynamic = "force-dynamic";
 const money = (value: number, currency: string) => new Intl.NumberFormat("en", { style: "currency", currency }).format(value);
 
-export default async function AccountingPage({ searchParams }: { searchParams: Promise<{ success?: string; error?: string }> }) {
+export default async function AccountingPage({ searchParams }: { searchParams: Promise<{ success?: string; error?: string; cashbook_date?: string }> }) {
   await connection();
   const { profile, permissions } = await requirePermission("accounting.view");
   const params = await searchParams;
-  const data = await getAccountingDashboard();
+  const today = getBusinessDate();
+  const currentBusinessDateTime = getBusinessDateTimeLocal();
+  const selectedDate = normalizeCashbookDate(params.cashbook_date, today);
+  const data = await getAccountingDashboard(selectedDate);
   const canCreate = profile.role === "admin" || permissions.has("accounting.create_entry");
   const canPost = profile.role === "admin" || permissions.has("accounting.approve_entry");
   const posted = data.entries.filter((entry) => entry.status === "posted");
   return <DashboardShell admin={profile.role === "admin"} employeePermissions={profile.role === "employee" ? permissions : undefined} title="Accounting" subtitle="Chart of accounts, balanced journals and an auditable general-ledger foundation.">
     {params.success ? <p className="mb-4 rounded-lg border border-green-200 bg-green-50 p-3 text-green-900">{params.success}</p> : null}
     {params.error ? <p className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-red-900">{params.error}</p> : null}
-    <section className="mb-6 grid gap-3 sm:grid-cols-3">
+    <QuickCashbook
+      selectedDate={selectedDate}
+      defaultOccurredAt={selectedDate === today ? currentBusinessDateTime : `${selectedDate}T12:00`}
+      statementGeneratedAt={currentBusinessDateTime}
+      descriptions={data.cashbook.descriptions}
+      entries={data.cashbook.entries}
+      summary={data.cashbook.summary}
+      day={data.cashbook.day}
+      canCreate={canCreate}
+    />
+    <section className="mb-6 mt-6 grid gap-3 sm:grid-cols-3">
       <article className="rounded-2xl border bg-[var(--surface)] p-5"><p className="text-sm text-[var(--muted-text)]">Active accounts</p><strong className="mt-2 block text-3xl">{data.accounts.filter((account) => account.is_active).length}</strong></article>
       <article className="rounded-2xl border bg-[var(--surface)] p-5"><p className="text-sm text-[var(--muted-text)]">Posted journals</p><strong className="mt-2 block text-3xl">{posted.length}</strong></article>
       <article className="rounded-2xl border bg-[var(--surface)] p-5"><p className="text-sm text-[var(--muted-text)]">Posted value</p><strong className="mt-2 block text-2xl">{money(posted.reduce((sum, entry) => sum + entry.debit, 0), "BDT")}</strong></article>

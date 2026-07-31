@@ -17,6 +17,7 @@ const checks = [
   "test:purchasing",
   "test:supplier-categories",
   "test:accounting-hr",
+  "test:accounting-cashbook",
   "test:hr-management",
   "test:hr-attendance-enhancements",
   "test:currency-inputs",

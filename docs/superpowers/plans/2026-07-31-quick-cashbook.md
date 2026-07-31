@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a database-backed Quick Cashbook to Accounting with reusable খাত/বিবরণ values and date-specific net balances.
+**Goal:** Add a database-backed Daily Cash Statement to Accounting with reusable খাত/বিবরণ values, opening cash, date-specific closing balances, day closing, and printing.
 
-**Architecture:** A focused cashbook domain module normalizes inputs and calculates daily totals. Supabase tables and atomic RPCs persist descriptions and transactions while posting balanced entries into the existing general ledger. The existing Accounting page renders one new client form and daily server-loaded data.
+**Architecture:** A focused cashbook domain module normalizes inputs and calculates opening, income, expense, net movement, and closing cash. Supabase tables and atomic RPCs persist daily state, descriptions, and transactions while posting balanced entries into the existing general ledger. The existing Accounting page renders one new client form and a printable daily statement.
 
 **Tech Stack:** Next.js 16 Server Components and Server Actions, React 19, TypeScript, Supabase PostgreSQL/RLS/RPC, Node test runner, Tailwind CSS.
 
@@ -15,6 +15,7 @@
 - Mutations require `accounting.create_entry`; reads require `accounting.view`.
 - Default and stored business dates use `Asia/Dhaka`.
 - Payment methods are exactly `cash`, `bank`, and `mfs`.
+- Closed cashbook dates reject new entries and opening-balance changes.
 
 ---
 
@@ -25,11 +26,11 @@
 - Create: `tests/accounting-cashbook.test.mts`
 
 **Interfaces:**
-- Produces: `normalizeCashbookDescriptionInput`, `normalizeCashbookEntryInput`, `getBusinessDate`, and `summarizeCashbookEntries`.
+- Produces: `normalizeCashbookDescriptionInput`, `normalizeCashbookEntryInput`, `normalizeOpeningBalance`, `getBusinessDate`, and `summarizeCashbookEntries`.
 
 - [ ] **Step 1: Write failing tests**
 
-Test literal Income/Expense normalization, positive two-decimal amounts, supported payment methods, Bangladesh date boundaries, and hand-calculated daily totals.
+Test literal Income/Expense normalization, non-negative opening cash, positive two-decimal amounts, supported payment methods, Bangladesh date boundaries, and hand-calculated closing cash.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -48,7 +49,7 @@ Run the Task 1 command and expect all cashbook tests to pass.
 ### Task 2: Persistent cashbook and ledger posting
 
 **Files:**
-- Create: `supabase/migrations/202607310011_accounting_quick_cashbook.sql`
+- Create: `supabase/migrations/202607310013_accounting_quick_cashbook.sql`
 - Modify: `scripts/verify-accounting-hr.mjs`
 
 **Interfaces:**
@@ -67,7 +68,7 @@ Expected: FAIL because cashbook tables and RPCs do not exist.
 
 - [ ] **Step 3: Add the migration**
 
-Create indexed tables with validation, seed payment accounts and common descriptions, add RLS, implement permission-checked security-definer RPCs, create balanced posted journals atomically, audit both mutations, and grant only required reads/role execution.
+Create indexed daily-state, description, and entry tables with validation; seed payment accounts and common descriptions; add RLS; implement permission-checked security-definer RPCs for opening cash, entry creation, and day closing; create balanced posted journals atomically; audit mutations; and grant only required reads/role execution.
 
 - [ ] **Step 4: Reset or migrate the local database and rerun verification**
 
@@ -82,13 +83,13 @@ Run the local Supabase migration command, then `npm run test:accounting-hr`; exp
 - Modify: `app/admin/accounting/page.tsx`
 
 **Interfaces:**
-- `getAccountingDashboard(date: string)` returns existing ledger data plus cashbook descriptions, entries, and summary for that date.
-- `createCashbookDescriptionAction(FormData)` and `createCashbookEntryAction(FormData)` authorize, validate, call their RPC, revalidate, and redirect with feedback.
+- `getAccountingDashboard(date: string)` returns existing ledger data plus day state, cashbook descriptions, entries, and opening/closing summary for that date.
+- `setCashbookOpeningBalanceAction(FormData)`, `createCashbookDescriptionAction(FormData)`, `createCashbookEntryAction(FormData)`, and `closeCashbookDayAction(FormData)` authorize, validate, call their RPC, revalidate, and redirect with feedback.
 - `QuickCashbook` consumes selected date, descriptions, entries, summary, and create permission.
 
 - [ ] **Step 1: Add an integration/source verification that requires the new page contract**
 
-Require the date query, summary cards, description creation action, entry action, three payment methods, and the Bengali label.
+Require the date query, four summary cards, opening balance, description creation action, entry action, close action, print statement, three payment methods, and the Bengali label.
 
 - [ ] **Step 2: Run verification to observe failure**
 
@@ -102,7 +103,7 @@ Validate query dates, load only selected-day entries, join descriptions, and kee
 
 - [ ] **Step 4: Implement the scoped Quick Cashbook component**
 
-Render selected-day cards, GET date filter, inline description creator, transaction form, filtered description selector, and responsive transaction table above the existing journal form.
+Render selected-day cards, GET date filter, opening balance form, inline description creator, transaction form, filtered description selector, close and print buttons, and a responsive split Income/Expense statement above the existing journal form.
 
 - [ ] **Step 5: Run focused verification**
 
@@ -138,4 +139,3 @@ Dry-run the remote migration, apply it, deploy the exact pushed commit to Vercel
 - [ ] **Step 5: Verify production**
 
 Run production route smoke tests, inspect the production deployment, check new error logs, and confirm the remote migration and cashbook schema.
-
