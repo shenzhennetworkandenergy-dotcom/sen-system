@@ -1,7 +1,8 @@
-import type { AttendanceStatus, EmployeeInput, EmploymentStatus, EmploymentType } from "./types";
+import { normalizeCurrencyCode } from "../currency/currencies.ts";
+import { attendanceStatuses, type AttendanceStatus, type EmployeeInput, type EmploymentStatus, type EmploymentType } from "./types.ts";
 
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
-const attendanceStatuses = new Set<AttendanceStatus>(["present","absent","late","half_day","leave","holiday","remote"]);
+const attendanceStatusSet = new Set<AttendanceStatus>(attendanceStatuses);
 const employmentTypes = new Set<EmploymentType>(["full_time","part_time","contract","intern"]);
 const employmentStatuses = new Set<EmploymentStatus>(["active","probation","on_leave","terminated"]);
 
@@ -37,8 +38,7 @@ export function parseEmployeeInput(input: Partial<EmployeeInput>) {
   const employmentStatus = (input.employmentStatus ?? "active") as EmploymentStatus;
   if (!employmentTypes.has(employmentType)) throw new Error("Employment type is invalid.");
   if (!employmentStatuses.has(employmentStatus)) throw new Error("Employment status is invalid.");
-  const currency = String(input.salaryCurrency ?? "BDT").trim().toUpperCase();
-  if (!/^[A-Z]{3}$/.test(currency)) throw new Error("Salary currency must use a three-letter code.");
+  const currency = normalizeCurrencyCode(input.salaryCurrency ?? "BDT");
   return {
     profileId, jobTitle, hireDate, employmentType, employmentStatus,
     departmentId: optional(input.departmentId), teamId: optional(input.teamId),
@@ -66,7 +66,7 @@ export function parseAttendanceInput(input: {
   const employeeRecordId = required(input.employeeRecordId, "Employee");
   const workDate = date(input.workDate, "Work date");
   const status = required(input.status, "Status") as AttendanceStatus;
-  if (!attendanceStatuses.has(status)) throw new Error("Attendance status is invalid.");
+  if (!attendanceStatusSet.has(status)) throw new Error("Attendance status is invalid.");
   const checkIn = optional(input.checkIn);
   const checkOut = optional(input.checkOut);
   if (checkIn && Number.isNaN(Date.parse(checkIn))) throw new Error("Check-in is invalid.");
