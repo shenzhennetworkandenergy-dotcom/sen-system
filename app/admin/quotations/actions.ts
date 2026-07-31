@@ -6,8 +6,8 @@ import { redirect } from "next/navigation";
 import { requirePermission } from "@/lib/auth/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
+import { parseQuotationItems } from "@/lib/quotations/create";
 import { defaultQuotationExpiration } from "@/lib/quotations/validity";
-import { parseWholeNumber, roundMoney } from "@/lib/validation/numbers";
 
 const statuses = new Set([
   "submitted",
@@ -24,31 +24,30 @@ const statuses = new Set([
 ]);
 
 export async function createQuotationAction(form: FormData) {
-  const { profile } = await requirePermission("quotations.create");
+  const { profile, permissions } = await requirePermission("quotations.create");
   let customerId = String(form.get("customer_id") ?? "").trim();
-  const rawProductIds = form.getAll("product_id").map((value) => String(value).trim());
-  const rawQuantities = form.getAll("quantity");
-  let requestedItems: { productId: string; quantity: number }[];
+  let requestedItems;
   try {
-    requestedItems = rawProductIds
-      .map((productId, index) => ({
-        productId,
-        quantity: productId
-          ? parseWholeNumber(rawQuantities[index], `Item ${index + 1} quantity`, {
-              required: true,
-              minimum: 1,
-            })!
-          : 0,
-      }))
-      .filter((item) => item.productId);
+    requestedItems = parseQuotationItems(
+      JSON.parse(String(form.get("items") ?? "[]")) as unknown,
+    );
   } catch (error) {
-    redirect(`/admin/quotations/new?error=${encodeURIComponent(error instanceof Error ? error.message : "Quotation quantities are invalid.")}`);
+    redirect(
+      `/admin/quotations/new?error=${encodeURIComponent(
+        error instanceof Error ? error.message : "Quotation products are invalid.",
+      )}`,
+    );
   }
-  const uniqueProductIds = [...new Set(requestedItems.map((item) => item.productId))];
-  if (uniqueProductIds.length !== requestedItems.length) {
-    redirect("/admin/quotations/new?error=Each%20product%20can%20only%20be%20added%20once.");
-  }
-  if (!uniqueProductIds.length) redirect("/admin/quotations/new?error=Choose%20at%20least%20one%20product.");
+  const uniqueProductIds = [
+    ...new Set(requestedItems.map((item) => item.productId)),
+  ];
+  const variationIds = [
+    ...new Set(
+      requestedItems
+        .map((item) => item.variationId)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
   const db = createSupabaseAdminClient();
   let customer: { id: string; full_name: string | null; email: string | null; company_name: string | null } | null = null;
   if (customerId) {
@@ -68,8 +67,35 @@ export async function createQuotationAction(form: FormData) {
     if (address.error) { await db.auth.admin.deleteUser(customerId); redirect("/admin/quotations/new?error=Unable%20to%20save%20the%20customer%20address."); }
     customer = { id: customerId, full_name: fullName, email, company_name: null };
   }
-  const { data: products } = await db.from("products").select("id,name,sku,short_description,sale_price,regular_price").in("id", uniqueProductIds).eq("status", "active");
+  const { data: products } = await db
+    .from("products")
+    .select("id,name,sku")
+    .in("id", uniqueProductIds)
+    .eq("status", "active");
   if (!customer || !products || products.length !== uniqueProductIds.length) redirect("/admin/quotations/new?error=Choose%20valid%20active%20products%20and%20customer.");
+  const { data: variations, error: variationError } = variationIds.length
+    ? await db
+        .from("product_variations")
+        .select("id,product_id,sku,combination_key")
+        .in("id", variationIds)
+        .eq("status", "active")
+    : { data: [], error: null };
+  if (variationError || (variations?.length ?? 0) !== variationIds.length) {
+    redirect("/admin/quotations/new?error=Choose%20valid%20active%20product%20variations.");
+  }
+  const productMap = new Map(products.map((product) => [product.id, product]));
+  const variationMap = new Map(
+    (variations ?? []).map((variation) => [variation.id, variation]),
+  );
+  if (
+    requestedItems.some(
+      (item) =>
+        item.variationId &&
+        variationMap.get(item.variationId)?.product_id !== item.productId,
+    )
+  ) {
+    redirect("/admin/quotations/new?error=A%20selected%20variation%20does%20not%20belong%20to%20its%20product.");
+  }
   const { data: address } = await db
     .from("customer_addresses")
     .select("*")
@@ -94,7 +120,10 @@ export async function createQuotationAction(form: FormData) {
     reference,
     profile_id: customer.id,
     status: "quoted",
-    subject: String(form.get("subject") || `Quotation for ${products[0].name}`).slice(0, 200),
+    subject: String(
+      form.get("subject") ||
+        `Quotation for ${productMap.get(requestedItems[0].productId)?.name ?? "products"}`,
+    ).slice(0, 200),
     message: String(form.get("message") ?? "").slice(0, 5000),
     company_name: customer.company_name,
     assigned_to: profile.id,
@@ -113,27 +142,32 @@ export async function createQuotationAction(form: FormData) {
     updated_by: profile.id,
   }).select("id").single();
   if (error || !quotation) redirect("/admin/quotations/new?error=Unable%20to%20create%20quotation.");
-  const item = await db.from("quotation_request_items").insert(products.map((product) => ({
-    ...(() => {
-      const quantity =
-        requestedItems.find((requested) => requested.productId === product.id)
-          ?.quantity ?? 1;
-      const unitPrice = Number(product.sale_price ?? product.regular_price ?? 0);
-      return {
-        quantity,
-        line_subtotal: roundMoney(quantity * unitPrice),
-        line_total: roundMoney(quantity * unitPrice),
-      };
-    })(),
-    quotation_id: quotation.id,
-    product_id: product.id,
-    product_name_snapshot: product.name,
-    sku_snapshot: product.sku,
-    description_snapshot: product.short_description,
-    target_price: roundMoney(Number(product.sale_price ?? product.regular_price ?? 0)),
-    unit_price: roundMoney(Number(product.sale_price ?? product.regular_price ?? 0)),
-    currency: "BDT",
-  })));
+  const quotationItems = requestedItems.map((requested) => {
+    const product = productMap.get(requested.productId)!;
+    const variation = requested.variationId
+      ? variationMap.get(requested.variationId)
+      : null;
+    return {
+      quotation_id: quotation.id,
+      product_id: product.id,
+      variation_id: variation?.id ?? null,
+      product_name_snapshot: variation
+        ? `${product.name} — ${variation.combination_key}`
+        : product.name,
+      sku_snapshot: variation?.sku ?? product.sku,
+      quantity: requested.quantity,
+      target_price: requested.unitPrice,
+      unit_price: requested.unitPrice,
+      discount_amount: requested.discountAmount,
+      tax_amount: requested.taxAmount,
+      line_subtotal: requested.lineSubtotal,
+      line_total: requested.lineTotal,
+      currency: "BDT",
+    };
+  });
+  const item = await db
+    .from("quotation_request_items")
+    .insert(quotationItems);
   if (item.error) {
     await db.from("quotation_requests").delete().eq("id", quotation.id);
     redirect("/admin/quotations/new?error=Unable%20to%20save%20quotation%20items.");
@@ -145,9 +179,13 @@ export async function createQuotationAction(form: FormData) {
     await db.from("quotation_requests").delete().eq("id", quotation.id);
     redirect("/admin/quotations/new?error=Unable%20to%20calculate%20quotation%20totals.");
   }
-  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "quotation.created", module: "quotations", entityType: "quotation_request", entityId: quotation.id, targetProfileId: customer.id, description: "Quotation created by staff.", newValues: { reference, product_ids: uniqueProductIds, item_count: products.length } });
+  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "quotation.created", module: "quotations", entityType: "quotation_request", entityId: quotation.id, targetProfileId: customer.id, description: "Quotation created by staff.", newValues: { reference, product_ids: uniqueProductIds, item_count: quotationItems.length } });
   revalidatePath("/admin/quotations");
-  redirect(`/admin/quotations?success=${encodeURIComponent(`Quotation ${reference} created.`)}`);
+  const destination =
+    profile.role === "admin" || permissions.has("quotations.view")
+      ? "/admin/quotations"
+      : "/admin/quotations/new";
+  redirect(`${destination}?success=${encodeURIComponent(`Quotation ${reference} created.`)}`);
 }
 
 export async function updateQuotationAction(

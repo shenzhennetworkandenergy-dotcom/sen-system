@@ -39,7 +39,6 @@ type QuotationItem = {
   id: string;
   product_name_snapshot: string;
   sku_snapshot: string | null;
-  description_snapshot: string | null;
   quantity: number | string;
   target_price: number | string | null;
   unit_price: number | string | null;
@@ -150,7 +149,7 @@ export default async function QuotationDocumentPage({
   const { data, error } = await createSupabaseAdminClient()
     .from("quotation_requests")
     .select(
-      "id,reference,status,subject,message,company_name,customer_tax_identification_number,required_by,expiration_date,created_at,currency,billing_address_snapshot,shipping_address_snapshot,subtotal,discount_amount,tax_amount,total_amount,terms_and_conditions,payment_terms,delivery_information,customer_notes,profiles!quotation_requests_profile_id_fkey(full_name,email,phone,company_name),quotation_request_items(id,product_name_snapshot,sku_snapshot,description_snapshot,quantity,target_price,unit_price,discount_amount,tax_amount,line_subtotal,line_total,currency)",
+      "id,reference,status,subject,message,company_name,customer_tax_identification_number,required_by,expiration_date,created_at,currency,billing_address_snapshot,shipping_address_snapshot,subtotal,discount_amount,tax_amount,total_amount,terms_and_conditions,payment_terms,delivery_information,customer_notes,profiles!quotation_requests_profile_id_fkey(full_name,email,phone,company_name),quotation_request_items(id,product_name_snapshot,sku_snapshot,quantity,target_price,unit_price,discount_amount,tax_amount,line_subtotal,line_total,currency)",
     )
     .eq("id", id)
     .maybeSingle();
@@ -393,13 +392,6 @@ export default async function QuotationDocumentPage({
                               <span className="block font-mono text-[10px] leading-4 text-slate-500">
                                 SKU {text(item.sku_snapshot, "—")}
                               </span>
-                              {item.description_snapshot &&
-                              item.description_snapshot !==
-                                item.product_name_snapshot ? (
-                                <span className="mt-1 block text-[10px] leading-4 text-slate-600">
-                                  {item.description_snapshot}
-                                </span>
-                              ) : null}
                             </td>
                             <td className="px-2 py-2 text-center align-top font-bold">
                               {item.quantity}
