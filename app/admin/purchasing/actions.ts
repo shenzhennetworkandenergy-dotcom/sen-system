@@ -96,9 +96,14 @@ export async function transitionPurchaseOrderAction(purchaseId: string, action: 
   const permission = action === "approve" || action === "order" ? "purchasing.approve" : action === "cancel" ? "purchasing.cancel" : "purchasing.edit";
   const { profile } = await requirePermission(permission);
   const note = optionalString(form, "note", 1000);
-  const result = await createSupabaseAdminClient().rpc("transition_purchase_order", {
-    actor_profile_id: profile.id, requested_order_id: purchaseId, requested_action: action, requested_note: note,
-  });
+  const db = createSupabaseAdminClient();
+  const result = action === "close"
+    ? await db.rpc("close_stock_received_purchase_order", {
+        actor_profile_id: profile.id, requested_order_id: purchaseId, requested_note: note,
+      })
+    : await db.rpc("transition_purchase_order", {
+        actor_profile_id: profile.id, requested_order_id: purchaseId, requested_action: action, requested_note: note,
+      });
   if (result.error) redirect(target(purchaseId, "error", safeMessage(result.error.message, "Unable to update purchase order.")));
   await writeAuditLog({
     actorId: profile.id, actorRole: profile.role, action: `purchasing.${action}`, module: "purchasing",
@@ -109,6 +114,49 @@ export async function transitionPurchaseOrderAction(purchaseId: string, action: 
   revalidatePath(`${purchasingPath}/${purchaseId}`);
   revalidatePath("/admin/inventory");
   redirect(target(purchaseId, "success", `Purchase order ${action} completed.`));
+}
+
+export async function transitionPurchaseInboundShipmentAction(
+  purchaseId: string,
+  action: "prepare" | "ship" | "receive",
+  form: FormData,
+) {
+  const requiredPermissions =
+    action === "prepare"
+      ? ["purchasing.edit", "shipments.create"]
+      : action === "ship"
+        ? ["purchasing.edit", "shipments.confirm_dispatch"]
+        : ["purchasing.receive", "shipments.confirm_receipt"];
+  const { profile } = await requireAllPermissions(requiredPermissions);
+  const result = await createSupabaseAdminClient().rpc("transition_purchase_inbound_shipment", {
+    actor_profile_id: profile.id,
+    requested_order_id: purchaseId,
+    requested_action: action,
+    requested_transport_mode: optionalString(form, "transport_mode", 30),
+    requested_carrier_name: optionalString(form, "carrier_name", 200),
+    requested_tracking_number: optionalString(form, "tracking_number", 200),
+    requested_expected_departure_at: String(form.get("expected_departure_at") ?? "") || null,
+    requested_expected_arrival_at: String(form.get("expected_arrival_at") ?? "") || null,
+    requested_note: optionalString(form, "note", 1000),
+  });
+  if (result.error) {
+    redirect(target(purchaseId, "error", safeMessage(result.error.message, "Unable to update supplier shipment.")));
+  }
+  await writeAuditLog({
+    actorId: profile.id,
+    actorRole: profile.role,
+    action: `purchasing.inbound.${action}`,
+    module: "purchasing",
+    entityType: "purchase_order",
+    entityId: purchaseId,
+    description: `Supplier inbound shipment action completed: ${action}.`,
+    newValues: { action },
+  });
+  revalidatePath(purchasingPath);
+  revalidatePath(`${purchasingPath}/${purchaseId}`);
+  revalidatePath("/admin/shipments");
+  revalidatePath("/admin");
+  redirect(target(purchaseId, "success", `Supplier shipment ${action} completed.`));
 }
 
 export async function receivePurchaseOrderAction(purchaseId: string, form: FormData) {
@@ -125,7 +173,7 @@ export async function receivePurchaseOrderAction(purchaseId: string, form: FormD
   } catch (error) {
     redirect(target(purchaseId, "error", error instanceof Error ? error.message : "Receipt quantities are invalid."));
   }
-  const result = await createSupabaseAdminClient().rpc("receive_purchase_order", {
+  const result = await createSupabaseAdminClient().rpc("post_received_purchase_order", {
     actor_profile_id: profile.id,
     requested_order_id: purchaseId,
     requested_receipt_date: String(form.get("receipt_date") ?? "") || new Date().toISOString().slice(0, 10),

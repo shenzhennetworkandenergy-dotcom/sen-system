@@ -54,6 +54,9 @@ export async function getDashboardWorkCounts(): Promise<DashboardWorkCounts> {
         "pending_approval",
         "approved",
         "ordered",
+        "ready_for_shipment",
+        "shipped",
+        "received",
         "partially_received",
       ]),
     ]);
