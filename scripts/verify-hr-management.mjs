@@ -3,6 +3,10 @@ import { readFile } from "node:fs/promises";
 
 const migrationPath = new URL("../supabase/migrations/202607300004_integrated_hr_management.sql", import.meta.url);
 const migration = await readFile(migrationPath, "utf8").catch(() => "");
+const enhancementMigration = await readFile(
+  new URL("../supabase/migrations/202607310001_hr_attendance_workforce_enhancements.sql", import.meta.url),
+  "utf8",
+).catch(() => "");
 
 const requiredTables = [
   "hr_employee_profiles", "hr_teams", "hr_designations", "hr_leave_types",
@@ -33,6 +37,32 @@ assert.match(migration, /create or replace function public\.is_hr_admin/i);
 assert.match(migration, /hr employee reads own profile/i);
 assert.match(migration, /hr admin manages attendance/i);
 assert.match(migration, /hr-documents/i);
+
+assert.match(enhancementMigration, /create table public\.hr_employee_work_schedules/i);
+assert.match(enhancementMigration, /unique\s*\(employee_record_id,\s*weekday\)/i);
+assert.match(enhancementMigration, /check\s*\(weekday between 0 and 6\)/i);
+assert.match(enhancementMigration, /overtime/i);
+assert.match(enhancementMigration, /holiday_overtime/i);
+for (const column of [
+  "timezone",
+  "scheduled_start_at",
+  "scheduled_end_at",
+  "check_in_variance_minutes",
+  "check_out_variance_minutes",
+]) {
+  assert.match(
+    enhancementMigration,
+    new RegExp(`add column if not exists ${column}\\b`, "i"),
+    `missing attendance snapshot column ${column}`,
+  );
+}
+assert.match(enhancementMigration, /function public\.hr_replace_employee_schedule/i);
+assert.match(enhancementMigration, /jsonb_array_length\(requested_schedule\)\s*<>\s*7/i);
+assert.match(enhancementMigration, /enable row level security/i);
+assert.match(enhancementMigration, /hr employee reads own work schedule/i);
+assert.match(enhancementMigration, /revoke all on function public\.hr_replace_employee_schedule/i);
+assert.match(enhancementMigration, /grant execute on function public\.hr_replace_employee_schedule/i);
+assert.match(enhancementMigration, /pg_timezone_names/i);
 
 const employeeDirectory = await readFile(new URL("../app/admin/hr/employees/page.tsx", import.meta.url), "utf8");
 const organizationPage = await readFile(new URL("../app/admin/hr/departments/page.tsx", import.meta.url), "utf8");
