@@ -75,5 +75,5 @@ ingestion must be explicitly enabled in HR settings.
 - HR documents use a private bucket and short-lived signed download URLs.
 - Device keys are stored only as hashes and displayed once when created.
 - Apply `202607300004_integrated_hr_management.sql` and
-  `202607310001_hr_attendance_workforce_enhancements.sql` locally before hosted
+  `202607310002_hr_attendance_workforce_enhancements.sql` locally before hosted
   Supabase. Never commit service keys or device keys.
