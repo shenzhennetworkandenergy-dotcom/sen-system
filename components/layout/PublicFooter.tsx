@@ -1,9 +1,83 @@
 import Image from "next/image";
 
-import { siteConfig } from "@/config/site";
 import { Container } from "@/components/ui/Container";
+import { siteConfig } from "@/config/site";
+import { getBusinessCategories } from "@/lib/catalog/business-categories";
 
-export function PublicFooter() {
+export async function PublicFooter() {
   const year = new Date().getFullYear();
-  return <footer className="sen-footer" aria-labelledby="footer-heading"><h2 id="footer-heading" className="sr-only">Footer</h2><Container className="grid gap-12 py-14 lg:grid-cols-[1.2fr_2fr]"><div><div className="sen-footer-logo"><Image src={siteConfig.brandAsset.logo} alt={siteConfig.company.logoAlt} width={1600} height={1600} className="h-full w-full object-contain" /></div><p className="mt-5 text-xl font-semibold text-white">{siteConfig.company.fullName}</p><p className="mt-3 max-w-md text-sm leading-6 text-slate-400">{siteConfig.description}</p><div className="mt-6 flex items-center gap-3 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300"><span className="sen-live-dot"/>Connected globally</div></div><div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-5">{siteConfig.footerGroups.map((group)=><nav key={group.title} aria-labelledby={`footer-${group.title.toLowerCase().replaceAll(" ", "-")}`}><h3 id={`footer-${group.title.toLowerCase().replaceAll(" ", "-")}`} className="text-sm font-semibold text-white">{group.title}</h3><ul className="mt-4 space-y-3 text-sm text-slate-400">{group.links.map((link)=><li key={link.href}><a className="transition hover:text-cyan-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300" href={link.href}>{link.label}</a></li>)}</ul></nav>)}</div></Container><Container className="flex flex-col gap-3 border-t border-white/10 py-5 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between"><span>© {year} {siteConfig.company.fullName}. All rights reserved.</span><span>Engineered for a connected future.</span></Container></footer>;
+  const categories = await getBusinessCategories();
+  const footerGroups = [
+    siteConfig.footerGroups[0],
+    {
+      title: "Products",
+      links: categories.map((category) => ({
+        label: category.name,
+        href: `/products?category=${encodeURIComponent(category.slug)}`,
+      })),
+    },
+    ...siteConfig.footerGroups.slice(1),
+  ];
+
+  return (
+    <footer className="sen-footer" aria-labelledby="footer-heading">
+      <h2 id="footer-heading" className="sr-only">
+        Footer
+      </h2>
+      <Container className="grid gap-12 py-14 lg:grid-cols-[1.2fr_2fr]">
+        <div>
+          <div className="sen-footer-logo">
+            <Image
+              src={siteConfig.brandAsset.logo}
+              alt={siteConfig.company.logoAlt}
+              width={1600}
+              height={1600}
+              className="h-full w-full object-contain"
+            />
+          </div>
+          <p className="mt-5 text-xl font-semibold text-white">
+            {siteConfig.company.fullName}
+          </p>
+          <p className="mt-3 max-w-md text-sm leading-6 text-slate-400">
+            {siteConfig.description}
+          </p>
+          <div className="mt-6 flex items-center gap-3 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
+            <span className="sen-live-dot" />
+            Connected globally
+          </div>
+        </div>
+        <div className="grid gap-8 sm:grid-cols-2 lg:grid-cols-5">
+          {footerGroups.map((group) => {
+            const headingId = `footer-${group.title.toLowerCase().replaceAll(" ", "-")}`;
+            return (
+              <nav key={group.title} aria-labelledby={headingId}>
+                <h3 id={headingId} className="text-sm font-semibold text-white">
+                  {group.title}
+                </h3>
+                <ul className="mt-4 space-y-3 text-sm text-slate-400">
+                  {group.links.map((link) => (
+                    <li key={link.href}>
+                      <a
+                        className="transition hover:text-cyan-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
+                        href={link.href}
+                      >
+                        {link.label}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </nav>
+            );
+          })}
+        </div>
+      </Container>
+      <Container className="flex flex-col gap-3 border-t border-white/10 py-5 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+        <span>
+          © {year} {siteConfig.company.fullName}. All rights reserved.
+        </span>
+        <span>Engineered for a connected future.</span>
+      </Container>
+    </footer>
+  );
 }
+

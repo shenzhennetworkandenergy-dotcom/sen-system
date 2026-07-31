@@ -84,16 +84,17 @@ export async function PublicHeader() {
 
   return (
     <>
-    <header className="sen-header sticky top-0 z-40">
-      <div className="sen-announcement">
+      <header className="sen-header sticky top-0 z-[80]">
+        <div className="sen-header-shell">
+          <div className="sen-announcement">
         <Container className="flex items-center justify-between gap-4 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] sm:text-xs">
           <span>Enterprise technology · Energy · Medical · Global sourcing</span>
           <span className="hidden text-cyan-300 md:inline">
             China → Bangladesh → Worldwide
           </span>
         </Container>
-      </div>
-      <Container className="flex min-h-20 items-center justify-between gap-5 py-2">
+          </div>
+          <Container className="sen-header-main flex min-h-20 items-center justify-between gap-3 py-2">
         <Link
           href={routes.home}
           className="sen-brand-link shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
@@ -115,28 +116,28 @@ export async function PublicHeader() {
           </span>
         </Link>
         <nav className="hidden lg:block" aria-label="Public navigation">
-          <ul className="flex items-center gap-7 text-sm font-semibold">
+          <ul className="sen-header-nav flex items-center gap-2 text-sm font-semibold">
             {siteConfig.navigation.map((item) => (
               <li key={item.href}>
-                <Link href={item.href} className="sen-nav-link">
+                <Link href={item.href} className="sen-menu-box">
                   {item.label}
                 </Link>
               </li>
             ))}
           </ul>
         </nav>
-        <ProductSearch compact className="hidden w-full max-w-xs xl:block" />
-        <div className="hidden items-center gap-3 lg:flex">
+        <ProductSearch compact className="sen-header-search hidden w-full max-w-xs xl:block" />
+        <div className="sen-header-actions hidden items-center gap-2 lg:flex">
           {dash ? (
             <>
-              {profile?.role === "customer" ? <Link href="/request-quote/general" className="sen-nav-link">Request a Quote</Link> : null}
-              <Link href={routes.cart} className={`sen-cart-link ${cartCount > 0 ? "has-items" : ""}`}>
+              {profile?.role === "customer" ? <Link href="/request-quote/general" className="sen-menu-box">Request a Quote</Link> : null}
+              <Link href={routes.cart} className={`sen-menu-box sen-cart-link ${cartCount > 0 ? "has-items" : ""}`}>
                 Cart {cartCount > 0 ? <span>{cartCount}</span> : null}
               </Link>
-              <Link href={dash} className="sen-nav-link">
+              <Link href={dash} className="sen-menu-box">
                 {label}
               </Link>
-              <Link href={routes.profile} className="sen-nav-link flex items-center gap-2">
+              <Link href={routes.profile} className="sen-menu-box sen-profile-box">
                 <ProfileAvatar
                   imageUrl={avatarUrl}
                   emoji={profile?.avatar_emoji}
@@ -146,27 +147,27 @@ export async function PublicHeader() {
                 />
                 <span>My Profile</span>
               </Link>
-              <a href={routes.logout} className="sen-nav-link">
+              <a href={routes.logout} className="sen-menu-box">
                 Logout
               </a>
             </>
           ) : (
             <>
-              <Link href={routes.login} className="sen-nav-link">
+              <Link href={routes.login} className="sen-menu-box">
                 Login
               </Link>
               <Button
                 href={routes.register}
                 variant="secondary"
                 size="sm"
-                className="sen-button-secondary"
+                className="sen-menu-box sen-button-secondary"
               >
                 Create account
               </Button>
               <Button
                 href={siteConfig.publicCtas.requestQuote.href}
                 size="sm"
-                className="sen-button-glow"
+                className="sen-menu-box sen-button-glow"
               >
                 Request a Quote
               </Button>
@@ -179,15 +180,16 @@ export async function PublicHeader() {
           dashboardLabel={label}
           cartCount={cartCount}
         />
-      </Container>
-      <Container className="pb-3 lg:hidden">
-        <ProductSearch compact />
-      </Container>
-    </header>
-    <FloatingChat
-      authenticated={Boolean(user)}
-      conversation={floatingConversation}
-    />
+          </Container>
+          <Container className="pb-3 xl:hidden">
+            <ProductSearch compact className="sen-header-search" />
+          </Container>
+        </div>
+      </header>
+      <FloatingChat
+        authenticated={Boolean(user)}
+        conversation={floatingConversation}
+      />
     </>
   );
 }

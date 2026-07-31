@@ -73,3 +73,14 @@ test("provides unambiguous archive and permanent deletion copy", () => {
       "Permanently delete this record? This action cannot be undone.",
   });
 });
+
+test("accepts business categories as recoverable archive records", () => {
+  assert.equal(
+    normalizeArchiveRecord({
+      entityType: "business_category",
+      entityId: "4ec9e2ef-17c8-4df5-a4fd-817027ca4c4d",
+      displayName: "Clothing",
+    }).entityType,
+    "business_category",
+  );
+});

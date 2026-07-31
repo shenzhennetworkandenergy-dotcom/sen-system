@@ -1,8 +1,61 @@
-export const categoryThemes = {
-  Networking:{key:"networking",label:"Networking",tagline:"Connected infrastructure engineered for speed and resilience."},
-  Energy:{key:"energy",label:"Energy",tagline:"Power, automation and efficiency for demanding operations."},
-  "Medical Equipment":{key:"medical",label:"Medical Equipment",tagline:"Clinical technology presented with clarity, safety and trust."},
-  Others:{key:"others",label:"Others",tagline:"Industrial sourcing and specialist materials for unique projects."},
-} as const;
-export type BusinessCategory=keyof typeof categoryThemes;
-export function catalogueTheme(category:string|null|undefined){return categoryThemes[(category&&category in categoryThemes?category:"Others") as BusinessCategory];}
+import { contrastColor, normalizeThemeColor } from "./business-category-domain.ts";
+import type { CSSProperties } from "react";
+import type {
+  BusinessCategory,
+  BusinessCategoryRow,
+} from "@/types/category";
+
+export const fallbackBusinessCategory: BusinessCategory = {
+  id: "uncategorized",
+  name: "Products",
+  slug: "uncategorized",
+  description: "Enterprise products sourced and supported by SEN.",
+  tagline: "Professional sourcing and support for every requirement.",
+  themeColor: "#245FC8",
+  foregroundColor: "#ffffff",
+  icon: "◆",
+  imagePath: null,
+  imageUrl: null,
+  active: true,
+  sortOrder: 0,
+  productCount: 0,
+  fields: [],
+};
+
+export function toBusinessCategory(row: BusinessCategoryRow): BusinessCategory {
+  const themeColor = normalizeThemeColor(row.theme_color);
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    description: row.description ?? null,
+    tagline: row.tagline ?? null,
+    themeColor,
+    foregroundColor: contrastColor(themeColor),
+    icon: row.icon ?? null,
+    imagePath: row.image_path ?? null,
+    imageUrl: row.image_url ?? null,
+    active: row.is_active ?? true,
+    sortOrder: row.sort_order ?? 0,
+    productCount: row.product_count ?? 0,
+    fields: [...(row.business_category_fields ?? row.fields ?? [])].sort(
+      (first, second) =>
+        first.sort_order - second.sort_order ||
+        first.label.localeCompare(second.label),
+    ),
+  };
+}
+
+export function categoryStyle(category: BusinessCategory) {
+  return {
+    "--category-color": category.themeColor,
+    "--category-foreground": category.foregroundColor,
+    "--theme-primary": category.themeColor,
+  } as CSSProperties;
+}
+
+export function catalogueTheme(
+  category: BusinessCategory | null | undefined,
+): BusinessCategory {
+  return category ?? fallbackBusinessCategory;
+}

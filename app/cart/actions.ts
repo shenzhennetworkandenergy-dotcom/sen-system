@@ -5,6 +5,7 @@ import { requireProfile } from "@/lib/auth/session";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { wholeNumberFromForm } from "@/lib/validation/numbers";
+import { checkoutErrorMessage, isExpectedCheckoutRejection } from "@/lib/orders/checkout-errors";
 
 const uuid=(value:unknown)=>{const id=String(value??"");if(!/^[0-9a-f-]{36}$/i.test(id))throw new Error("Invalid product.");return id;};
 async function addProductToCart(productId:string,form:FormData){
@@ -63,8 +64,10 @@ export async function checkoutAction(form:FormData){
   if(!validPhone)redirect("/cart?error=Enter%20a%20valid%20contact%20phone%20number.");
   const {data:orderId,error}=await db.rpc("customer_checkout_cart_cod",{actor_profile_id:profile.id,requested_address_id:addressId,requested_notes:String(form.get("notes")??"").slice(0,4000),requested_email:email,requested_phone:phone});
   if(error||!orderId){
-    console.error("COD checkout failed",{code:error?.code,message:error?.message});
-    redirect(`/cart?error=${encodeURIComponent(error?.message&&/stock|address|warehouse|cart|email|phone|payment/i.test(error.message)?error.message:"Unable to place order. Please verify your information and try again.")}`);
+    if(!isExpectedCheckoutRejection(error)){
+      console.error("COD checkout failed",{code:error?.code,message:error?.message});
+    }
+    redirect(`/cart?error=${encodeURIComponent(checkoutErrorMessage(error))}`);
   }
   revalidatePath("/cart");revalidatePath("/account/orders");redirect(`/account/orders/${orderId}?success=Order%20placed.`);
 }
