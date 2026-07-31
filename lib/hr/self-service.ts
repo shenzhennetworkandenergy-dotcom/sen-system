@@ -1,5 +1,10 @@
 import "server-only";
 import { requireProfile } from "@/lib/auth/session";
+import {
+  employeeHrNotificationColumns,
+  mapEmployeeHrNotification,
+  type EmployeeHrNotificationRow,
+} from "@/lib/hr/notification-query";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export async function requireEmployeeHrRecord() {
@@ -22,13 +27,13 @@ export async function getEmployeeHrWorkspace() {
   const db = createSupabaseAdminClient();
   const employeeId = context.employee.id;
   const results = await Promise.all([
-    db.from("hr_attendance").select("id,work_date,status,check_in,check_out,source,notes").eq("employee_record_id", employeeId).order("work_date", { ascending: false }).limit(90),
+    db.from("hr_attendance").select("id,work_date,status,check_in,check_out,source,notes,timezone,check_in_variance_minutes,check_out_variance_minutes").eq("employee_record_id", employeeId).order("work_date", { ascending: false }).limit(90),
     db.from("hr_attendance_correction_requests").select("id,attendance_id,work_date,requested_status,requested_check_in,requested_check_out,reason,status,review_note,created_at").eq("employee_record_id", employeeId).order("created_at", { ascending: false }).limit(50),
     db.from("hr_leave_requests").select("id,leave_type_id,start_date,end_date,requested_days,reason,status,review_note,created_at,hr_leave_types(name,code)").eq("employee_record_id", employeeId).order("created_at", { ascending: false }).limit(100),
     db.from("hr_leave_balances").select("id,leave_year,allocated_days,used_days,adjusted_days,hr_leave_types(id,name,code)").eq("employee_record_id", employeeId).order("leave_year", { ascending: false }).limit(100),
     db.from("hr_leave_types").select("id,code,name,default_days,is_paid,requires_document").eq("is_active", true).order("name"),
     db.from("hr_performance_goals").select("id,title,description,target_date,status,progress_percent").eq("employee_record_id", employeeId).order("created_at", { ascending: false }).limit(30),
-    db.from("customer_notifications").select("id,title,message,is_read,created_at,entity_type,entity_id").eq("profile_id", context.profile.id).in("entity_type", ["hr_leave_request", "hr_attendance_correction"]).order("created_at", { ascending: false }).limit(20),
+    db.from("customer_notifications").select(employeeHrNotificationColumns).eq("profile_id", context.profile.id).in("entity_type", ["hr_leave_request", "hr_attendance_correction"]).order("created_at", { ascending: false }).limit(20),
   ]);
   const error = results.find((result) => result.error)?.error;
   if (error) {
@@ -38,6 +43,8 @@ export async function getEmployeeHrWorkspace() {
   return {
     ...context, attendance: results[0].data ?? [], corrections: results[1].data ?? [],
     leaveRequests: results[2].data ?? [], leaveBalances: results[3].data ?? [],
-    leaveTypes: results[4].data ?? [], goals: results[5].data ?? [], notifications: results[6].data ?? [],
+    leaveTypes: results[4].data ?? [],
+    goals: results[5].data ?? [],
+    notifications: ((results[6].data ?? []) as EmployeeHrNotificationRow[]).map(mapEmployeeHrNotification),
   };
 }

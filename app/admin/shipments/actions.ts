@@ -3,6 +3,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requirePermission } from "@/lib/auth/permissions";
 import { writeAuditLog } from "@/lib/audit/log";
+import { captureMutationOutcome } from "@/lib/actions/mutation-outcome";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { jsonArray, optionalString, routePoints, uuid } from "@/lib/orders/validation";
 
@@ -11,15 +12,24 @@ const safe = (message: string) => /shipment|serial|packed|quantity|order|status|
 
 export async function createShipmentAction(orderId: string, form: FormData) {
   const { profile } = await requirePermission("shipments.create"); const db = createSupabaseAdminClient();
-  try {
+  const outcome = await captureMutationOutcome(async () => {
     const items = jsonArray(form, "items"), points = routePoints(jsonArray(form, "route_points")); if (!items.length) throw new Error("At least one shipment item is required.");
     const location = (prefix: string) => ({ label: String(form.get(`${prefix}_label`) ?? "").slice(0, 160), city: String(form.get(`${prefix}_city`) ?? "").slice(0, 120), country_code: String(form.get(`${prefix}_country_code`) ?? "").slice(0, 2).toUpperCase(), latitude: Number(form.get(`${prefix}_latitude`) || 0) || null, longitude: Number(form.get(`${prefix}_longitude`) || 0) || null });
     const optionalUuid = (key: string) => { const value = String(form.get(key) ?? "").trim(); return value ? uuid(value, key) : null; };
     const { data, error } = await db.rpc("create_order_shipment", { actor_profile_id: profile.id, requested_order_id: orderId, requested_transport_mode: String(form.get("transport_mode")), requested_origin_id: optionalUuid("origin_id"), requested_destination_id: optionalUuid("destination_id"), requested_origin: location("origin"), requested_destination: location("destination"), requested_estimated_departure: String(form.get("estimated_departure") ?? "") || null, requested_estimated_arrival: String(form.get("estimated_arrival") ?? "") || null, requested_package_count: Number(form.get("package_count") || 1), requested_weight: Number(form.get("weight") || 0) || null, requested_dimensions: optionalString(form, "dimensions", 300), requested_internal_notes: optionalString(form, "internal_notes", 2000), requested_customer_note: optionalString(form, "customer_note", 2000), requested_items: items, requested_route_points: points });
     if (error || !data) throw new Error(error?.message ?? "Unable to create shipment.");
     await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "shipment.created", module: "shipments", entityType: "shipment", entityId: String(data), description: "Order shipment created.", newValues: { order_id: orderId, item_count: items.length, transport_mode: form.get("transport_mode") } });
-    revalidatePath(`/admin/orders/${orderId}`); redirect(target(String(data), "success", "Draft shipment created."));
-  } catch (error) { const message = error instanceof Error ? error.message : "Unable to create shipment."; console.error("Shipment create failed", { message }); redirect(target(null, "error", safe(message))); }
+    return String(data);
+  });
+  if (!outcome.ok) {
+    const message = outcome.error instanceof Error
+      ? outcome.error.message
+      : "Unable to create shipment.";
+    console.error("Shipment create failed", { message });
+    redirect(target(null, "error", safe(message)));
+  }
+  revalidatePath(`/admin/orders/${orderId}`);
+  redirect(target(outcome.value, "success", "Draft shipment created."));
 }
 
 async function shipmentRpc(permission: string, action: string, shipmentId: string, rpc: string, message: string) {

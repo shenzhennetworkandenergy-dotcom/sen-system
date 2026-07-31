@@ -1,5 +1,6 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { buildEmployeeOptions } from "./form-options";
 import { parsePagination } from "./validation";
 
 const checked = <T>(message: string, result: { data: T; error: { code?: string; message?: string } | null }) => {
@@ -17,16 +18,32 @@ export async function getHrReferences() {
     db.from("hr_teams").select("id,code,name,department_id,is_active").order("name"),
     db.from("hr_designations").select("id,code,name,department_id,is_active").order("name"),
     db.from("profiles").select("id,full_name,email,role,status").in("role", ["employee","admin"]).eq("status","active").is("archived_at", null).order("full_name"),
-    db.from("work_locations").select("id,name,code").eq("is_active", true).order("name"),
+    db.from("work_locations").select("id,name,code,timezone").eq("is_active", true).order("name"),
     db.from("hr_leave_types").select("id,code,name,default_days,is_paid,requires_document,is_active").order("name"),
     db.from("hr_attendance_devices").select("id,code,name,device_type,vendor,model,serial_number,is_active,last_seen_at,work_location_id").order("name"),
+    db.from("hr_settings").select("workday_start,workday_end,late_grace_minutes").eq("id",true).maybeSingle(),
   ]);
   const error = results.find((result) => result.error)?.error ?? null;
   if (error) checked("Unable to load HR reference data.", { data: null, error });
   return {
     departments: results[0].data ?? [], teams: results[1].data ?? [], designations: results[2].data ?? [],
     profiles: results[3].data ?? [], locations: results[4].data ?? [], leaveTypes: results[5].data ?? [], devices: results[6].data ?? [],
+    settings: results[7].data,
   };
+}
+
+export async function getHrEmployeeOptions() {
+  const result = await createSupabaseAdminClient()
+    .from("hr_employee_records")
+    .select("id,employee_number,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email)")
+    .is("archived_at", null)
+    .order("employee_number")
+    .limit(5001);
+  const rows = checked("Unable to load HR employee choices.", result) ?? [];
+  if (rows.length > 5000) {
+    throw new Error("The employee selector limit was reached. Refine the workforce query.");
+  }
+  return buildEmployeeOptions(rows);
 }
 
 export async function getIntegratedHrDashboard() {
@@ -92,20 +109,39 @@ export async function getHrEmployee(id: string) {
     db.from("hr_performance_goals").select("*").eq("employee_record_id",id).order("created_at",{ ascending:false }).limit(30),
     db.from("hr_employee_documents").select("*").eq("employee_record_id",id).is("archived_at",null).order("created_at",{ ascending:false }).limit(50),
     db.from("audit_logs").select("id,action,description,old_values,new_values,created_at").eq("module","hr").eq("entity_id",id).order("created_at",{ ascending:false }).limit(30),
+    db.from("hr_employee_work_schedules").select("weekday,is_working,workday_start,workday_end,timezone").eq("employee_record_id",id).order("weekday"),
   ]);
   const error = results.find((result) => result.error)?.error ?? null;
   if (error) checked("Unable to load employee HR information.", { data: null, error });
-  return { record: results[0].data, personal: results[1].data, attendance: results[2].data ?? [], leave: results[3].data ?? [], payroll: results[4].data ?? [], reviews: results[5].data ?? [], goals: results[6].data ?? [], documents: results[7].data ?? [], activity: results[8].data ?? [] };
+  return {
+    record: results[0].data,
+    personal: results[1].data,
+    attendance: results[2].data ?? [],
+    leave: results[3].data ?? [],
+    payroll: results[4].data ?? [],
+    reviews: results[5].data ?? [],
+    goals: results[6].data ?? [],
+    documents: results[7].data ?? [],
+    activity: results[8].data ?? [],
+    schedule: (results[9].data ?? []).map((row) => ({
+      weekday: Number(row.weekday),
+      isWorking: Boolean(row.is_working),
+      startTime: String(row.workday_start).slice(0,5),
+      endTime: String(row.workday_end).slice(0,5),
+      timezone: String(row.timezone),
+    })),
+  };
 }
 
 export async function getHrAttendance(date = new Date().toISOString().slice(0,10)) {
   const db = createSupabaseAdminClient();
-  const [rows, corrections] = await Promise.all([
+  const [rows, corrections, settings] = await Promise.all([
     db.from("hr_attendance").select("*,hr_employee_records(employee_number,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email))").eq("work_date",date).order("created_at",{ ascending:false }).limit(5000),
     db.from("hr_attendance_correction_requests").select("*,hr_employee_records(employee_number,profile_id,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email))").order("created_at",{ ascending:false }).limit(100),
+    db.from("hr_settings").select("late_grace_minutes").eq("id",true).maybeSingle(),
   ]);
-  if (rows.error ?? corrections.error) checked("Unable to load attendance.", { data:null, error:rows.error ?? corrections.error });
-  return { date, rows: rows.data ?? [], corrections: corrections.data ?? [] };
+  if (rows.error ?? corrections.error ?? settings.error) checked("Unable to load attendance.", { data:null, error:rows.error ?? corrections.error ?? settings.error });
+  return { date, rows: rows.data ?? [], corrections: corrections.data ?? [], settings:settings.data };
 }
 
 export async function getHrLeave() {

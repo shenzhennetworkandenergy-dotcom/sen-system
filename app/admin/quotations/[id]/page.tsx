@@ -7,6 +7,10 @@ import { PrintDocumentButton } from "@/components/sales/PrintDocumentButton";
 import { requirePermission } from "@/lib/auth/permissions";
 import { calculateDocumentDiscounts } from "@/lib/documents/commercial-totals";
 import { label, money } from "@/lib/orders/types";
+import {
+  paginateQuotationItems,
+  QUOTATION_PAGE_SIZE,
+} from "@/lib/quotations/document";
 import { defaultQuotationExpiration } from "@/lib/quotations/validity";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -45,8 +49,6 @@ type QuotationItem = {
   line_total: number | string | null;
   currency: string | null;
 };
-
-const PAGE_SIZE = 6;
 
 const text = (value: unknown, fallback = "") => String(value ?? fallback);
 const number = (value: unknown) => Number(value ?? 0) || 0;
@@ -216,11 +218,7 @@ export default async function QuotationDocumentPage({
   const companyName = text(
     data.company_name ?? customer?.company_name,
   );
-  const pages = Array.from(
-    { length: Math.max(1, Math.ceil(items.length / PAGE_SIZE)) },
-    (_, index) =>
-      items.slice(index * PAGE_SIZE, (index + 1) * PAGE_SIZE),
-  );
+  const pages = paginateQuotationItems(items);
   const expirationDate =
     data.expiration_date ??
     defaultQuotationExpiration(new Date(data.created_at));
@@ -386,7 +384,7 @@ export default async function QuotationDocumentPage({
                             className="border-t border-slate-200 even:bg-[#f1f5f9]"
                           >
                             <td className="px-2 py-2 text-center align-top">
-                              {pageIndex * PAGE_SIZE + index + 1}
+                              {pageIndex * QUOTATION_PAGE_SIZE + index + 1}
                             </td>
                             <td className="px-2 py-2 align-top">
                               <b className="text-[#0f2747]">

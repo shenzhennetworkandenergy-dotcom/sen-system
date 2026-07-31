@@ -1,4 +1,4 @@
-export const QUOTATION_PAGE_SIZE = 8;
+export const QUOTATION_PAGE_SIZE = 6;
 
 export type QuotationAmountItem = {
   quantity: number;

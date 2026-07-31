@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { createJournalAction } from "@/app/admin/accounting/actions";
+import { CurrencyCombobox } from "@/components/forms/CurrencyCombobox";
 
 type Account = { id: string; code: string; name: string };
 type Line = { key: number; account_id: string; description: string; debit: string; credit: string };
@@ -20,7 +21,7 @@ export function JournalForm({ accounts }: { accounts: Account[] }) {
     <h2 className="text-lg font-semibold">New journal entry</h2>
     <div className="mt-4 grid gap-3 md:grid-cols-[12rem_8rem_1fr]">
       <label className="text-sm font-semibold">Entry date<input name="entry_date" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required className={field}/></label>
-      <label className="text-sm font-semibold">Currency<input name="currency" defaultValue="BDT" maxLength={3} required className={field}/></label>
+      <label className="text-sm font-semibold">Currency<CurrencyCombobox name="currency" defaultValue="BDT" required className={field}/></label>
       <label className="text-sm font-semibold">Description<input name="description" minLength={2} maxLength={500} required className={field}/></label>
     </div>
     <input type="hidden" name="lines" value={JSON.stringify(payload)}/>

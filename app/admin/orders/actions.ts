@@ -3,6 +3,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAnyPermission, requirePermission } from "@/lib/auth/permissions";
 import { writeAuditLog } from "@/lib/audit/log";
+import { captureMutationOutcome } from "@/lib/actions/mutation-outcome";
+import { normalizeCurrencyCode } from "@/lib/currency/currencies";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { addressFromForm, jsonArray, optionalString, uuid } from "@/lib/orders/validation";
 import { moneyFromForm, parseMoney, parseWholeNumber } from "@/lib/validation/numbers";
@@ -12,7 +14,7 @@ const safeMessage = (error: unknown, fallback: string) => error instanceof Error
 
 export async function createOrderAction(form: FormData) {
   const { profile } = await requirePermission("orders.create");
-  try {
+  const outcome = await captureMutationOutcome(async () => {
     const customerId = uuid(form.get("customer_id"), "Customer"), warehouseId = uuid(form.get("warehouse_id"), "Warehouse"), addressId = String(form.get("address_id") ?? "").trim();
     const requestedAddress = addressId ? {} : addressFromForm(form);
     const items = jsonArray(form, "items").map((item, index) => ({
@@ -24,7 +26,7 @@ export async function createOrderAction(form: FormData) {
     const db = createSupabaseAdminClient();
     const { data, error } = await db.rpc("create_sales_order", {
       actor_profile_id: profile.id, requested_customer_id: customerId, requested_address_id: addressId || null, requested_address: requestedAddress,
-      requested_warehouse_id: warehouseId, requested_currency: String(form.get("currency") ?? "BDT").slice(0, 3).toUpperCase(),
+      requested_warehouse_id: warehouseId, requested_currency: normalizeCurrencyCode(form.get("currency") ?? "BDT"),
       requested_discount: moneyFromForm(form, "discount_amount", "Order discount") ?? 0, requested_shipping: moneyFromForm(form, "shipping_amount", "Shipping amount") ?? 0, requested_tax: moneyFromForm(form, "tax_amount", "Tax amount") ?? 0,
       requested_internal_notes: optionalString(form, "internal_notes", 2000), requested_customer_notes: optionalString(form, "customer_notes", 2000), requested_items: items,
     });
@@ -36,8 +38,21 @@ export async function createOrderAction(form: FormData) {
       if (confirmed.error) throw new Error(confirmed.error.message);
       await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "order.confirmed", module: "orders", entityType: "sales_order", entityId: orderId, description: "Order confirmed and inventory reserved." });
     }
-    revalidatePath("/admin/orders"); redirect(orderTarget(orderId, "success", form.get("intent") === "confirm" ? "Order created and confirmed." : "Draft order created."));
-  } catch (error) { console.error("Order creation failed", { message: error instanceof Error ? error.message : "Unknown" }); redirect(orderTarget(null, "error", safeMessage(error, "Unable to create order."))); }
+    return {
+      orderId,
+      message: form.get("intent") === "confirm"
+        ? "Order created and confirmed."
+        : "Draft order created.",
+    };
+  });
+  if (!outcome.ok) {
+    console.error("Order creation failed", {
+      message: outcome.error instanceof Error ? outcome.error.message : "Unknown",
+    });
+    redirect(orderTarget(null, "error", safeMessage(outcome.error, "Unable to create order.")));
+  }
+  revalidatePath("/admin/orders");
+  redirect(orderTarget(outcome.value.orderId, "success", outcome.value.message));
 }
 
 export async function confirmOrderAction(orderId: string) {
