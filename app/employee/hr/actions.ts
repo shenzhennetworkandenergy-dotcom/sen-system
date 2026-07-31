@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { routes } from "@/lib/constants/routes";
+import { isValidTimeZone } from "@/lib/hr/attendance";
 import { requireEmployeeHrRecord } from "@/lib/hr/self-service";
 import { parseAttendanceInput, parseLeaveInput } from "@/lib/hr/validation";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -15,6 +16,59 @@ const finish = (form: FormData, fallback: string, kind: "success" | "error", mes
   revalidatePath(routes.employeeHr, "layout");
   redirect(`${path}?${kind}=${encodeURIComponent(message)}`);
 };
+
+export async function recordSelfAttendanceAction(form: FormData) {
+  const context = await requireEmployeeHrRecord();
+  if (!context.employee) {
+    return finish(form, routes.employeeHrAttendance, "error", "Your employee HR record has not been configured.");
+  }
+
+  const eventType = value(form, "event_type");
+  const timezone = value(form, "timezone");
+  if (eventType !== "check_in" && eventType !== "check_out") {
+    return finish(form, routes.employeeHrAttendance, "error", "Choose check in or check out.");
+  }
+  if (!isValidTimeZone(timezone)) {
+    return finish(form, routes.employeeHrAttendance, "error", "Unable to detect a valid timezone. Refresh the page and try again.");
+  }
+
+  const result = await createSupabaseAdminClient().rpc("hr_record_self_attendance", {
+    actor_profile_id: context.profile.id,
+    requested_event: eventType,
+    requested_timezone: timezone,
+  });
+  if (result.error) {
+    console.error("Employee self-attendance failed", {
+      code: result.error.code,
+      message: result.error.message,
+      employeeRecordId: context.employee.id,
+      eventType,
+    });
+    const knownMessage = [
+      "already checked in",
+      "already checked out",
+      "Check in before",
+      "does not allow check in",
+      "active employee HR record",
+      "timezone is invalid",
+    ].find((message) => result.error.message.includes(message));
+    return finish(
+      form,
+      routes.employeeHrAttendance,
+      "error",
+      knownMessage ? result.error.message : "Unable to record attendance. Please try again or contact HR.",
+    );
+  }
+
+  finish(
+    form,
+    routes.employeeHrAttendance,
+    "success",
+    eventType === "check_in"
+      ? "Check-in recorded successfully."
+      : "Check-out recorded successfully.",
+  );
+}
 
 export async function requestAttendanceCorrectionAction(form: FormData) {
   const context = await requireEmployeeHrRecord();

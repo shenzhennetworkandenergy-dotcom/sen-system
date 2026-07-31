@@ -1,0 +1,58 @@
+import assert from "node:assert/strict";
+import { readFile, readdir } from "node:fs/promises";
+import test from "node:test";
+
+import { getSelfAttendanceAvailability } from "../lib/hr/self-attendance.ts";
+
+test("employee attendance controls follow the valid clocking sequence", () => {
+  assert.deepEqual(getSelfAttendanceAvailability(null), {
+    canCheckIn: true,
+    canCheckOut: false,
+    state: "not_checked_in",
+  });
+  assert.deepEqual(
+    getSelfAttendanceAvailability({
+      check_in: "2026-07-31T03:00:00.000Z",
+      check_out: null,
+    }),
+    { canCheckIn: false, canCheckOut: true, state: "checked_in" },
+  );
+  assert.deepEqual(
+    getSelfAttendanceAvailability({
+      check_in: "2026-07-31T03:00:00.000Z",
+      check_out: "2026-07-31T12:00:00.000Z",
+    }),
+    { canCheckIn: false, canCheckOut: false, state: "checked_out" },
+  );
+});
+
+test("self attendance migration uses server time and preserves device-ready sources", async () => {
+  const migrations = await readdir("supabase/migrations");
+  const name = migrations.find((item) => item.includes("employee_self_attendance"));
+  assert.ok(name, "Employee self-attendance migration is missing.");
+
+  const migration = await readFile(`supabase/migrations/${name}`, "utf8");
+  assert.match(migration, /hr_record_self_attendance/i);
+  assert.match(migration, /clock_timestamp\s*\(\s*\)/i);
+  assert.match(migration, /for update/i);
+  assert.match(migration, /self_service/i);
+  assert.match(migration, /fingerprint|camera|device/i);
+  assert.match(migration, /grant execute[\s\S]*to service_role/i);
+  assert.match(migration, /revoke all[\s\S]*authenticated/i);
+});
+
+test("attendance page exposes automatic-timezone check-in and check-out controls", async () => {
+  const [page, actions, control] = await Promise.all([
+    readFile("app/employee/hr/attendance/page.tsx", "utf8"),
+    readFile("app/employee/hr/actions.ts", "utf8"),
+    readFile("components/hr/AttendanceClockControls.tsx", "utf8"),
+  ]);
+
+  assert.match(page, /AttendanceClockControls/);
+  assert.match(actions, /recordSelfAttendanceAction/);
+  assert.match(actions, /requireEmployeeHrRecord/);
+  assert.match(actions, /hr_record_self_attendance/);
+  assert.match(control, /resolvedOptions\(\)\.timeZone/);
+  assert.match(control, /Check in/);
+  assert.match(control, /Check out/);
+});
