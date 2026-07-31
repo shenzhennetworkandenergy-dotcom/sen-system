@@ -2,6 +2,7 @@ import { hrField, hrPrimary } from "./HrPage";
 import { saveEmployeeAction } from "@/app/admin/hr/hr-actions";
 import { CurrencyCombobox } from "@/components/forms/CurrencyCombobox";
 import { EmployeeScheduleEditor } from "./EmployeeScheduleEditor";
+import { employeeDocumentAccept } from "@/lib/hr/documents";
 import type { EmployeeScheduleRow } from "@/lib/hr/types";
 
 type Reference = { id: string; name?: string | null; full_name?: string | null; email?: string | null; role?: string; status?: string; timezone?: string | null };
@@ -70,6 +71,18 @@ export function EmployeeForm({
         endTime={String(refs.settings?.workday_end ?? "18:00").slice(0,5)}
         timezone={refs.locations[0]?.timezone || "Asia/Dhaka"}
       />
+      {!record ? (
+        <section className="rounded-2xl border bg-[var(--surface)] p-5">
+          <h2 className="text-lg font-semibold">Employee documents</h2>
+          <p className="mt-1 text-sm text-[var(--muted-text)]">
+            Attach multiple PDF, JPG, PNG or WebP files. Maximum 10 MB per file and 50 MB combined.
+          </p>
+          <label className="mt-3 block text-sm font-semibold">
+            Onboarding files
+            <input type="file" name="onboarding_documents" multiple accept={employeeDocumentAccept} className={`${hrField} block`}/>
+          </label>
+        </section>
+      ) : null}
       <button className={hrPrimary}>{record ? "Save employee changes" : "Create employee record"}</button>
     </form>
   );

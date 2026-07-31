@@ -10,12 +10,14 @@ export function CurrencyCombobox({
   required = false,
   className = "",
   ariaLabel = "Currency",
+  onValueChange,
 }: {
   name: string;
   defaultValue?: string | null;
   required?: boolean;
   className?: string;
   ariaLabel?: string;
+  onValueChange?: (value: string) => void;
 }) {
   const listId = useId();
   const [value, setValue] = useState(
@@ -26,9 +28,11 @@ export function CurrencyCombobox({
       <input
         name={name}
         value={value}
-        onChange={(event) =>
-          setValue(event.target.value.replace(/[^a-z]/gi, "").slice(0, 3).toUpperCase())
-        }
+        onChange={(event) => {
+          const next = event.target.value.replace(/[^a-z]/gi, "").slice(0, 3).toUpperCase();
+          setValue(next);
+          onValueChange?.(next);
+        }}
         list={listId}
         minLength={3}
         maxLength={3}
@@ -48,4 +52,3 @@ export function CurrencyCombobox({
     </>
   );
 }
-

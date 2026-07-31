@@ -28,14 +28,14 @@ export async function GET(request: Request) {
     employeeIds = (employees.data ?? []).map((employee) => employee.id);
     if (!employeeIds.length) {
       return csvResponse(
-        [["Employee", "Employee number", "Date", "Status", "Check in", "Check out", "Source", "Notes"]],
+        [["Employee", "Employee number", "Date", "Status", "Check in", "Arrival variance (minutes)", "Check out", "Departure variance (minutes)", "Timezone", "Source", "Notes"]],
         `sen-attendance-${from}-to-${to}.csv`,
       );
     }
   }
 
   let query = db.from("hr_attendance")
-    .select("work_date,status,check_in,check_out,source,notes,employee_record_id,hr_employee_records(employee_number,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email))")
+    .select("work_date,status,check_in,check_out,check_in_variance_minutes,check_out_variance_minutes,timezone,source,notes,employee_record_id,hr_employee_records(employee_number,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email))")
     .gte("work_date", from).lte("work_date", to)
     .order("work_date", { ascending: false }).limit(5000);
   if (employeeIds) query = query.in("employee_record_id", employeeIds);
@@ -49,11 +49,11 @@ export async function GET(request: Request) {
   }
 
   return csvResponse([
-    ["Employee","Employee number","Date","Status","Check in","Check out","Source","Notes"],
+    ["Employee","Employee number","Date","Status","Check in","Arrival variance (minutes)","Check out","Departure variance (minutes)","Timezone","Source","Notes"],
     ...(result.data ?? []).map((row) => {
       const employee = Array.isArray(row.hr_employee_records) ? row.hr_employee_records[0] : row.hr_employee_records;
       const person = employee && (Array.isArray(employee.profiles) ? employee.profiles[0] : employee.profiles);
-      return [person?.full_name,employee?.employee_number,row.work_date,row.status,row.check_in,row.check_out,row.source,row.notes];
+      return [person?.full_name,employee?.employee_number,row.work_date,row.status,row.check_in,row.check_in_variance_minutes,row.check_out,row.check_out_variance_minutes,row.timezone,row.source,row.notes];
     }),
   ],`sen-attendance-${from}-to-${to}.csv`);
 }

@@ -7,14 +7,14 @@ import { archiveEmployeeAction, uploadEmployeeDocumentAction } from "../../hr-ac
 
 export const dynamic = "force-dynamic";
 
-export default async function EmployeeDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ success?: string; error?: string }> }) {
+export default async function EmployeeDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ success?: string; warning?: string; error?: string }> }) {
   await connection();
   const [{ id }, notices] = await Promise.all([params, searchParams]);
   const [data, refs] = await Promise.all([getHrEmployee(id), getHrReferences()]);
   if (!data.record) notFound();
   const person = relation(data.record.profiles);
   return (
-    <HrPage title={person?.full_name || data.record.employee_number} subtitle={`${data.record.employee_number} · ${data.record.job_title}`} success={notices.success} error={notices.error}>
+    <HrPage title={person?.full_name || data.record.employee_number} subtitle={`${data.record.employee_number} · ${data.record.job_title}`} success={notices.success} warning={notices.warning} error={notices.error}>
       <EmployeeForm refs={refs} record={data.record} personal={data.personal} schedule={data.schedule}/>
       <form action={archiveEmployeeAction} className={`${hrCard} mt-5 flex flex-wrap items-center justify-between gap-3`}>
         <input type="hidden" name="employee_id" value={id}/><input type="hidden" name="return_to" value={`/admin/hr/employees/${id}`}/><input type="hidden" name="operation" value={data.record.archived_at ? "restore":"archive"}/>

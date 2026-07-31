@@ -22,7 +22,7 @@ export async function getEmployeeHrWorkspace() {
   const db = createSupabaseAdminClient();
   const employeeId = context.employee.id;
   const results = await Promise.all([
-    db.from("hr_attendance").select("id,work_date,status,check_in,check_out,source,notes").eq("employee_record_id", employeeId).order("work_date", { ascending: false }).limit(90),
+    db.from("hr_attendance").select("id,work_date,status,check_in,check_out,source,notes,timezone,check_in_variance_minutes,check_out_variance_minutes").eq("employee_record_id", employeeId).order("work_date", { ascending: false }).limit(90),
     db.from("hr_attendance_correction_requests").select("id,attendance_id,work_date,requested_status,requested_check_in,requested_check_out,reason,status,review_note,created_at").eq("employee_record_id", employeeId).order("created_at", { ascending: false }).limit(50),
     db.from("hr_leave_requests").select("id,leave_type_id,start_date,end_date,requested_days,reason,status,review_note,created_at,hr_leave_types(name,code)").eq("employee_record_id", employeeId).order("created_at", { ascending: false }).limit(100),
     db.from("hr_leave_balances").select("id,leave_year,allocated_days,used_days,adjusted_days,hr_leave_types(id,name,code)").eq("employee_record_id", employeeId).order("leave_year", { ascending: false }).limit(100),

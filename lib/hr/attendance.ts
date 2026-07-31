@@ -173,4 +173,3 @@ export function formatAttendanceVariance(
     ? `${Math.abs(minutes)} min early`
     : `${minutes} min late`;
 }
-

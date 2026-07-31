@@ -135,12 +135,13 @@ export async function getHrEmployee(id: string) {
 
 export async function getHrAttendance(date = new Date().toISOString().slice(0,10)) {
   const db = createSupabaseAdminClient();
-  const [rows, corrections] = await Promise.all([
+  const [rows, corrections, settings] = await Promise.all([
     db.from("hr_attendance").select("*,hr_employee_records(employee_number,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email))").eq("work_date",date).order("created_at",{ ascending:false }).limit(5000),
     db.from("hr_attendance_correction_requests").select("*,hr_employee_records(employee_number,profile_id,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email))").order("created_at",{ ascending:false }).limit(100),
+    db.from("hr_settings").select("late_grace_minutes").eq("id",true).maybeSingle(),
   ]);
-  if (rows.error ?? corrections.error) checked("Unable to load attendance.", { data:null, error:rows.error ?? corrections.error });
-  return { date, rows: rows.data ?? [], corrections: corrections.data ?? [] };
+  if (rows.error ?? corrections.error ?? settings.error) checked("Unable to load attendance.", { data:null, error:rows.error ?? corrections.error ?? settings.error });
+  return { date, rows: rows.data ?? [], corrections: corrections.data ?? [], settings:settings.data };
 }
 
 export async function getHrLeave() {

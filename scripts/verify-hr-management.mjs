@@ -77,6 +77,9 @@ const attendancePage = await readFile(new URL("../app/admin/hr/attendance/page.t
 const payrollPage = await readFile(new URL("../app/admin/hr/payroll/page.tsx", import.meta.url), "utf8");
 const settingsPage = await readFile(new URL("../app/admin/hr/settings/page.tsx", import.meta.url), "utf8");
 const employeeForm = await readFile(new URL("../components/hr/EmployeeForm.tsx", import.meta.url), "utf8");
+const hrActions = await readFile(new URL("../app/admin/hr/hr-actions.ts", import.meta.url), "utf8");
+const employeeActions = await readFile(new URL("../app/employee/hr/actions.ts", import.meta.url), "utf8");
+const deviceEvents = await readFile(new URL("../app/api/hr/attendance-events/route.ts", import.meta.url), "utf8");
 
 assert.match(employeeDirectory, /Name, email, phone, number or job title/i);
 assert.match(employeeDirectory, /name="designation"/);
@@ -102,6 +105,14 @@ for (const source of [attendancePage, payrollPage, settingsPage]) {
   assert.match(source, /EmployeeCombobox/);
 }
 assert.match(employeeForm, /EmployeeScheduleEditor/);
+assert.match(employeeForm, /onboarding_documents/);
+assert.match(employeeForm, /\bmultiple\b/);
+assert.match(hrActions, /hr_replace_employee_schedule/);
+assert.match(hrActions, /actionOutcomeUrl\(destination,outcome\)/);
+assert.match(employeeActions, /finish\(form, fallback, kind, message\)/);
+assert.match(deviceEvents, /resolveAttendanceWorkDate/);
+assert.match(deviceEvents, /calculateAttendanceVariance/);
+assert.match(attendanceReport, /check_in_variance_minutes/);
 assert.match(operationalQueries, /profiles!hr_employee_records_profile_id_fkey/);
 assert.doesNotMatch(
   operationalQueries,

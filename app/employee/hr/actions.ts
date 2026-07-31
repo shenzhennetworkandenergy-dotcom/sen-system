@@ -19,6 +19,9 @@ const finish = (form: FormData, fallback: string, kind: "success" | "error", mes
 export async function requestAttendanceCorrectionAction(form: FormData) {
   const context = await requireEmployeeHrRecord();
   if (!context.employee) return finish(form, routes.employeeHrAttendance, "error", "Your employee HR record has not been configured.");
+  let kind: "success" | "error" = "success";
+  let message = "Attendance correction submitted for administrator approval.";
+  let fallback: string = routes.employeeHrAttendance;
   try {
     const input = parseAttendanceInput({
       employeeRecordId: context.employee.id, workDate: value(form, "work_date"),
@@ -41,15 +44,20 @@ export async function requestAttendanceCorrectionAction(form: FormData) {
       console.error("Employee attendance correction insert failed", { code: result.error.code, message: result.error.message });
       throw new Error("Unable to submit the attendance correction.");
     }
-    finish(form, routes.employeeHrAttendance, "success", "Attendance correction submitted for administrator approval.");
   } catch (error) {
-    finish(form, routes.employeeHrAttendanceCorrection, "error", error instanceof Error ? error.message : "Unable to submit the request.");
+    kind = "error";
+    fallback = routes.employeeHrAttendanceCorrection;
+    message = error instanceof Error ? error.message : "Unable to submit the request.";
   }
+  finish(form, fallback, kind, message);
 }
 
 export async function requestLeaveAction(form: FormData) {
   const context = await requireEmployeeHrRecord();
   if (!context.employee) return finish(form, routes.employeeHrLeaves, "error", "Your employee HR record has not been configured.");
+  let kind: "success" | "error" = "success";
+  let message = "Leave request submitted for administrator approval.";
+  let fallback: string = routes.employeeHrLeaves;
   try {
     const input = parseLeaveInput({ leaveTypeId: value(form, "leave_type_id"), startDate: value(form, "start_date"), endDate: value(form, "end_date"), reason: value(form, "reason") });
     const days = Math.floor((Date.parse(`${input.endDate}T00:00:00Z`) - Date.parse(`${input.startDate}T00:00:00Z`)) / 86400000) + 1;
@@ -76,10 +84,12 @@ export async function requestLeaveAction(form: FormData) {
       console.error("Employee leave request insert failed", { code: insert.error.code, message: insert.error.message });
       throw new Error("Unable to submit the leave request.");
     }
-    finish(form, routes.employeeHrLeaves, "success", "Leave request submitted for administrator approval.");
   } catch (error) {
-    finish(form, routes.employeeHrNewLeave, "error", error instanceof Error ? error.message : "Unable to submit leave.");
+    kind = "error";
+    fallback = routes.employeeHrNewLeave;
+    message = error instanceof Error ? error.message : "Unable to submit leave.";
   }
+  finish(form, fallback, kind, message);
 }
 
 export async function cancelLeaveAction(form: FormData) {
