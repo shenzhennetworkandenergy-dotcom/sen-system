@@ -18,6 +18,7 @@ type Entry = {
   paymentMethod: PaymentMethod;
   transactionAt: string;
   description: string;
+  remark: string;
 };
 
 const field = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-blue-600 focus:ring-2 focus:ring-blue-100";
@@ -143,6 +144,8 @@ export function QuickCashbook({
                 <select name="description_id" className={field} required disabled={!filteredDescriptions.length}>
                   {filteredDescriptions.map((description) => <option key={description.id} value={description.id}>{description.name}</option>)}
                 </select>
+                <span className="mt-2 block">Short remark</span>
+                <textarea name="remark" maxLength={240} rows={2} placeholder="Write a short remark (optional)" className={`${field} resize-y`} />
               </label>
               <label className="text-xs font-bold">Amount (৳)
                 <input name="amount" type="number" min="0.01" step="0.01" inputMode="decimal" placeholder="0.00" className={field} required />
@@ -209,7 +212,7 @@ function StatementTable({ title, entries, emptyLabel }: { title: string; entries
       <table className="w-full text-xs">
         <thead><tr className="border-t bg-slate-50"><th className="p-2 text-left">খাত / বিবরণ</th><th className="text-left">মেথড</th><th className="pr-2 text-right">পরিমাণ (৳)</th></tr></thead>
         <tbody>
-          {entries.map((entry) => <tr key={entry.id} className="border-t"><td className="p-2"><strong>{entry.description}</strong><span className="ml-2 text-[10px] text-slate-500">{dhakaTime(entry.transactionAt)}</span></td><td>{paymentLabels[entry.paymentMethod]}</td><td className="pr-2 text-right font-bold">{money(entry.amount)}</td></tr>)}
+          {entries.map((entry) => <tr key={entry.id} className="border-t"><td className="p-2"><strong>{entry.description}</strong><span className="ml-2 text-[10px] text-slate-500">{dhakaTime(entry.transactionAt)}</span>{entry.remark ? <p className="mt-1 text-[11px] text-slate-600">{entry.remark}</p> : null}</td><td>{paymentLabels[entry.paymentMethod]}</td><td className="pr-2 text-right font-bold">{money(entry.amount)}</td></tr>)}
           {!entries.length ? <tr className="border-t"><td colSpan={3} className="p-3 text-center text-slate-500">{emptyLabel}</td></tr> : null}
         </tbody>
         <tfoot><tr className="border-t bg-slate-50 font-black"><td colSpan={2} className="p-2">Total</td><td className="pr-2 text-right">{money(total)}</td></tr></tfoot>

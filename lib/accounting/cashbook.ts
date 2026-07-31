@@ -20,16 +20,19 @@ export function normalizeCashbookDescriptionInput(input: { name: unknown; transa
 
 export function normalizeCashbookEntryInput(input: {
   descriptionId: unknown;
+  remark?: unknown;
   amount: unknown;
   paymentMethod: unknown;
   occurredAt: unknown;
 }) {
   const descriptionId = String(input.descriptionId ?? "").trim();
+  const remark = String(input.remark ?? "").trim();
   const amount = Number(input.amount);
   const paymentMethod = String(input.paymentMethod ?? "").trim().toLowerCase();
   const occurredAt = String(input.occurredAt ?? "").trim();
 
   if (!UUID_PATTERN.test(descriptionId)) throw new Error("Select a valid description (খাত/বিবরণ).");
+  if (remark.length > 240) throw new Error("Short remark cannot exceed 240 characters.");
   if (!Number.isFinite(amount) || amount <= 0) throw new Error("Amount must be greater than zero.");
   if (!["cash", "bank", "mfs"].includes(paymentMethod)) {
     throw new Error("Payment method must be Cash, Bank, or MFS.");
@@ -40,6 +43,7 @@ export function normalizeCashbookEntryInput(input: {
 
   return {
     descriptionId,
+    remark,
     amount: roundMoney(amount),
     paymentMethod: paymentMethod as CashbookPaymentMethod,
     occurredAt: occurredAt || null,

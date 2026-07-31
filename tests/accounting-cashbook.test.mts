@@ -30,12 +30,14 @@ test("normalizes positive cashbook amounts and supported payment methods", () =>
   assert.deepEqual(
     normalizeCashbookEntryInput({
       descriptionId: "54a8100e-4e70-42d6-951a-656b7d32a071",
+      remark: "  Customer paid in cash  ",
       amount: "1250.456",
       paymentMethod: "bank",
       occurredAt: "2026-07-31T09:30",
     }),
     {
       descriptionId: "54a8100e-4e70-42d6-951a-656b7d32a071",
+      remark: "Customer paid in cash",
       amount: 1250.46,
       paymentMethod: "bank",
       occurredAt: "2026-07-31T09:30",
@@ -48,6 +50,19 @@ test("normalizes positive cashbook amounts and supported payment methods", () =>
   assert.throws(
     () => normalizeCashbookEntryInput({ descriptionId: "54a8100e-4e70-42d6-951a-656b7d32a071", amount: "-1", paymentMethod: "cash", occurredAt: "" }),
     /greater than zero/i,
+  );
+});
+
+test("limits cashbook remarks to 240 characters", () => {
+  assert.throws(
+    () => normalizeCashbookEntryInput({
+      descriptionId: "54a8100e-4e70-42d6-951a-656b7d32a071",
+      remark: "x".repeat(241),
+      amount: "1",
+      paymentMethod: "cash",
+      occurredAt: "2026-07-31T09:30",
+    }),
+    /remark/i,
   );
 });
 

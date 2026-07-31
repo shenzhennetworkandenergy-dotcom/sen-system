@@ -96,6 +96,7 @@ try {
   const cashbookEntry=await db.rpc("create_cashbook_entry",{
     actor_profile_id:actor.data.id,
     requested_description_id:cashbookDescriptionId,
+    requested_remark:"Automated verification remark",
     requested_amount:25,
     requested_payment_method:"cash",
     requested_occurred_at:`${cashbookDay}T09:30:00+06:00`,
@@ -105,7 +106,7 @@ try {
   cashbookEntryId=cashbookEntry.data;
 
   const checkedCashbook=await db.from("cashbook_entries")
-    .select("transaction_type,amount,payment_method,business_date,journal_entry_id,cashbook_descriptions(name)")
+    .select("transaction_type,amount,payment_method,business_date,journal_entry_id,remark,cashbook_descriptions(name)")
     .eq("id",cashbookEntryId)
     .single();
   assert.equal(checkedCashbook.error,null,checkedCashbook.error?.message);
@@ -113,6 +114,7 @@ try {
   assert.equal(Number(checkedCashbook.data.amount),25);
   assert.equal(checkedCashbook.data.payment_method,"cash");
   assert.equal(checkedCashbook.data.business_date,cashbookDay);
+  assert.equal(checkedCashbook.data.remark,"Automated verification remark");
   cashbookJournalId=checkedCashbook.data.journal_entry_id;
 
   const checkedCashbookJournal=await db.from("journal_entries")
@@ -131,6 +133,7 @@ try {
   const rejectedMismatchedDate=await db.rpc("create_cashbook_entry",{
     actor_profile_id:actor.data.id,
     requested_description_id:cashbookDescriptionId,
+    requested_remark:"",
     requested_amount:1,
     requested_payment_method:"cash",
     requested_occurred_at:`${carryDay}T10:00:00+06:00`,
@@ -141,6 +144,7 @@ try {
   const rejectedBeforePreviousClose=await db.rpc("create_cashbook_entry",{
     actor_profile_id:actor.data.id,
     requested_description_id:cashbookDescriptionId,
+    requested_remark:"",
     requested_amount:5,
     requested_payment_method:"cash",
     requested_occurred_at:`${carryDay}T09:00:00+06:00`,
@@ -164,6 +168,7 @@ try {
   const rejectedClosedEntry=await db.rpc("create_cashbook_entry",{
     actor_profile_id:actor.data.id,
     requested_description_id:cashbookDescriptionId,
+    requested_remark:"",
     requested_amount:1,
     requested_payment_method:"cash",
     requested_occurred_at:`${cashbookDay}T10:00:00+06:00`,
@@ -174,6 +179,7 @@ try {
   const carryEntry=await db.rpc("create_cashbook_entry",{
     actor_profile_id:actor.data.id,
     requested_description_id:cashbookDescriptionId,
+    requested_remark:"",
     requested_amount:5,
     requested_payment_method:"cash",
     requested_occurred_at:`${carryDay}T09:00:00+06:00`,

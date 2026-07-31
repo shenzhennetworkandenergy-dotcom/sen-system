@@ -16,7 +16,7 @@ export async function getAccountingDashboard(selectedDate: string) {
       .limit(1),
     db.from("cashbook_descriptions").select("id,name,transaction_type,is_active").eq("is_active", true).order("transaction_type").order("name"),
     db.from("cashbook_entries")
-      .select("id,transaction_type,amount,payment_method,transaction_at,business_date,journal_entry_id,cashbook_descriptions(name)")
+      .select("id,transaction_type,amount,payment_method,transaction_at,business_date,journal_entry_id,remark,cashbook_descriptions(name)")
       .eq("business_date", selectedDate)
       .order("transaction_at", { ascending: false }),
   ]);
@@ -37,6 +37,7 @@ export async function getAccountingDashboard(selectedDate: string) {
       amount: Number(entry.amount),
       paymentMethod: entry.payment_method as "cash" | "bank" | "mfs",
       transactionAt: entry.transaction_at,
+      remark: entry.remark ?? "",
       businessDate: entry.business_date,
       journalEntryId: entry.journal_entry_id,
       description: Array.isArray(relatedDescription)

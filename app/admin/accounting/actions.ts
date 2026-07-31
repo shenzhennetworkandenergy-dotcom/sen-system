@@ -97,6 +97,7 @@ export async function createCashbookEntryAction(form: FormData) {
   try {
     const input = normalizeCashbookEntryInput({
       descriptionId: form.get("description_id"),
+      remark: form.get("remark"),
       amount: form.get("amount"),
       paymentMethod: form.get("payment_method"),
       occurredAt: form.get("occurred_at"),
@@ -104,6 +105,7 @@ export async function createCashbookEntryAction(form: FormData) {
     const { error } = await createSupabaseAdminClient().rpc("create_cashbook_entry", {
       actor_profile_id: profile.id,
       requested_description_id: input.descriptionId,
+      requested_remark: input.remark,
       requested_amount: input.amount,
       requested_payment_method: input.paymentMethod,
       requested_occurred_at: input.occurredAt ? toCashbookTimestamp(input.occurredAt, selectedDate) : null,
@@ -112,7 +114,7 @@ export async function createCashbookEntryAction(form: FormData) {
     if (error) throw error;
   } catch (error) {
     console.error("Cashbook entry creation failed", { message: error instanceof Error ? error.message : "Unknown error" });
-    failure = error instanceof Error && /description|খাত|amount|payment|cash|bank|mfs|account|date|time/i.test(error.message)
+    failure = error instanceof Error && /description|খাত|remark|amount|payment|cash|bank|mfs|account|date|time/i.test(error.message)
       ? error.message
       : "Unable to save the cashbook entry.";
   }
