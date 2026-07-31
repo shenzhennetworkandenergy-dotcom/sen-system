@@ -5,6 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 const files = {
   migration: "supabase/migrations/202607240002_accounting_hr_modules.sql",
   cashbookMigration: "supabase/migrations/202607310013_accounting_quick_cashbook.sql",
+  cashbookPermissionMigration: "supabase/migrations/202607310015_cashbook_employee_permission.sql",
   accountingPage: "app/admin/accounting/page.tsx",
   accountingActions: "app/admin/accounting/actions.ts",
   cashbookComponent: "components/accounting/QuickCashbook.tsx",
@@ -28,6 +29,7 @@ const checks = [
   ["cashbook opening and closing", /create or replace function public\.set_cashbook_opening_balance/.test(content.cashbookMigration) && /create or replace function public\.close_cashbook_day/.test(content.cashbookMigration) && /opening_balance\+income_total-expense_total/.test(content.cashbookMigration)],
   ["cashbook timeline serialization", /pg_advisory_xact_lock/.test(content.cashbookMigration) && /assert_cashbook_predecessor_closed/.test(content.cashbookMigration)],
   ["cashbook permissions and RLS", /accounting\.create_entry/.test(content.cashbookMigration) && /cashbook entries read/.test(content.cashbookMigration) && /revoke all on function public\.create_cashbook_entry/.test(content.cashbookMigration) && /revoke insert,update,delete on public\.cashbook_days/.test(content.cashbookMigration)],
+  ["cashbook-only employee permission", /accounting\.manage_cashbook/.test(content.cashbookPermissionMigration) && /includeLedger: canViewLedger/.test(content.accountingPage) && /canCreateJournal/.test(content.accountingPage)],
   ["cashbook accounting UI", /QuickCashbook/.test(content.accountingPage) && /খাত\/বিবরণ/.test(content.cashbookComponent)],
   ["cashbook daily balance selector", /cashbook_date/.test(content.accountingPage) && /View daily balance/.test(content.cashbookComponent)],
   ["cashbook server actions", /createCashbookDescriptionAction/.test(content.accountingActions) && /createCashbookEntryAction/.test(content.accountingActions)],
@@ -58,6 +60,9 @@ const actor=await db.from("profiles").select("id").eq("role","admin").eq("status
 assert.equal(actor.error,null,actor.error?.message);
 const accounts=await db.from("accounting_accounts").select("id").eq("is_active",true).order("code").limit(2);
 assert.equal(accounts.error,null,accounts.error?.message); assert.equal(accounts.data.length,2,"At least two local accounting accounts are required.");
+const cashbookPermission=await db.from("permissions").select("key,name,module_id,app_modules(key)").eq("key","accounting.manage_cashbook").single();
+assert.equal(cashbookPermission.error,null,cashbookPermission.error?.message);
+assert.equal(cashbookPermission.data.app_modules?.key,"accounting");
 let journalId;
 let cashbookDescriptionId;
 let cashbookEntryId;

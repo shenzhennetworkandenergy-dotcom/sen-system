@@ -2,12 +2,14 @@ import "server-only";
 import { summarizeCashbookEntries } from "@/lib/accounting/cashbook";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
-export async function getAccountingDashboard(selectedDate: string) {
+export async function getAccountingDashboard(selectedDate: string, options: { includeLedger?: boolean } = {}) {
   const db = createSupabaseAdminClient();
+  const includeLedger = options.includeLedger ?? true;
+  const emptyResult = Promise.resolve({ data: [], error: null });
   const [accounts, entries, lines, cashbookDays, cashbookDescriptions, cashbookEntries] = await Promise.all([
-    db.from("accounting_accounts").select("id,code,name,account_type,currency,is_active").order("code"),
-    db.from("journal_entries").select("id,entry_number,entry_date,description,status,currency,reference_type,posted_at,created_at").order("entry_date", { ascending: false }).limit(100),
-    db.from("journal_lines").select("journal_entry_id,debit,credit"),
+    includeLedger ? db.from("accounting_accounts").select("id,code,name,account_type,currency,is_active").order("code") : emptyResult,
+    includeLedger ? db.from("journal_entries").select("id,entry_number,entry_date,description,status,currency,reference_type,posted_at,created_at").order("entry_date", { ascending: false }).limit(100) : emptyResult,
+    includeLedger ? db.from("journal_lines").select("journal_entry_id,debit,credit") : emptyResult,
     db.from("cashbook_days")
       .select("business_date,opening_balance,closing_balance,is_closed,closed_at")
       .lte("business_date", selectedDate)

@@ -9,11 +9,12 @@ import {
   normalizeOpeningBalance,
   toCashbookTimestamp,
 } from "@/lib/accounting/cashbook";
-import { requirePermission } from "@/lib/auth/permissions";
+import { requireAnyPermission, requirePermission } from "@/lib/auth/permissions";
 import { normalizeCurrencyCode } from "@/lib/currency/currencies";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 const path = "/admin/accounting";
+const cashbookEditPermissions = ["accounting.create_entry", "accounting.manage_cashbook"];
 const destination = (kind: "success" | "error", message: string, selectedDate?: string) => {
   const params = new URLSearchParams({ [kind]: message });
   if (selectedDate) params.set("cashbook_date", normalizeCashbookDate(selectedDate));
@@ -21,7 +22,7 @@ const destination = (kind: "success" | "error", message: string, selectedDate?: 
 };
 
 export async function setCashbookOpeningBalanceAction(form: FormData) {
-  const { profile } = await requirePermission("accounting.create_entry");
+  const { profile } = await requireAnyPermission(cashbookEditPermissions);
   const selectedDate = normalizeCashbookDate(form.get("cashbook_date"));
   let failure: string | null = null;
   try {
@@ -44,7 +45,7 @@ export async function setCashbookOpeningBalanceAction(form: FormData) {
 }
 
 export async function closeCashbookDayAction(form: FormData) {
-  const { profile } = await requirePermission("accounting.create_entry");
+  const { profile } = await requireAnyPermission(cashbookEditPermissions);
   const selectedDate = normalizeCashbookDate(form.get("cashbook_date"));
   let failure: string | null = null;
   try {
@@ -65,7 +66,7 @@ export async function closeCashbookDayAction(form: FormData) {
 }
 
 export async function createCashbookDescriptionAction(form: FormData) {
-  const { profile } = await requirePermission("accounting.create_entry");
+  const { profile } = await requireAnyPermission(cashbookEditPermissions);
   const selectedDate = normalizeCashbookDate(form.get("cashbook_date"));
   let failure: string | null = null;
   try {
@@ -91,7 +92,7 @@ export async function createCashbookDescriptionAction(form: FormData) {
 }
 
 export async function createCashbookEntryAction(form: FormData) {
-  const { profile } = await requirePermission("accounting.create_entry");
+  const { profile } = await requireAnyPermission(cashbookEditPermissions);
   const selectedDate = normalizeCashbookDate(form.get("cashbook_date"));
   let failure: string | null = null;
   try {
