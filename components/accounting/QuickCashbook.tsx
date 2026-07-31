@@ -72,15 +72,14 @@ export function QuickCashbook({
           body * { visibility: hidden !important; }
           .cashbook-print-sheet, .cashbook-print-sheet * { visibility: visible !important; }
           .cashbook-print-sheet {
-            position: fixed !important;
-            inset: 0 !important;
+            position: absolute !important;
+            top: 0 !important;
+            left: 0 !important;
             width: 100% !important;
-            min-height: 277mm !important;
             margin: 0 !important;
             padding: 8mm !important;
             box-sizing: border-box !important;
-            display: flex !important;
-            flex-direction: column !important;
+            overflow: visible !important;
             border: 0 !important;
             border-radius: 0 !important;
             box-shadow: none !important;
@@ -88,7 +87,8 @@ export function QuickCashbook({
             -webkit-print-color-adjust: exact;
           }
           .cashbook-company-header { display: block !important; }
-          .cashbook-signatures { margin-top: auto !important; padding-top: 12mm !important; }
+          .cashbook-print-sheet tr { break-inside: avoid; page-break-inside: avoid; }
+          .cashbook-signatures { margin-top: 12mm !important; padding-top: 0 !important; break-inside: avoid; page-break-inside: avoid; }
         }
       `}</style>
 
