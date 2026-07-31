@@ -66,10 +66,29 @@ export function QuickCashbook({
   return (
     <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm sm:p-6">
       <style>{`
+        @page { size: A4 portrait; margin: 10mm; }
         @media print {
+          html, body { margin: 0 !important; padding: 0 !important; }
           body * { visibility: hidden !important; }
           .cashbook-print-sheet, .cashbook-print-sheet * { visibility: visible !important; }
-          .cashbook-print-sheet { position: absolute !important; inset: 0 !important; width: 100% !important; border: 0 !important; box-shadow: none !important; }
+          .cashbook-print-sheet {
+            position: fixed !important;
+            inset: 0 !important;
+            width: 100% !important;
+            min-height: 277mm !important;
+            margin: 0 !important;
+            padding: 8mm !important;
+            box-sizing: border-box !important;
+            display: flex !important;
+            flex-direction: column !important;
+            border: 0 !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            print-color-adjust: exact;
+            -webkit-print-color-adjust: exact;
+          }
+          .cashbook-company-header { display: block !important; }
+          .cashbook-signatures { margin-top: auto !important; padding-top: 12mm !important; }
         }
       `}</style>
 
@@ -178,7 +197,13 @@ export function QuickCashbook({
       </div>
 
       <article className="cashbook-print-sheet mt-5 rounded-xl border border-slate-300 bg-white p-5 text-slate-950 sm:p-7">
-        <header className="border-b border-slate-700 pb-3 text-center">
+        <header className="cashbook-company-header hidden border-b-2 border-slate-800 pb-4 text-center print:block">
+          <h2 className="text-2xl font-black tracking-wide">Shenzhen Energy &amp; Networks</h2>
+          <p className="mt-2 text-xs leading-5">House 67, Level 3, Laboratory Road, New Elephant Road</p>
+          <p className="text-xs leading-5">Behind Multiplan Center, Dhaka 1205, Bangladesh</p>
+        </header>
+
+        <header className="border-b border-slate-700 py-3 text-center">
           <h3 className="text-xl font-black">DAILY CASH STATEMENT</h3>
           <p className="mt-1 text-xs">Date: {selectedDate} · Generated: {statementGeneratedAt.replace("T", " ")} · Asia/Dhaka {day.isClosed && day.closedAt ? `· Closed ${dhakaTime(day.closedAt)}` : ""}</p>
         </header>
@@ -195,7 +220,7 @@ export function QuickCashbook({
           <StatementTotal label="Closing Cash Balance (আজকের সমাপনী ব্যালেন্স)" value={day.isClosed ? day.closingBalance : summary.closing} closing />
         </div>
 
-        <div className="mt-12 grid grid-cols-2 gap-12 text-center text-xs">
+        <div className="cashbook-signatures mt-12 grid grid-cols-2 gap-12 text-center text-xs">
           <div><div className="mx-auto mb-2 w-36 border-t border-dashed border-slate-700" />প্রস্তুতকারীর স্বাক্ষর</div>
           <div><div className="mx-auto mb-2 w-36 border-t border-dashed border-slate-700" />অনুমোদনকারীর স্বাক্ষর</div>
         </div>
