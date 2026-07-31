@@ -37,6 +37,7 @@ export async function saveEmployeeAction(form: FormData) {
   const { profile } = await requireHrAdmin();
   let destination = safeReturn(form);
   let outcome: ActionOutcome;
+  let employeePersisted = false;
   try {
     const input = parseEmployeeInput({
       profileId:text(form,"profile_id"), jobTitle:text(form,"job_title"), hireDate:text(form,"hire_date"),
@@ -70,6 +71,7 @@ export async function saveEmployeeAction(form: FormData) {
     });
     if (report("Employee save failed",error)) throw new Error("Unable to save employee record.");
     const id = String(data);
+    employeePersisted = true;
     destination = `/admin/hr/employees/${id}`;
     const personal = {
       employee_record_id:id, preferred_name:nullable(form,"preferred_name"), date_of_birth:nullable(form,"date_of_birth"),
@@ -123,7 +125,7 @@ export async function saveEmployeeAction(form: FormData) {
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to save employee record.";
     outcome = {
-      kind:destination.startsWith("/admin/hr/employees/") ? "warning" : "error",
+      kind:employeePersisted ? "warning" : "error",
       message,
     };
   }
