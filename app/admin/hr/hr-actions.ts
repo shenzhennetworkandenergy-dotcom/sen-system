@@ -138,10 +138,13 @@ export async function saveEmployeeAction(form: FormData) {
 export async function archiveEmployeeAction(form: FormData) {
   const { profile } = await requireHrAdmin();
   const restore = text(form,"operation") === "restore";
-  const { error } = await createSupabaseAdminClient().rpc("hr_archive_employee", {
-    actor_profile_id:profile.id, requested_employee_id:text(form,"employee_id"), requested_restore:restore,
+  const employeeId = text(form,"employee_id");
+  const db = createSupabaseAdminClient();
+  const { error } = await db.rpc("hr_archive_employee", {
+    actor_profile_id:profile.id, requested_employee_id:employeeId, requested_restore:restore,
   });
   if (report("Employee lifecycle update failed",error)) return finish(form,"error","Unable to update employee lifecycle.");
+  revalidatePath("/admin/settings/trash-bin");
   finish(form,"success",restore ? "Employee restored." : "Employee archived without deleting history.");
 }
 

@@ -10,7 +10,7 @@ export const adminNavigation: DashboardNavigationItem[] = [
   {key:"team-activity",label:"Team Activity",route:routes.adminActivity,group:"Administration",iconKey:"activity",requiredPermission:"activity.view_all",implemented:true,adminVisible:true,employeeVisible:false},
   {key:"employees",label:"Employees",route:`${routes.adminUsers}?role=employee`,group:"Administration",iconKey:"employees",requiredPermission:"employees.view",implemented:true,adminVisible:true,employeeVisible:false},
   {key:"employee-activity",label:"Employee Activity",route:`${routes.adminActivity}?scope=employees`,group:"Administration",iconKey:"activity",requiredPermission:"employees.view_activity",implemented:true,adminVisible:true,employeeVisible:false},
-  {key:"archive",label:"Archive",route:routes.adminArchive,group:"Administration",iconKey:"inventory",requiredPermission:null,implemented:true,adminVisible:true,employeeVisible:false},
+  {key:"trash-bin",label:"Trash Bin",route:routes.adminTrashBin,group:"Administration",iconKey:"inventory",requiredPermission:null,implemented:true,adminVisible:true,employeeVisible:false},
   {key:"crm",label:"CRM",route:routes.adminCrm,group:"Commerce and Customers",iconKey:"crm",requiredPermission:"crm.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"products",label:"Products",route:"/admin/products",group:"Commerce and Customers",iconKey:"products",requiredPermission:"products.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"orders",label:"Orders",route:routes.adminOrders,group:"Commerce and Customers",iconKey:"sales",requiredPermission:"orders.view",implemented:true,adminVisible:true,employeeVisible:true},
