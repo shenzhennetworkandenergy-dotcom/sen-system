@@ -4,10 +4,12 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { actionOutcomeUrl, type ActionOutcome } from "@/lib/actions/outcome";
+import { getDeletionMode } from "@/lib/deletion/settings";
 import { requireHrAdmin } from "@/lib/hr/admin";
 import { normalizeCurrencyCode } from "@/lib/currency/currencies";
 import { isValidTimeZone, parseEmployeeSchedule, zonedLocalDateTimeToIso } from "@/lib/hr/attendance";
 import { validateEmployeeDocuments } from "@/lib/hr/documents";
+import { parsePermanentHrDeletion } from "@/lib/hr/permanent-deletion";
 import { parseAttendanceInput, parseEmployeeInput, parseMoney } from "@/lib/hr/validation";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -21,7 +23,7 @@ const safeReturn = (form: FormData) => {
 const finish = (form: FormData, kind: "success"|"error", message: string) => {
   const path = safeReturn(form);
   revalidatePath("/admin/hr","layout");
-  redirect(`${path}?${kind}=${encodeURIComponent(message)}`);
+  redirect(`${path}${path.includes("?") ? "&" : "?"}${kind}=${encodeURIComponent(message)}`);
 };
 const report = (label: string, error: { code?: string; message?: string } | null) => {
   if (error) console.error(label, { code:error.code, message:error.message });
@@ -200,6 +202,36 @@ export async function recordAttendanceAction(form: FormData) {
     message = error instanceof Error ? error.message : "Unable to save attendance.";
   }
   finish(form,kind,message);
+}
+
+export async function deleteAttendanceAction(form: FormData) {
+  const { profile } = await requireHrAdmin();
+  let kind: "success" | "error" = "success";
+  let message = "Attendance permanently deleted.";
+  try {
+    const mode = await getDeletionMode();
+    const ids = parsePermanentHrDeletion(
+      mode.permanentEnabled,
+      form.getAll("attendance_ids"),
+      100,
+    );
+    const { data, error } = await createSupabaseAdminClient().rpc(
+      "admin_delete_hr_attendance",
+      {
+        actor_profile_id: profile.id,
+        requested_attendance_ids: ids,
+      },
+    );
+    if (report("Attendance permanent deletion failed", error)) {
+      throw new Error(error?.message || "Unable to delete attendance.");
+    }
+    message = `${Number(data) || ids.length} attendance record(s) permanently deleted.`;
+  } catch (error) {
+    kind = "error";
+    message =
+      error instanceof Error ? error.message : "Unable to delete attendance.";
+  }
+  finish(form, kind, message);
 }
 
 const parseCsvRow = (line: string) => {
@@ -462,4 +494,108 @@ export async function uploadEmployeeDocumentAction(form: FormData) {
   }
   await audit(profile.id,"hr.document_uploaded","employee_document",String(inserted.data.id),"Employee document uploaded.");
   finish(form,"success","Employee document uploaded.");
+}
+
+export async function deleteEmployeeDocumentsAction(form: FormData) {
+  const { profile } = await requireHrAdmin();
+  let kind: "success" | "error" = "success";
+  let message = "Employee documents permanently deleted.";
+  try {
+    const mode = await getDeletionMode();
+    const employeeId = parsePermanentHrDeletion(
+      mode.permanentEnabled,
+      [text(form, "employee_id")],
+      1,
+    )[0];
+    const documentIds = parsePermanentHrDeletion(
+      mode.permanentEnabled,
+      form.getAll("document_ids"),
+      50,
+    );
+    const db = createSupabaseAdminClient();
+    const preparation = await db.rpc(
+      "admin_prepare_hr_employee_document_deletion",
+      {
+        actor_profile_id: profile.id,
+        requested_employee_id: employeeId,
+        requested_document_ids: documentIds,
+      },
+    );
+    if (report("Employee document deletion preparation failed", preparation.error)) {
+      throw new Error(
+        preparation.error?.message ||
+          "Unable to prepare the selected employee documents for deletion.",
+      );
+    }
+    const prepared =
+      preparation.data && typeof preparation.data === "object"
+        ? (preparation.data as {
+            job_id?: unknown;
+            storage_paths?: unknown;
+          })
+        : null;
+    const jobId = parsePermanentHrDeletion(
+      true,
+      [prepared?.job_id],
+      1,
+    )[0];
+    const storagePaths = Array.isArray(prepared?.storage_paths)
+      ? prepared.storage_paths.filter(
+          (path): path is string => typeof path === "string" && path.length > 0,
+        )
+      : [];
+    if (storagePaths.length !== documentIds.length) {
+      const failedJob = await db.rpc(
+        "admin_fail_hr_employee_document_deletion",
+        {
+          actor_profile_id: profile.id,
+          requested_job_id: jobId,
+          requested_error_message:
+            "Storage cleanup could not start because the file list was incomplete.",
+        },
+      );
+      report("Employee document deletion job update failed", failedJob.error);
+      throw new Error(
+        "Document metadata was kept because the storage file list was incomplete.",
+      );
+    }
+    const storageResult = await db.storage
+      .from("hr-documents")
+      .remove(storagePaths);
+    if (report("Employee document storage deletion failed", storageResult.error)) {
+      const failedJob = await db.rpc(
+        "admin_fail_hr_employee_document_deletion",
+        {
+          actor_profile_id: profile.id,
+          requested_job_id: jobId,
+          requested_error_message:
+            storageResult.error?.message || "Storage cleanup failed.",
+        },
+      );
+      report("Employee document deletion job update failed", failedJob.error);
+      throw new Error(
+        "The files could not be removed from storage. Document metadata was not deleted.",
+      );
+    }
+    const finalization = await db.rpc(
+      "admin_finalize_hr_employee_document_deletion",
+      {
+      actor_profile_id: profile.id,
+        requested_job_id: jobId,
+      },
+    );
+    if (report("Employee document deletion finalization failed", finalization.error)) {
+      throw new Error(
+        "The files were removed, but database finalization is still pending. Select the same documents and delete them again to resume safely.",
+      );
+    }
+    message = `${documentIds.length} employee document(s) permanently deleted.`;
+  } catch (error) {
+    kind = "error";
+    message =
+      error instanceof Error
+        ? error.message
+        : "Unable to delete employee documents.";
+  }
+  finish(form, kind, message);
 }

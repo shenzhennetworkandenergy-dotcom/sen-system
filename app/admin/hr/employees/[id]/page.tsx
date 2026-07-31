@@ -2,15 +2,17 @@ import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { EmployeeForm } from "@/components/hr/EmployeeForm";
 import { HrPage, hrCard, hrPrimary, hrSecondary, relation } from "@/components/hr/HrPage";
+import { ConfirmSubmitButton } from "@/components/ui/ConfirmSubmitButton";
+import { getDeletionMode } from "@/lib/deletion/settings";
 import { getHrEmployee, getHrReferences } from "@/lib/hr/operational";
-import { archiveEmployeeAction, uploadEmployeeDocumentAction } from "../../hr-actions";
+import { archiveEmployeeAction, deleteEmployeeDocumentsAction, uploadEmployeeDocumentAction } from "../../hr-actions";
 
 export const dynamic = "force-dynamic";
 
 export default async function EmployeeDetailPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ success?: string; warning?: string; error?: string }> }) {
   await connection();
   const [{ id }, notices] = await Promise.all([params, searchParams]);
-  const [data, refs] = await Promise.all([getHrEmployee(id), getHrReferences()]);
+  const [data, refs, deletionMode] = await Promise.all([getHrEmployee(id), getHrReferences(), getDeletionMode()]);
   if (!data.record) notFound();
   const person = relation(data.record.profiles);
   return (
@@ -26,7 +28,11 @@ export default async function EmployeeDetailPage({ params, searchParams }: { par
         <h2 className="font-semibold">Employee documents</h2>
         <div className="mt-3 grid gap-3 md:grid-cols-4"><label className="text-sm font-semibold">Document type<input name="document_type" required className="mt-1 w-full rounded-lg border p-2"/></label><label className="text-sm font-semibold">Title<input name="title" required className="mt-1 w-full rounded-lg border p-2"/></label><label className="text-sm font-semibold">Expiry date<input type="date" name="expires_on" className="mt-1 w-full rounded-lg border p-2"/></label><label className="text-sm font-semibold">File<input type="file" name="file" required accept=".pdf,image/jpeg,image/png,image/webp" className="mt-1 block w-full text-sm"/></label></div>
         <button className={`${hrPrimary} mt-3`}>Upload document</button>
-        <div className="mt-3 divide-y">{data.documents.map((item: Record<string,unknown>)=><p key={String(item.id)} className="flex items-center justify-between gap-3 py-2 text-sm"><span><strong>{String(item.title)}</strong> · {String(item.document_type)} · {Math.ceil(Number(item.size_bytes)/1024)} KB</span><a href={`/admin/hr/documents/${String(item.id)}`} className="font-semibold text-blue-700">Download</a></p>)}{!data.documents.length?<p className="py-2 text-sm text-[var(--muted-text)]">No documents uploaded.</p>:null}</div>
+      </form>
+      <form action={deleteEmployeeDocumentsAction} className={`${hrCard} mt-3`}>
+        <input type="hidden" name="employee_id" value={id}/><input type="hidden" name="return_to" value={`/admin/hr/employees/${id}`}/>
+        <div className="divide-y">{data.documents.map((item: Record<string,unknown>)=><p key={String(item.id)} className="flex items-center justify-between gap-3 py-2 text-sm"><span className="flex items-center gap-3">{deletionMode.permanentEnabled ? <input type="checkbox" name="document_ids" value={String(item.id)} aria-label={`Select ${String(item.title)}`}/> : null}<span><strong>{String(item.title)}</strong> · {String(item.document_type)} · {Math.ceil(Number(item.size_bytes)/1024)} KB</span></span><a href={`/admin/hr/documents/${String(item.id)}`} className="font-semibold text-blue-700">Download</a></p>)}{!data.documents.length?<p className="py-2 text-sm text-[var(--muted-text)]">No documents uploaded.</p>:null}</div>
+        {deletionMode.permanentEnabled && data.documents.length ? <div className="mt-3 flex justify-end"><ConfirmSubmitButton confirmation="Permanently delete the selected employee documents? Their files will also be removed and this cannot be undone." className="rounded-lg border border-red-300 bg-red-50 px-4 py-2 font-semibold text-red-700">Delete selected documents</ConfirmSubmitButton></div> : null}
       </form>
       <section className="mt-5 grid gap-4 xl:grid-cols-2">
         {[
