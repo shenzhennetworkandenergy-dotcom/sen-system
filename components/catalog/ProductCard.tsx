@@ -1,6 +1,10 @@
 /* eslint-disable @next/next/no-img-element */
 import type { AwaitedReturn } from "@/types/catalog";
 import { categoryStyle } from "@/lib/catalog/themes";
+import {
+  hasPublicPrice,
+  publicStockLabel,
+} from "@/lib/catalog/product-display";
 
 function plainText(value: string | null) {
   return value
@@ -53,7 +57,7 @@ export function ProductCard({ product }: { product: AwaitedReturn }) {
           </p>
           <div className="mt-5 flex items-end justify-between gap-3">
             <div>
-              {price ? (
+              {hasPublicPrice(price) ? (
                 <>
                   <span className="text-xs text-slate-500">Starting from</span>
                   <strong className="block text-xl text-[#10152f]">
@@ -77,9 +81,7 @@ export function ProductCard({ product }: { product: AwaitedReturn }) {
                   : "bg-slate-100 text-slate-700"
               }`}
             >
-              {product.available > 0
-                ? "Available"
-                : "Contact for availability"}
+              {publicStockLabel(product.available)}
             </span>
           </div>
           <span className="catalogue-card-link mt-5 inline-flex font-semibold">
