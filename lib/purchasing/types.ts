@@ -3,8 +3,11 @@ export type PurchaseStatus =
   | "pending_approval"
   | "approved"
   | "ordered"
+  | "ready_for_shipment"
+  | "shipped"
   | "partially_received"
   | "received"
+  | "stock_received"
   | "cancelled"
   | "closed";
 
@@ -26,8 +29,11 @@ export const purchaseStatuses: PurchaseStatus[] = [
   "pending_approval",
   "approved",
   "ordered",
+  "ready_for_shipment",
+  "shipped",
   "partially_received",
   "received",
+  "stock_received",
   "cancelled",
   "closed",
 ];

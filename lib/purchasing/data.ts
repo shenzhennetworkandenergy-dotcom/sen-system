@@ -68,9 +68,9 @@ export async function getPurchaseDashboard(params: PurchaseListParams) {
     metrics: {
       draft: all.filter((item) => item.status === "draft").length,
       awaitingApproval: all.filter((item) => item.status === "pending_approval").length,
-      open: all.filter((item) => ["approved", "ordered", "partially_received"].includes(item.status)).length,
-      overdue: all.filter((item) => ["ordered", "partially_received"].includes(item.status) && item.expected_delivery_date && item.expected_delivery_date < today).length,
-      received: all.filter((item) => ["received", "closed"].includes(item.status)).length,
+      open: all.filter((item) => ["approved", "ordered", "ready_for_shipment", "shipped", "received", "partially_received"].includes(item.status)).length,
+      overdue: all.filter((item) => ["ordered", "ready_for_shipment", "shipped"].includes(item.status) && item.expected_delivery_date && item.expected_delivery_date < today).length,
+      received: all.filter((item) => ["stock_received", "closed"].includes(item.status)).length,
       openValue: all.filter((item) => !["cancelled", "closed"].includes(item.status)).reduce((sum, item) => sum + Number(item.total_amount), 0),
     },
   };
@@ -78,13 +78,14 @@ export async function getPurchaseDashboard(params: PurchaseListParams) {
 
 export async function getPurchaseOrder(id: string) {
   const db = createSupabaseAdminClient();
-  const [orderResult, itemsResult, eventsResult, receiptsResult] = await Promise.all([
+  const [orderResult, itemsResult, eventsResult, receiptsResult, inboundShipmentResult] = await Promise.all([
     db.from("purchase_orders").select("*,suppliers(*),warehouses:destination_warehouse_id(id,code,name,country_name)").eq("id", id).maybeSingle(),
     db.from("purchase_order_items").select("*,products(id,name,sku,serial_tracking_required),product_variations(id,sku,combination_key)").eq("purchase_order_id", id).order("created_at"),
     db.from("purchase_order_status_events").select("id,previous_status,new_status,note,created_at,profiles:actor_profile_id(full_name,email)").eq("purchase_order_id", id).order("created_at", { ascending: false }),
     db.from("purchase_receipts").select("id,receipt_number,receipt_date,supplier_delivery_reference,supplier_invoice_reference,status,created_at,profiles:received_by(full_name,email),purchase_receipt_items(id,purchase_order_item_id,quantity_received,serial_generation_batch_id)").eq("purchase_order_id", id).order("created_at", { ascending: false }),
+    db.from("purchase_inbound_shipments").select("*").eq("purchase_order_id", id).maybeSingle(),
   ]);
-  const error = orderResult.error ?? itemsResult.error ?? eventsResult.error ?? receiptsResult.error;
+  const error = orderResult.error ?? itemsResult.error ?? eventsResult.error ?? receiptsResult.error ?? inboundShipmentResult.error;
   if (error) {
     console.error("Purchase order query failed", { code: error.code, message: error.message, orderId: id });
     throw new Error("Unable to load purchase order.");
@@ -95,7 +96,26 @@ export async function getPurchaseOrder(id: string) {
     items: itemsResult.data ?? [],
     events: eventsResult.data ?? [],
     receipts: receiptsResult.data ?? [],
+    inboundShipment: inboundShipmentResult.data,
   };
+}
+
+export async function getInboundPurchaseShipments() {
+  const result = await createSupabaseAdminClient()
+    .from("purchase_inbound_shipments")
+    .select(
+      "id,status,transport_mode,carrier_name,tracking_number,expected_arrival_at,shipped_at,received_at,updated_at,purchase_orders(id,order_number,suppliers(name),warehouses:destination_warehouse_id(name,code))",
+    )
+    .order("updated_at", { ascending: false })
+    .limit(50);
+  if (result.error) {
+    console.error("Supplier inbound shipment query failed", {
+      code: result.error.code,
+      message: result.error.message,
+    });
+    throw new Error("Unable to load supplier inbound shipments.");
+  }
+  return result.data ?? [];
 }
 
 export async function getSuppliers(params: { q?: string; status?: string; page?: string }) {
