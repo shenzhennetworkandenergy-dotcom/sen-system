@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { calculateAttendanceVariance, resolveAttendanceWorkDate } from "@/lib/hr/attendance";
+import { resolveAttendanceWorkDate } from "@/lib/hr/attendance";
 import { hashDeviceKey, parseDeviceEvent } from "@/lib/hr/device-ingestion";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -57,41 +57,19 @@ export async function POST(request: NextRequest) {
     if (inserted.error?.code === "23505") return NextResponse.json({ ok:true,duplicate:true });
     if (inserted.error) throw inserted.error;
 
-    const attendance = await db.from("hr_attendance")
-      .select("id,check_in,check_out,status")
-      .eq("employee_record_id",mapping.data.employee_record_id).eq("work_date",workDate).maybeSingle();
-    if (attendance.error) throw attendance.error;
-    const current = attendance.data;
-    const checkIn = event.eventType === "check_in"
-      ? (!current?.check_in || event.occurredAt < current.check_in ? event.occurredAt : current.check_in)
-      : current?.check_in ?? null;
-    const checkOut = event.eventType === "check_out"
-      ? (!current?.check_out || event.occurredAt > current.check_out ? event.occurredAt : current.check_out)
-      : current?.check_out ?? null;
-    const variance = calculateAttendanceVariance({ workDate,timezone,startTime,endTime,checkIn,checkOut });
-    const manualOvertime = current?.status === "overtime" || current?.status === "holiday_overtime";
-    const status = manualOvertime
-      ? current.status
-      : (variance.checkInVarianceMinutes ?? 0) > Number(settingsResult.data.late_grace_minutes ?? 0)
-        ? "late"
-        : "present";
-    const payload = {
-      employee_record_id:mapping.data.employee_record_id,
-      work_date:workDate,
-      status,
-      check_in:checkIn,
-      check_out:checkOut,
-      source:"device",
-      timezone,
-      scheduled_start_at:variance.scheduledStartAt,
-      scheduled_end_at:variance.scheduledEndAt,
-      check_in_variance_minutes:variance.checkInVarianceMinutes,
-      check_out_variance_minutes:variance.checkOutVarianceMinutes,
-      minutes_late:Math.max(variance.checkInVarianceMinutes ?? 0,0),
-      updated_at:new Date().toISOString(),
-    };
-    const saved = await db.from("hr_attendance").upsert(payload,{ onConflict:"employee_record_id,work_date" });
+    const saved = await db.rpc("hr_apply_device_attendance_event", {
+      requested_employee_id: mapping.data.employee_record_id,
+      requested_event_type: event.eventType,
+      requested_occurred_at: event.occurredAt,
+      requested_timezone: timezone,
+      requested_start_time: startTime,
+      requested_end_time: endTime,
+      requested_late_grace: Number(settingsResult.data.late_grace_minutes ?? 0),
+    });
     if (saved.error) throw saved.error;
+    const applied = Array.isArray(saved.data) ? saved.data[0] : saved.data;
+    workDate = String(applied?.applied_work_date ?? workDate);
+    timezone = String(applied?.applied_timezone ?? timezone);
     await Promise.all([
       db.from("hr_attendance_events").update({ processed_at:new Date().toISOString() }).eq("id",inserted.data.id),
       db.from("hr_attendance_devices").update({ last_seen_at:new Date().toISOString() }).eq("id",deviceResult.data.id),
