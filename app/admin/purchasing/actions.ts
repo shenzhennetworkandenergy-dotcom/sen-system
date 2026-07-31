@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireAllPermissions, requirePermission } from "@/lib/auth/permissions";
 import { writeAuditLog } from "@/lib/audit/log";
+import { normalizeCurrencyCode } from "@/lib/currency/currencies";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { jsonArray, optionalString, requiredString, uuid } from "@/lib/orders/validation";
 import { moneyFromForm, parseMoney, parseWholeNumber, wholeNumberFromForm } from "@/lib/validation/numbers";
@@ -29,7 +30,7 @@ function purchasePayload(form: FormData) {
   return {
     requested_supplier_id: uuid(form.get("supplier_id"), "Supplier"),
     requested_warehouse_id: uuid(form.get("warehouse_id"), "Warehouse"),
-    requested_currency: String(form.get("currency") ?? "BDT").trim().toUpperCase().slice(0, 3),
+    requested_currency: normalizeCurrencyCode(form.get("currency") ?? "BDT"),
     requested_order_date: String(form.get("order_date") ?? "") || new Date().toISOString().slice(0, 10),
     requested_expected_date: String(form.get("expected_delivery_date") ?? "") || null,
     requested_supplier_reference: optionalString(form, "supplier_reference", 200),
@@ -204,7 +205,7 @@ function supplierPayload(form: FormData, actorId: string, includeCreator: boolea
     website_url: optionalString(form, "website_url", 300),
     country_name: requiredString(form, "country_name", 100),
     address: optionalString(form, "address", 500),
-    default_currency: String(form.get("default_currency") ?? "BDT").trim().toUpperCase().slice(0, 3),
+    default_currency: normalizeCurrencyCode(form.get("default_currency") ?? "BDT"),
     notes: optionalString(form, "notes", 2000),
     updated_by: actorId,
   };

@@ -73,6 +73,10 @@ const printReport = await readFile(new URL("../app/admin/hr/reports/print/page.t
 const printReportButton = await readFile(new URL("../components/hr/PrintReportButton.tsx", import.meta.url), "utf8").catch(() => "");
 const attendanceReport = await readFile(new URL("../app/admin/hr/reports/attendance.csv/route.ts", import.meta.url), "utf8").catch(() => "");
 const operationalQueries = await readFile(new URL("../lib/hr/operational.ts", import.meta.url), "utf8");
+const attendancePage = await readFile(new URL("../app/admin/hr/attendance/page.tsx", import.meta.url), "utf8");
+const payrollPage = await readFile(new URL("../app/admin/hr/payroll/page.tsx", import.meta.url), "utf8");
+const settingsPage = await readFile(new URL("../app/admin/hr/settings/page.tsx", import.meta.url), "utf8");
+const employeeForm = await readFile(new URL("../components/hr/EmployeeForm.tsx", import.meta.url), "utf8");
 
 assert.match(employeeDirectory, /Name, email, phone, number or job title/i);
 assert.match(employeeDirectory, /name="designation"/);
@@ -92,6 +96,12 @@ assert.doesNotMatch(
   /profiles:profile_id\(/,
   "HR queries must use the explicit employee-profile foreign key because hr_employee_records has multiple profile relationships",
 );
+assert.match(operationalQueries, /function getHrEmployeeOptions/);
+assert.match(operationalQueries, /\.limit\(5001\)/);
+for (const source of [attendancePage, payrollPage, settingsPage]) {
+  assert.match(source, /EmployeeCombobox/);
+}
+assert.match(employeeForm, /EmployeeScheduleEditor/);
 assert.match(operationalQueries, /profiles!hr_employee_records_profile_id_fkey/);
 assert.doesNotMatch(
   operationalQueries,

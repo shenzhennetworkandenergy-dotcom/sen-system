@@ -15,7 +15,7 @@ export default async function EmployeeDetailPage({ params, searchParams }: { par
   const person = relation(data.record.profiles);
   return (
     <HrPage title={person?.full_name || data.record.employee_number} subtitle={`${data.record.employee_number} · ${data.record.job_title}`} success={notices.success} error={notices.error}>
-      <EmployeeForm refs={refs} record={data.record} personal={data.personal}/>
+      <EmployeeForm refs={refs} record={data.record} personal={data.personal} schedule={data.schedule}/>
       <form action={archiveEmployeeAction} className={`${hrCard} mt-5 flex flex-wrap items-center justify-between gap-3`}>
         <input type="hidden" name="employee_id" value={id}/><input type="hidden" name="return_to" value={`/admin/hr/employees/${id}`}/><input type="hidden" name="operation" value={data.record.archived_at ? "restore":"archive"}/>
         <div><h2 className="font-semibold">Lifecycle control</h2><p className="text-sm text-[var(--muted-text)]">Archiving removes operational access while preserving attendance, payroll and audit history.</p></div>

@@ -8,6 +8,10 @@ import {
   parseEmployeeSchedule,
   resolveAttendanceWorkDate,
 } from "../lib/hr/attendance.ts";
+import {
+  buildEmployeeOptions,
+  filterEmployeeOptions,
+} from "../lib/hr/form-options.ts";
 
 test("manual overtime statuses remain accepted attendance choices", () => {
   assert.deepEqual(attendanceStatuses, [
@@ -96,3 +100,22 @@ test("variance labels respect grace without losing exact differences", () => {
   assert.equal(formatAttendanceVariance(null, 5), "Not recorded");
 });
 
+test("employee options are searchable by name, email, and employee number", () => {
+  const options = buildEmployeeOptions([
+    {
+      id: "employee-a",
+      employee_number: "SEN-EMP-0042",
+      profiles: { full_name: "Amina Rahman", email: "amina@example.com" },
+    },
+    {
+      id: "employee-b",
+      employee_number: "SEN-EMP-0091",
+      profiles: [{ full_name: "Karim Hasan", email: "karim@example.com" }],
+    },
+  ]);
+
+  assert.equal(filterEmployeeOptions(options, "amina")[0]?.id, "employee-a");
+  assert.equal(filterEmployeeOptions(options, "0091")[0]?.id, "employee-b");
+  assert.equal(filterEmployeeOptions(options, "karim@example")[0]?.id, "employee-b");
+  assert.equal(options[0]?.label, "Amina Rahman · SEN-EMP-0042");
+});

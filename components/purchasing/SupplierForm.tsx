@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { CurrencyCombobox } from "@/components/forms/CurrencyCombobox";
 import { supplierCodePreview } from "@/lib/purchasing/supplier-codes";
 
 type SupplierDefaults = Record<string, string | number | boolean | null>;
@@ -47,7 +48,7 @@ export function SupplierForm({ action, categories, brands, defaults = {}, submit
     <label className="text-sm font-semibold">Phone<input name="phone" maxLength={50} defaultValue={field("phone")} className="mt-1 w-full rounded-xl border px-3 py-2.5" /></label>
     <label className="text-sm font-semibold">Website<input name="website_url" type="url" maxLength={300} defaultValue={field("website_url")} className="mt-1 w-full rounded-xl border px-3 py-2.5" /></label>
     <label className="text-sm font-semibold">Country *<input name="country_name" required maxLength={100} defaultValue={field("country_name")} className="mt-1 w-full rounded-xl border px-3 py-2.5" /></label>
-    <label className="text-sm font-semibold">Default currency *<input name="default_currency" required minLength={3} maxLength={3} defaultValue={field("default_currency") || "BDT"} className="mt-1 w-full rounded-xl border px-3 py-2.5 uppercase" /></label>
+    <label className="text-sm font-semibold">Default currency *<CurrencyCombobox name="default_currency" required defaultValue={field("default_currency") || "BDT"} className="mt-1 w-full rounded-xl border px-3 py-2.5 uppercase" /></label>
     <label className="text-sm font-semibold sm:col-span-2">Address<textarea name="address" maxLength={500} defaultValue={field("address")} className="mt-1 min-h-20 w-full rounded-xl border px-3 py-2.5" /></label>
     <label className="text-sm font-semibold sm:col-span-2">Notes<textarea name="notes" maxLength={2000} defaultValue={field("notes")} className="mt-1 min-h-20 w-full rounded-xl border px-3 py-2.5" /></label>
     <button disabled={!categoryId || (!savedCode && !previewCode)} className="rounded-xl bg-[var(--primary)] px-5 py-3 font-bold text-[var(--primary-foreground)] disabled:cursor-not-allowed disabled:opacity-50 sm:col-span-2">{submitLabel}</button>

@@ -4,6 +4,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireHrAdmin } from "@/lib/hr/admin";
+import { normalizeCurrencyCode } from "@/lib/currency/currencies";
 import { parseAttendanceInput, parseEmployeeInput, parseMoney } from "@/lib/hr/validation";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -251,7 +252,7 @@ export async function savePayrollAction(form: FormData) {
     const db = createSupabaseAdminClient();
     const { data,error } = await db.from("hr_payroll_records").insert({
       employee_record_id:text(form,"employee_record_id"),period_start:text(form,"period_start"),period_end:text(form,"period_end"),
-      base_salary:base,gross_pay:gross,deductions:deduction,net_pay:net,currency:text(form,"currency").toUpperCase() || "BDT",
+      base_salary:base,gross_pay:gross,deductions:deduction,net_pay:net,currency:normalizeCurrencyCode(text(form,"currency") || "BDT"),
       status:"draft",notes:nullable(form,"notes"),created_by:profile.id,
     }).select("id").single();
     if (report("Payroll save failed",error) || !data) return finish(form,"error","Unable to create payroll record.");
