@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 const migrationPath = new URL("../supabase/migrations/202607300004_integrated_hr_management.sql", import.meta.url);
 const migration = await readFile(migrationPath, "utf8").catch(() => "");
 const enhancementMigration = await readFile(
-  new URL("../supabase/migrations/202607310001_hr_attendance_workforce_enhancements.sql", import.meta.url),
+  new URL("../supabase/migrations/202607310002_hr_attendance_workforce_enhancements.sql", import.meta.url),
   "utf8",
 ).catch(() => "");
 
