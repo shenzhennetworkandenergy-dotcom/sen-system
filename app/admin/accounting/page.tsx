@@ -39,6 +39,7 @@ export default async function AccountingPage({ searchParams }: { searchParams: P
       summary={data.cashbook.summary}
       day={data.cashbook.day}
       canCreate={canManageCashbook}
+      canCreateDescription={profile.role === "admin"}
     />
     {canViewLedger ? <><section className="mb-6 mt-6 grid gap-3 sm:grid-cols-3">
       <article className="rounded-2xl border bg-[var(--surface)] p-5"><p className="text-sm text-[var(--muted-text)]">Active accounts</p><strong className="mt-2 block text-3xl">{data.accounts.filter((account) => account.is_active).length}</strong></article>

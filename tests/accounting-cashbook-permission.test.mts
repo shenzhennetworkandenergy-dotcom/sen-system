@@ -21,3 +21,18 @@ test("cashbook actions accept the dedicated permission without changing journal 
   assert.match(actions, /accounting\.manage_cashbook/);
   assert.match(actions, /createJournalAction[\s\S]*requirePermission\("accounting\.create_entry"\)/);
 });
+
+test("only admins can see or call cashbook description creation", async () => {
+  const page = await readFile("app/admin/accounting/page.tsx", "utf8");
+  const component = await readFile("components/accounting/QuickCashbook.tsx", "utf8");
+  const actions = await readFile("app/admin/accounting/actions.ts", "utf8");
+  const descriptionAction = actions.slice(
+    actions.indexOf("export async function createCashbookDescriptionAction"),
+    actions.indexOf("export async function createCashbookEntryAction"),
+  );
+
+  assert.match(page, /canCreateDescription=\{profile\.role === "admin"\}/);
+  assert.match(component, /\{canCreateDescription \? <div className="mt-5 flex justify-end">/);
+  assert.match(descriptionAction, /requireProfile\(\["admin"\]\)/);
+  assert.doesNotMatch(descriptionAction, /requireAnyPermission/);
+});

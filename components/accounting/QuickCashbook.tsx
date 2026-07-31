@@ -45,6 +45,7 @@ export function QuickCashbook({
   summary,
   day,
   canCreate,
+  canCreateDescription,
 }: {
   selectedDate: string;
   defaultOccurredAt: string;
@@ -54,6 +55,7 @@ export function QuickCashbook({
   summary: { opening: number; income: number; expense: number; net: number; closing: number };
   day: { openingBalance: number; closingBalance: number; isClosed: boolean; closedAt: string | null };
   canCreate: boolean;
+  canCreateDescription: boolean;
 }) {
   const [transactionType, setTransactionType] = useState<TransactionType>("income");
   const filteredDescriptions = useMemo(
@@ -129,7 +131,7 @@ export function QuickCashbook({
 
       {canCreate ? (
         <div className="print:hidden">
-          <div className="mt-5 flex justify-end">
+          {canCreateDescription ? <div className="mt-5 flex justify-end">
             <details className="group w-full rounded-xl border bg-white p-3 sm:w-auto sm:min-w-[30rem]">
               <summary className="cursor-pointer list-none rounded-lg bg-slate-800 px-4 py-2.5 text-center text-sm font-bold text-white hover:bg-slate-900">+ Create খাত/বিবরণ</summary>
               <form action={createCashbookDescriptionAction} className="mt-3 grid gap-3 sm:grid-cols-[1fr_1.4fr_auto]">
@@ -146,7 +148,7 @@ export function QuickCashbook({
                 <button className="self-end rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-bold text-white">Create</button>
               </form>
             </details>
-          </div>
+          </div> : null}
 
           {day.isClosed ? (
             <p className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-center font-bold text-amber-900">This cashbook day is closed. Its statement is locked for audit.</p>

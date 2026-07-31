@@ -10,6 +10,7 @@ import {
   toCashbookTimestamp,
 } from "@/lib/accounting/cashbook";
 import { requireAnyPermission, requirePermission } from "@/lib/auth/permissions";
+import { requireProfile } from "@/lib/auth/session";
 import { normalizeCurrencyCode } from "@/lib/currency/currencies";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -66,7 +67,7 @@ export async function closeCashbookDayAction(form: FormData) {
 }
 
 export async function createCashbookDescriptionAction(form: FormData) {
-  const { profile } = await requireAnyPermission(cashbookEditPermissions);
+  const { profile } = await requireProfile(["admin"]);
   const selectedDate = normalizeCashbookDate(form.get("cashbook_date"));
   let failure: string | null = null;
   try {
