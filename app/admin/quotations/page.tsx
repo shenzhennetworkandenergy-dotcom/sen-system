@@ -27,7 +27,9 @@ export default async function AdminQuotationsPage({
   searchParams: Promise<{ status?: string; success?: string; error?: string }>;
 }) {
   await connection();
-  await requirePermission("quotations.view");
+  const { profile, permissions } = await requirePermission("quotations.view");
+  const canCreate =
+    profile.role === "admin" || permissions.has("quotations.create");
   const params = await searchParams;
   const db = createSupabaseAdminClient();
   let query = db
@@ -44,7 +46,10 @@ export default async function AdminQuotationsPage({
 
   return (
     <DashboardShell
-      admin
+      admin={profile.role === "admin"}
+      employeePermissions={
+        profile.role === "employee" ? permissions : undefined
+      }
       title="Quotations"
       subtitle="Review product pricing and sourcing requests from customers."
     >
@@ -58,7 +63,16 @@ export default async function AdminQuotationsPage({
           {params.error ?? "Unable to load quotations."}
         </p>
       ) : null}
-      <div className="mb-5 flex justify-end"><Link href="/admin/quotations/new" className="rounded-xl bg-[var(--primary)] px-4 py-3 font-semibold text-[var(--primary-foreground)]">Create quotation</Link></div>
+      {canCreate ? (
+        <div className="mb-5 flex justify-end">
+          <Link
+            href="/admin/quotations/new"
+            className="rounded-xl bg-[var(--primary)] px-4 py-3 font-semibold text-[var(--primary-foreground)]"
+          >
+            Create quotation
+          </Link>
+        </div>
+      ) : null}
       <form className="mb-5 flex flex-wrap gap-3 rounded-2xl border bg-[var(--surface)] p-4">
         <select
           name="status"

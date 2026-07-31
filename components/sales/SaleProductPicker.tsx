@@ -14,6 +14,7 @@ export type SalePickerProduct = {
   regular_price: number | null;
   sale_price: number | null;
   serial_tracking_required: boolean;
+  search_terms?: string | null;
 };
 
 export function SaleProductPicker({
