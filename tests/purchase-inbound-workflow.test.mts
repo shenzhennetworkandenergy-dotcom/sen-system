@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   canPostPurchaseStock,
@@ -41,4 +42,18 @@ test("warehouse stock can only be posted after physical arrival", () => {
   assert.equal(canPostPurchaseStock("received"), true);
   assert.equal(canPostPurchaseStock("partially_received"), true);
   assert.equal(canPostPurchaseStock("stock_received"), false);
+});
+
+test("purchase-order carrier lookup follows the migrated carrier status schema", async () => {
+  const source = await readFile(
+    new URL("../lib/purchasing/data.ts", import.meta.url),
+    "utf8",
+  );
+  const carrierLookup = source.match(
+    /db\.from\("purchase_carriers"\)[\s\S]*?\.order\("name"\)/,
+  )?.[0];
+
+  assert.ok(carrierLookup, "Purchase-order loader must query available carriers.");
+  assert.match(carrierLookup, /\.eq\("status",\s*"active"\)/);
+  assert.doesNotMatch(carrierLookup, /\.eq\("is_active"/);
 });
