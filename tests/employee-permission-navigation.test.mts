@@ -31,6 +31,33 @@ test("all sales landing-page permissions expose the Sales module", () => {
   }
 });
 
+test("every action permission exposes its module through a safe employee route", () => {
+  const cases = [
+    ["products.manage_media", "products"],
+    ["orders.pack", "orders"],
+    ["shipments.manage_documents", "shipments"],
+    ["suppliers.edit", "suppliers"],
+    ["support.close", "support"],
+  ];
+  for (const [permission, key] of cases) {
+    const item = visibleEmployeeNavigation([permission]).find((entry) => entry.key === key);
+    assert.ok(item, `${permission} should expose ${key}`);
+    assert.equal(item.route, `/employee/access/${item.moduleKey ?? key}`);
+  }
+});
+
+test("new purchase stock receipt has a dedicated employee inventory module", () => {
+  const items = visibleEmployeeNavigation(["inventory.receive_new_stock"]);
+  const receiving = items.find((item) => item.key === "receive-new-stock");
+  assert.ok(receiving);
+  assert.equal(receiving.route, "/employee/inventory/receive");
+  assert.equal(
+    items.some((item) => item.key === "inventory"),
+    false,
+    "The dedicated receiving item must replace the generic Inventory permission hub.",
+  );
+});
+
 test("admin navigation applies adminVisible and never shows employee-only shortcuts", () => {
   const keys = visibleAdminNavigation().map((item) => item.key);
 

@@ -18,6 +18,7 @@ const textLimits = {
   region: 120,
   postal_code: 30,
   country_name: 100,
+  country: 100,
   company_name: 200,
   job_title: 160,
   department: 160,

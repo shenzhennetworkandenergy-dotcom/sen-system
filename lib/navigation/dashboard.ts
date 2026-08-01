@@ -8,7 +8,7 @@ export const adminNavigation: DashboardNavigationItem[] = [
   {key:"users",label:"Users",route:routes.adminUsers,group:"Administration",iconKey:"users",requiredPermission:"users.view",implemented:true,adminVisible:true,employeeVisible:false},
   {key:"permissions",label:"Permissions",route:routes.adminPermissions,group:"Administration",iconKey:"permissions",requiredPermission:"users.manage_permissions",implemented:true,adminVisible:true,employeeVisible:false},
   {key:"team-activity",label:"Team Activity",route:routes.adminActivity,group:"Administration",iconKey:"activity",requiredPermission:"activity.view_all",implemented:true,adminVisible:true,employeeVisible:false},
-  {key:"employees",label:"Employees",route:`${routes.adminUsers}?role=employee`,employeeRoute:routes.employeeEmployees,group:"Administration",iconKey:"employees",requiredPermission:"employees.view",implemented:true,adminVisible:true,employeeVisible:true},
+  {key:"employees",label:"Employees",route:`${routes.adminUsers}?role=employee`,employeeRoute:routes.employeeEmployees,group:"Administration",iconKey:"employees",requiredPermission:"employees.view",alternativePermissions:["employees.view_detail","employees.edit_profile","employees.view_permissions","employees.manage_permissions","employees.view_activity"],implemented:true,adminVisible:true,employeeVisible:true},
   {key:"employee-activity",label:"Employee Activity",route:`${routes.adminActivity}?scope=employees`,group:"Administration",iconKey:"activity",requiredPermission:"employees.view_activity",implemented:true,adminVisible:true,employeeVisible:false},
   {key:"trash-bin",label:"Trash Bin",route:routes.adminTrashBin,group:"Administration",iconKey:"archive",requiredPermission:null,implemented:true,adminVisible:true,employeeVisible:false},
   {key:"crm",label:"CRM",route:routes.adminCrm,group:"Commerce and Customers",iconKey:"crm",requiredPermission:"crm.view",implemented:true,adminVisible:true,employeeVisible:true},
@@ -36,14 +36,45 @@ export const adminNavigation: DashboardNavigationItem[] = [
 ];
 
 export const employeeNavigation: DashboardNavigationItem[] = [
-  {key:"employee-dashboard",label:"Employee Dashboard",route:routes.employee,group:"Workspace",iconKey:"dashboard",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
+  {key:"employee-dashboard",moduleKey:"dashboard",label:"Employee Dashboard",route:routes.employee,group:"Workspace",iconKey:"dashboard",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
   {key:"my-profile",label:"My Profile",route:routes.profile,group:"Workspace",iconKey:"profile",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
   {key:"employee-profile",label:"My workplace",route:routes.employeeProfile,group:"Workspace",iconKey:"locations",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
   {key:"employee-activity",label:"My Activity",route:routes.employeeActivity,group:"Workspace",iconKey:"activity",requiredPermission:"activity.view_own",implemented:true,adminVisible:false,employeeVisible:true},
   {key:"employee-hr",label:"My HR",route:routes.employeeHr,group:"Workspace",iconKey:"hr",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
+  {key:"receive-new-stock",moduleKey:"inventory",label:"নতুন পণ্য রিসিভ / Receive Stock",route:"/employee/inventory/receive",group:"Inventory and Logistics",iconKey:"inventory",requiredPermission:"inventory.receive_new_stock",implemented:true,adminVisible:false,employeeVisible:true},
   ...adminNavigation.filter((item)=>item.employeeVisible),
 ];
 
-export function visibleEmployeeNavigation(permissionKeys:Iterable<string>){const permissions=new Set(permissionKeys);return employeeNavigation.filter((item)=>item.implemented&&item.employeeVisible&&(!item.requiredPermission||permissions.has(item.requiredPermission)||item.alternativePermissions?.some((key)=>permissions.has(key)))).map((item)=>item.employeeRoute===undefined?item:{...item,route:item.employeeRoute});}
+function permissionNamespace(key:string){return key.split(".",1)[0];}
+
+export function visibleEmployeeNavigation(permissionKeys:Iterable<string>){
+  const permissions=new Set(permissionKeys);
+  return employeeNavigation
+    .filter((item)=>{
+      if(!item.implemented||!item.employeeVisible)return false;
+      if(!item.requiredPermission)return true;
+      const namespace=permissionNamespace(item.requiredPermission);
+      const hasLandingPermission=permissions.has(item.requiredPermission)
+        ||item.alternativePermissions?.some((key)=>permissions.has(key));
+      const hasNamespacePermission=[...permissions].some((key)=>permissionNamespace(key)===namespace);
+      const hasDedicatedEmployeeRoute=adminNavigation.includes(item)
+        &&employeeNavigation.some((candidate)=>
+          !adminNavigation.includes(candidate)
+          &&candidate!==item
+          &&candidate.implemented
+          &&candidate.requiredPermission
+          &&permissions.has(candidate.requiredPermission)
+          &&(candidate.moduleKey??permissionNamespace(candidate.requiredPermission))===namespace,
+        );
+      return hasLandingPermission||(hasNamespacePermission&&!hasDedicatedEmployeeRoute);
+    })
+    .map((item)=>{
+      if(item.employeeRoute!==undefined)return{...item,route:item.employeeRoute};
+      if(!item.requiredPermission)return item;
+      const hasLandingPermission=permissions.has(item.requiredPermission)||item.alternativePermissions?.some((key)=>permissions.has(key));
+      if(hasLandingPermission)return item;
+      return{...item,route:`/employee/access/${item.moduleKey??permissionNamespace(item.requiredPermission)}`};
+    });
+}
 
 export function visibleAdminNavigation(){return adminNavigation.filter((item)=>item.implemented&&item.adminVisible);}

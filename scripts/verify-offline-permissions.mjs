@@ -38,6 +38,7 @@ const admin = createClient(supabaseUrl, adminKey, {
 const email = `permission-offline-test-${Date.now()}@example.invalid`;
 const password = `Local-${randomUUID()}-9a`;
 let testProfileId;
+let submoduleTargetId;
 
 async function verifyDevelopmentOrigin() {
   try {
@@ -56,21 +57,21 @@ async function verifyDevelopmentOrigin() {
 }
 
 async function cleanup() {
-  if (!testProfileId) return;
-
-  await admin
-    .from("audit_logs")
-    .delete()
-    .or(`actor_id.eq.${testProfileId},target_profile_id.eq.${testProfileId}`);
-  await admin
-    .from("profile_permission_overrides")
-    .delete()
-    .eq("profile_id", testProfileId);
-  await admin
-    .from("profile_permission_templates")
-    .delete()
-    .eq("profile_id", testProfileId);
-  await admin.auth.admin.deleteUser(testProfileId, false);
+  for (const profileId of [testProfileId, submoduleTargetId].filter(Boolean)) {
+    await admin
+      .from("audit_logs")
+      .delete()
+      .or(`actor_id.eq.${profileId},target_profile_id.eq.${profileId}`);
+    await admin
+      .from("profile_permission_overrides")
+      .delete()
+      .eq("profile_id", profileId);
+    await admin
+      .from("profile_permission_templates")
+      .delete()
+      .eq("profile_id", profileId);
+    await admin.auth.admin.deleteUser(profileId, false);
+  }
 }
 
 try {
@@ -115,6 +116,45 @@ try {
     requested_template_id: template.id,
   });
   assert.ifError(accessError);
+
+  const { data: targetCreated, error: targetCreateError } = await admin.auth.admin.createUser({
+    email: `permission-submodule-target-${Date.now()}@example.invalid`,
+    password: `Local-${randomUUID()}-9a`,
+    email_confirm: true,
+    user_metadata: { full_name: "Permission Submodule Target" },
+  });
+  assert.ifError(targetCreateError);
+  assert.ok(targetCreated.user, "Temporary submodule target was not created.");
+  submoduleTargetId = targetCreated.user.id;
+  const { error: targetAccessError } = await admin.rpc("admin_update_profile_access", {
+    actor_profile_id: actor.id,
+    target_profile_id: submoduleTargetId,
+    requested_role: "employee",
+    requested_status: "active",
+    requested_template_id: template.id,
+  });
+  assert.ifError(targetAccessError);
+  const { data: submoduleTarget, error: submoduleTargetError } = await admin
+    .from("profiles")
+    .select("id,role,status,archived_at")
+    .eq("id", submoduleTargetId)
+    .single();
+  assert.ifError(submoduleTargetError);
+  assert.deepEqual(
+    { role: submoduleTarget.role, status: submoduleTarget.status, archived_at: submoduleTarget.archived_at },
+    { role: "employee", status: "active", archived_at: null },
+    "Temporary submodule target must be an active, unarchived employee.",
+  );
+  const { data: routeTarget, error: routeTargetError } = await admin
+    .from("profiles")
+    .select("id,full_name,email,phone,country,company_name,created_at")
+    .eq("id", submoduleTargetId)
+    .eq("role", "employee")
+    .eq("status", "active")
+    .is("archived_at", null)
+    .maybeSingle();
+  assert.ifError(routeTargetError);
+  assert.ok(routeTarget, "The exact employee-detail query must find the submodule target.");
 
   const { error: permissionError } = await admin.rpc("admin_set_profile_permissions", {
     actor_profile_id: actor.id,
@@ -165,6 +205,7 @@ try {
     ["quotations.view", "/admin/quotations"],
     ["quotations.create", "/admin/quotations/new"],
     ["inventory.view", "/admin/inventory"],
+    ["inventory.receive_new_stock", "/employee/inventory/receive"],
     ["warehouses.view", "/admin/warehouses"],
     ["serials.view", "/admin/serials"],
     ["locations.view", "/admin/work-locations"],
@@ -305,7 +346,67 @@ try {
     });
   }
 
-  console.log(`Offline permission integration verification passed for ${permissionRoutes.length} permission-route cases.`);
+  const employeeSubmoduleCases = [
+    {
+      permission: "employees.view",
+      route: "/employee/employees",
+      expected: "View the active employee directory allowed by your assigned permissions.",
+    },
+    {
+      permission: "employees.view_detail",
+      route: `/employee/employees/${submoduleTargetId}`,
+      expected: "Contact information",
+    },
+    {
+      permission: "employees.edit_profile",
+      route: `/employee/employees/${submoduleTargetId}`,
+      expected: "Edit employee profile",
+    },
+    {
+      permission: "employees.view_permissions",
+      route: `/employee/employees/${submoduleTargetId}/permissions`,
+      expected: "Permission access",
+      forbidden: "Save employee permissions",
+    },
+    {
+      permission: "employees.manage_permissions",
+      route: `/employee/employees/${submoduleTargetId}/permissions`,
+      expected: "Save employee permissions",
+    },
+    {
+      permission: "employees.view_activity",
+      route: `/employee/employees/${submoduleTargetId}/activity`,
+      expected: "Employee activity",
+    },
+  ];
+  for (const item of employeeSubmoduleCases) {
+    const { error: submodulePermissionError } = await admin.rpc("admin_set_profile_permissions", {
+      actor_profile_id: actor.id,
+      target_profile_id: testProfileId,
+      requested_template_id: template.id,
+      allowed_permission_keys: [item.permission],
+      denied_permission_keys: ["dashboard.view", "activity.view_own"],
+    });
+    assert.ifError(submodulePermissionError);
+    const [workspace, directory, submodule] = await Promise.all([
+      request("/employee"),
+      request("/employee/employees"),
+      request(item.route),
+    ]);
+    const [workspaceBody, directoryBody, submoduleBody] = await Promise.all([
+      workspace.text(),
+      directory.text(),
+      submodule.text(),
+    ]);
+    assert.equal(workspaceBody.includes('href="/employee/employees"'), true, `${item.permission}: Employees navigation must be visible.`);
+    assert.equal(directoryBody.includes("NEXT_REDIRECT"), false, `${item.permission}: Employees directory must provide a route to the granted submodule.`);
+    assert.equal(submodule.status, 200, `${item.permission}: granted submodule returned HTTP ${submodule.status}.`);
+    assert.equal(submoduleBody.includes("NEXT_REDIRECT"), false, `${item.permission}: granted submodule must not redirect.`);
+    assert.equal(submoduleBody.includes(item.expected), true, `${item.permission}: expected ${item.expected}; title=${submoduleBody.match(/<h1[^>]*>([^<]+)/)?.[1] ?? "missing"}; notFound=${submoduleBody.includes("This page could not be found")}.`);
+    if (item.forbidden) assert.equal(submoduleBody.includes(item.forbidden), false, `${item.permission}: must hide ${item.forbidden}.`);
+  }
+
+  console.log(`Offline permission integration verification passed for ${permissionRoutes.length} module routes and ${employeeSubmoduleCases.length} Employees submodules.`);
 } finally {
   await cleanup();
 }
