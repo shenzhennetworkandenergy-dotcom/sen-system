@@ -5,6 +5,7 @@ import { QuotationBuilder } from "@/components/quotations/QuotationBuilder";
 import { requirePermission } from "@/lib/auth/permissions";
 import { defaultQuotationExpiration } from "@/lib/quotations/validity";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { createQuotationCustomerAction } from "../actions";
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +65,46 @@ export default async function NewQuotationPage({
           {params.success}
         </p>
       ) : null}
+      <details className="mb-4 rounded-xl border bg-[var(--surface)] p-4">
+        <summary className="cursor-pointer font-bold">Add a new customer</summary>
+        <form
+          action={createQuotationCustomerAction}
+          className="mt-3 grid gap-3 md:grid-cols-5"
+        >
+          <input
+            name="full_name"
+            required
+            placeholder="Full name"
+            className="rounded-lg border px-3 py-2"
+          />
+          <input
+            name="email"
+            type="email"
+            required
+            placeholder="Email"
+            className="rounded-lg border px-3 py-2"
+          />
+          <input
+            name="phone"
+            required
+            placeholder="Phone"
+            className="rounded-lg border px-3 py-2"
+          />
+          <input
+            name="address_line_1"
+            required
+            placeholder="Full address"
+            className="rounded-lg border px-3 py-2"
+          />
+          <button className="rounded-lg bg-[var(--primary)] px-4 py-2 font-semibold text-[var(--primary-foreground)]">
+            Add customer
+          </button>
+          <p className="text-xs text-[var(--muted-text)] md:col-span-5">
+            A default delivery address is created from the address above. The
+            customer can add more details later in My Account.
+          </p>
+        </form>
+      </details>
       {loadError ? (
         <p className="rounded-xl border border-red-200 bg-red-50 p-4 text-red-900">
           Unable to load quotation options: {loadError.message}
