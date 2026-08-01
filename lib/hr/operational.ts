@@ -113,6 +113,11 @@ export async function getHrEmployee(id: string) {
   ]);
   const error = results.find((result) => result.error)?.error ?? null;
   if (error) checked("Unable to load employee HR information.", { data: null, error });
+  const profileId = results[0].data?.profile_id as string | undefined;
+  const warehouseResult = profileId
+    ? await db.from("profile_warehouse_assignments").select("warehouse_id,warehouses(name,code,address,country_code)").eq("profile_id", profileId).eq("is_primary", true).eq("is_active", true).maybeSingle()
+    : { data: null, error: null };
+  if (warehouseResult.error) checked("Unable to load the employee warehouse assignment.", warehouseResult);
   return {
     record: results[0].data,
     personal: results[1].data,
@@ -130,6 +135,7 @@ export async function getHrEmployee(id: string) {
       endTime: String(row.workday_end).slice(0,5),
       timezone: String(row.timezone),
     })),
+    warehouseAssignment: warehouseResult.data,
   };
 }
 

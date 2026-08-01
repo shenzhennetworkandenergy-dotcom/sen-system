@@ -12,7 +12,9 @@ type ReceiptItem = {
   products: { serial_tracking_required: boolean } | null;
 };
 
-export function PurchaseReceiptForm({ action, items }: { action: (form: FormData) => void | Promise<void>; items: ReceiptItem[] }) {
+type ReceiptWarehouse = { code: string; name: string; address?: string | null; country_code?: string | null; country_name?: string | null };
+
+export function PurchaseReceiptForm({ action, items, defaultReceiptDate, warehouse }: { action: (form: FormData) => void | Promise<void>; items: ReceiptItem[]; defaultReceiptDate: string; warehouse: ReceiptWarehouse | null }) {
   const openItems = useMemo(() => items.map((item) => ({ ...item, remaining: Number(item.quantity_ordered) - Number(item.quantity_received) - Number(item.quantity_rejected) })).filter((item) => item.remaining > 0), [items]);
   const [received, setReceived] = useState<Record<string, { quantity: number; condition: string; serials: string }>>(
     Object.fromEntries(openItems.map((item) => [item.id, { quantity: 0, condition: "new", serials: "" }])),
@@ -29,8 +31,13 @@ export function PurchaseReceiptForm({ action, items }: { action: (form: FormData
   });
   return <form action={action} className="space-y-4">
     <input type="hidden" name="items" value={JSON.stringify(payload)} />
+    <section className="rounded-xl border border-cyan-200 bg-cyan-50 p-4 text-cyan-950">
+      <span className="text-xs font-bold uppercase tracking-wide">Receiving warehouse</span>
+      <strong className="mt-1 block">{warehouse ? `${warehouse.name} (${warehouse.code})` : "Warehouse unavailable"}</strong>
+      {warehouse ? <span className="text-sm">{[warehouse.address, warehouse.country_name ?? warehouse.country_code].filter(Boolean).join(" · ") || "Address not recorded"}</span> : null}
+    </section>
     <div className="grid gap-3 md:grid-cols-2">
-      <label className="text-sm font-semibold">Receipt date<input name="receipt_date" type="date" required defaultValue={new Date().toISOString().slice(0, 10)} className="mt-1 w-full rounded-xl border px-3 py-2.5" /></label>
+      <label className="text-sm font-semibold">Receipt date<input name="receipt_date" type="date" required defaultValue={defaultReceiptDate} className="mt-1 w-full rounded-xl border px-3 py-2.5" /></label>
       <label className="text-sm font-semibold">Supplier delivery reference<input name="supplier_delivery_reference" maxLength={200} className="mt-1 w-full rounded-xl border px-3 py-2.5" /></label>
       <label className="text-sm font-semibold">Supplier invoice reference<input name="supplier_invoice_reference" maxLength={200} className="mt-1 w-full rounded-xl border px-3 py-2.5" /></label>
       <label className="text-sm font-semibold">Receipt notes<input name="notes" maxLength={1000} className="mt-1 w-full rounded-xl border px-3 py-2.5" /></label>
