@@ -16,7 +16,7 @@ export default async function EmployeePage() {
     module.permissions.some((permission) => matrix.effectiveKeys.includes(permission.key)),
   );
   const visibleRoutes = new Map(
-    visibleEmployeeNavigation(matrix.effectiveKeys).map((item) => [item.key, item.route]),
+    visibleEmployeeNavigation(matrix.effectiveKeys).map((item) => [item.moduleKey ?? item.key, item.route]),
   );
   const canViewActivity = matrix.effectiveKeys.includes("activity.view_own");
   const { data: activity } = canViewActivity

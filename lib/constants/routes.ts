@@ -14,6 +14,7 @@ export const routes = {
   profile: "/profile",
   account: "/account",
   employee: "/employee",
+  employeeEmployees: "/employee/employees",
   admin: "/admin",
   adminUsers: "/admin/users",
   adminPermissions: "/admin/permissions",

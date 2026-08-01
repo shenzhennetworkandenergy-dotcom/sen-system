@@ -372,7 +372,7 @@ function parseCsv(text: string) {
 }
 
 export async function importProductsCsvAction(form: FormData) {
-  const { profile, permissions } = await requirePermission("products.create");
+  const { profile, permissions } = await requirePermission("products.import");
   const csv = form.get("csv");
   if (!(csv instanceof File) || !csv.size || csv.size > 2_000_000) redirect("/admin/products/import?error=Choose%20a%20CSV%20file%20up%20to%202%20MB.");
   const records = parseCsv(await csv.text()).slice(0, 500);
