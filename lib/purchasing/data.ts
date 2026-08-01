@@ -92,9 +92,31 @@ export async function getPurchaseOrder(id: string) {
     throw new Error("Unable to load purchase order.");
   }
   if (!orderResult.data) return null;
+
+  const purchaseItemIds = (itemsResult.data ?? []).map((item) => item.id);
+  const serialsResult = purchaseItemIds.length
+    ? await db
+        .from("serial_numbers")
+        .select(
+          "id,sen_serial,status,condition,warehouse_id,generation_batch_id,purchase_order_item_id,generated_at,received_at",
+        )
+        .in("purchase_order_item_id", purchaseItemIds)
+        .order("generated_at", { ascending: true })
+    : { data: [], error: null };
+
+  if (serialsResult.error) {
+    console.error("Purchase order SEN serial query failed", {
+      code: serialsResult.error.code,
+      message: serialsResult.error.message,
+      orderId: id,
+    });
+    throw new Error("Unable to load purchase-order SEN serials.");
+  }
+
   return {
     order: orderResult.data,
     items: itemsResult.data ?? [],
+    serials: serialsResult.data ?? [],
     events: eventsResult.data ?? [],
     receipts: receiptsResult.data ?? [],
     inboundShipment: inboundShipmentResult.data,

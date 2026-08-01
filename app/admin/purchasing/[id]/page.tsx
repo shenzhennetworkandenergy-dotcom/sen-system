@@ -56,6 +56,15 @@ export default async function PurchaseOrderPage({
   const canReceiveNewStock = profile.role === "admin" || (
     permissions.has("purchasing.receive") && permissions.has("inventory.receive_new_stock")
   );
+  const serialsByItem = new Map<string, typeof data.serials>();
+  for (const serial of data.serials) {
+    const itemSerials = serialsByItem.get(serial.purchase_order_item_id) ?? [];
+    itemSerials.push(serial);
+    serialsByItem.set(serial.purchase_order_item_id, itemSerials);
+  }
+  const serialGenerationExpected = !["draft", "pending_approval", "approved", "cancelled"].includes(
+    order.status,
+  );
 
   return (
     <DashboardShell
@@ -353,6 +362,78 @@ export default async function PurchaseOrderPage({
           </tbody>
         </table>
       </section>
+
+      {serialGenerationExpected ? (
+        <section className="mt-3 rounded-2xl border border-sky-200 bg-sky-50 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-bold text-sky-950">
+                SEN serials generated for this supplier order
+              </h2>
+              <p className="text-sm text-sky-800">
+                {data.serials.length.toLocaleString("en-BD")} physical unit
+                {data.serials.length === 1 ? "" : "s"}. Expected until physically received;
+                receiving stock changes the matching units to available without creating duplicate codes.
+              </p>
+            </div>
+            <Link
+              href="/admin/serials"
+              className="rounded-xl border border-sky-300 bg-white px-4 py-2 text-sm font-bold text-sky-950"
+            >
+              Open serial tracking
+            </Link>
+          </div>
+
+          {data.serials.length ? (
+            <div className="mt-3 space-y-3">
+              {data.items.map((item) => {
+                const itemSerials = serialsByItem.get(item.id) ?? [];
+                if (!itemSerials.length) return null;
+                return (
+                  <details
+                    key={item.id}
+                    open={data.items.length === 1}
+                    className="rounded-xl border border-sky-200 bg-white"
+                  >
+                    <summary className="cursor-pointer px-4 py-3 font-bold text-sky-950">
+                      {item.product_name_snapshot} — {itemSerials.length.toLocaleString("en-BD")} SEN code
+                      {itemSerials.length === 1 ? "" : "s"}
+                    </summary>
+                    <div className="max-h-80 overflow-auto border-t border-sky-100 p-3">
+                      <ul className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                        {itemSerials.map((serial) => (
+                          <li
+                            key={serial.id}
+                            className="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2"
+                          >
+                            <code className="break-all text-xs font-bold text-slate-900">
+                              {serial.sen_serial}
+                            </code>
+                            <span
+                              className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-bold ${
+                                serial.status === "expected"
+                                  ? "bg-amber-100 text-amber-900"
+                                  : "bg-emerald-100 text-emerald-900"
+                              }`}
+                            >
+                              {label(serial.status)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </details>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm font-semibold text-amber-950">
+              No SEN serials are linked to this confirmed supplier order. Reopen the order after the
+              database repair is applied; existing eligible orders will be backfilled safely.
+            </p>
+          )}
+        </section>
+      ) : null}
 
       <section className="mt-3 grid gap-3 lg:grid-cols-2">
         <article className="rounded-xl border bg-[var(--surface)] p-4">
