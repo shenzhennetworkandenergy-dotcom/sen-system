@@ -5,6 +5,7 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { requirePermission } from "@/lib/auth/permissions";
 import { getPurchaseOrder } from "@/lib/purchasing/data";
 import {
+  createPurchaseCarrierAction,
   transitionPurchaseInboundShipmentAction,
   transitionPurchaseOrderAction,
 } from "../actions";
@@ -186,6 +187,14 @@ export default async function PurchaseOrderPage({
       </div>
 
       {order.status === "ordered" ? (
+        <>
+        <details className="mb-3 rounded-2xl border border-cyan-200 bg-cyan-50 p-4">
+          <summary className="cursor-pointer font-bold text-cyan-950">+ Create carrier</summary>
+          <form action={createPurchaseCarrierAction.bind(null, id)} className="mt-3 flex flex-col gap-3 sm:flex-row">
+            <input name="carrier_name" required maxLength={200} placeholder="Carrier name" className="min-h-11 flex-1 rounded-xl border bg-white px-3" />
+            <button className="rounded-xl bg-cyan-700 px-5 py-2.5 font-bold text-white">Save carrier</button>
+          </form>
+        </details>
         <form
           action={transitionPurchaseInboundShipmentAction.bind(null, id, "prepare")}
           className="mb-3 rounded-2xl border border-blue-200 bg-blue-50 p-4"
@@ -220,9 +229,14 @@ export default async function PurchaseOrderPage({
               Carrier
               <input
                 name="carrier_name"
+                list="purchase-carriers"
                 maxLength={200}
+                placeholder="Type or select a saved carrier"
                 className="mt-1 block w-full rounded-xl border bg-white px-3 py-2.5"
               />
+              <datalist id="purchase-carriers">
+                {data.carriers.map((carrier) => <option key={carrier.id} value={carrier.name} />)}
+              </datalist>
             </label>
             <label className="text-sm font-semibold">
               Tracking number
@@ -261,6 +275,7 @@ export default async function PurchaseOrderPage({
             Mark ready for shipment
           </button>
         </form>
+        </>
       ) : null}
 
       {inbound ? (

@@ -101,6 +101,10 @@ export async function transitionPurchaseOrderAction(purchaseId: string, action: 
     ? await db.rpc("close_stock_received_purchase_order", {
         actor_profile_id: profile.id, requested_order_id: purchaseId, requested_note: note,
       })
+    : action === "order"
+      ? await db.rpc("confirm_purchase_order_and_generate_serials", {
+          actor_profile_id: profile.id, requested_order_id: purchaseId, requested_note: note,
+        })
     : await db.rpc("transition_purchase_order", {
         actor_profile_id: profile.id, requested_order_id: purchaseId, requested_action: action, requested_note: note,
       });
@@ -114,6 +118,17 @@ export async function transitionPurchaseOrderAction(purchaseId: string, action: 
   revalidatePath(`${purchasingPath}/${purchaseId}`);
   revalidatePath("/admin/inventory");
   redirect(target(purchaseId, "success", `Purchase order ${action} completed.`));
+}
+
+export async function createPurchaseCarrierAction(purchaseId: string, form: FormData) {
+  const { profile } = await requireAllPermissions(["purchasing.edit", "shipments.create"]);
+  const name = requiredString(form, "carrier_name", 200);
+  const db = createSupabaseAdminClient();
+  const { data, error } = await db.from("purchase_carriers").insert({ name, created_by: profile.id }).select("id").single();
+  if (error || !data) redirect(target(purchaseId, "error", safeMessage(error?.message, "Unable to create carrier.")));
+  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "purchasing.carrier.created", module: "purchasing", entityType: "purchase_carrier", entityId: data.id, description: "Purchase carrier created.", newValues: { name } });
+  revalidatePath(`${purchasingPath}/${purchaseId}`);
+  redirect(target(purchaseId, "success", "Carrier created and ready to select."));
 }
 
 export async function transitionPurchaseInboundShipmentAction(

@@ -15,8 +15,14 @@ export default async function EmployeeDetailPage({ params, searchParams }: { par
   const [data, refs, deletionMode] = await Promise.all([getHrEmployee(id), getHrReferences(), getDeletionMode()]);
   if (!data.record) notFound();
   const person = relation(data.record.profiles);
+  const workLocation = relation(data.record.work_locations);
+  const warehouse = relation(data.warehouseAssignment?.warehouses);
   return (
     <HrPage title={person?.full_name || data.record.employee_number} subtitle={`${data.record.employee_number} · ${data.record.job_title}`} success={notices.success} warning={notices.warning} error={notices.error}>
+      <section className="mb-5 grid gap-3 sm:grid-cols-2">
+        <article className={hrCard}><p className="text-sm text-[var(--muted-text)]">Primary workplace</p><strong>{workLocation?.name ?? "Not assigned"}</strong></article>
+        <article className={hrCard}><p className="text-sm text-[var(--muted-text)]">Primary warehouse</p><strong>{warehouse ? `${warehouse.name} (${warehouse.code})` : "Not assigned"}</strong>{warehouse?.address ? <p className="text-sm text-[var(--muted-text)]">{warehouse.address}</p> : null}</article>
+      </section>
       <EmployeeForm refs={refs} record={data.record} personal={data.personal} schedule={data.schedule}/>
       <form action={archiveEmployeeAction} className={`${hrCard} mt-5 flex flex-wrap items-center justify-between gap-3`}>
         <input type="hidden" name="employee_id" value={id}/><input type="hidden" name="return_to" value={`/admin/hr/employees/${id}`}/><input type="hidden" name="operation" value={data.record.archived_at ? "restore":"archive"}/>
