@@ -45,18 +45,28 @@ async function cleanupOrder(id){
   await db.from("purchase_orders").delete().eq("id",id);
   if(movementIds.length){await db.from("inventory_movement_items").delete().in("movement_id",movementIds);await db.from("inventory_movements").delete().in("id",movementIds);}
 }
+async function cleanupProduct(id){
+  const serials=(await db.from("serial_numbers").select("id").eq("product_id",id)).data??[];
+  const serialIds=serials.map((row)=>row.id);
+  if(serialIds.length){await db.from("serial_tracking_events").delete().in("serial_number_id",serialIds);await db.from("serial_number_history").delete().in("serial_number_id",serialIds);await db.from("serial_numbers").delete().in("id",serialIds);}
+  await db.from("serial_generation_batches").delete().eq("product_id",id);
+  await db.from("product_revisions").delete().eq("product_id",id);
+  await db.from("inventory_balances").delete().eq("product_id",id);
+  await db.from("products").delete().eq("id",id);
+}
 const staleSuppliers=(await db.from("suppliers").select("id").like("code","VERIFY-%")).data??[];
 for(const supplier of staleSuppliers){const staleOrders=(await db.from("purchase_orders").select("id").eq("supplier_id",supplier.id)).data??[];for(const order of staleOrders)await cleanupOrder(order.id);await db.from("suppliers").delete().eq("id",supplier.id);}
 const staleProducts=(await db.from("products").select("id").like("sku","VERIFY-%")).data??[];
-for(const product of staleProducts){await db.from("inventory_balances").delete().eq("product_id",product.id);await db.from("products").delete().eq("id",product.id);}
-const [{data:actor,error:actorError},{data:warehouse,error:warehouseError}]=await Promise.all([
+for(const product of staleProducts)await cleanupProduct(product.id);
+const [{data:actor,error:actorError},{data:warehouse,error:warehouseError},{data:brand,error:brandError}]=await Promise.all([
   db.from("profiles").select("id").eq("role","admin").eq("status","active").limit(1).single(),
   db.from("warehouses").select("id").eq("is_active",true).limit(1).single(),
+  db.from("brands").select("id").eq("is_active",true).limit(1).single(),
 ]);
-assert.equal(actorError,null,actorError?.message); assert.equal(warehouseError,null,warehouseError?.message);
+assert.equal(actorError,null,actorError?.message); assert.equal(warehouseError,null,warehouseError?.message); assert.equal(brandError,null,brandError?.message);
 const marker=`VERIFY-${Date.now()}`; let supplierId; let orderId; let productId;
 try{
-  const product=await db.from("products").insert({name:"Purchasing verification product",slug:marker.toLowerCase(),sku:marker,status:"active",product_type:"simple",purchase_cost:10,regular_price:12,currency:"BDT",manage_stock:true,serial_tracking_required:false,default_warehouse_id:warehouse.id,created_by:actor.id,updated_by:actor.id}).select("id").single();
+  const product=await db.from("products").insert({name:"Purchasing verification product",slug:marker.toLowerCase(),sku:marker,model_number:marker,brand_id:brand.id,status:"active",product_type:"simple",purchase_cost:10,regular_price:12,currency:"BDT",manage_stock:true,serial_tracking_required:true,default_warehouse_id:warehouse.id,created_by:actor.id,updated_by:actor.id}).select("id").single();
   assert.equal(product.error,null,product.error?.message); productId=product.data.id;
   const supplier=await db.from("suppliers").insert({code:marker,name:"Purchasing verification supplier",supplier_type:"distributor",status:"active",country_code:"BD",country_name:"Bangladesh",default_currency:"BDT",created_by:actor.id,updated_by:actor.id}).select("id").single();
   assert.equal(supplier.error,null,supplier.error?.message); supplierId=supplier.data.id;
@@ -70,13 +80,16 @@ try{
   const item=await db.from("purchase_order_items").select("id").eq("purchase_order_id",orderId).single(); assert.equal(item.error,null,item.error?.message);
   const receipt=await db.rpc("post_received_purchase_order",{actor_profile_id:actor.id,requested_order_id:orderId,requested_receipt_date:new Date().toISOString().slice(0,10),requested_delivery_reference:marker,requested_invoice_reference:null,requested_notes:"Automated local verification",requested_items:[{purchase_order_item_id:item.data.id,quantity:1,condition:"new",manufacturer_serials:[]}]});
   assert.equal(receipt.error,null,receipt.error?.message);
-  const checked=await db.from("purchase_orders").select("status,purchase_order_items(quantity_ordered,quantity_received),purchase_receipts(inventory_movement_id)").eq("id",orderId).single();
+  const checked=await db.from("purchase_orders").select("status,purchase_order_items(quantity_ordered,quantity_received),purchase_receipts(inventory_movement_id,purchase_receipt_items(serial_generation_batch_id))").eq("id",orderId).single();
   assert.equal(checked.error,null,checked.error?.message); assert.equal(checked.data.status,"stock_received"); assert.equal(Number(checked.data.purchase_order_items[0].quantity_received),1); assert.ok(checked.data.purchase_receipts[0].inventory_movement_id);
+  assert.ok(checked.data.purchase_receipts[0].purchase_receipt_items[0].serial_generation_batch_id,"Serialized receipt must preserve its generated SEN serial batch.");
+  const serials=await db.from("serial_numbers").select("sen_serial,barcode_value,status,generation_batch_id").eq("product_id",productId);
+  assert.equal(serials.error,null,serials.error?.message); assert.equal(serials.data.length,1); assert.ok(serials.data[0].sen_serial); assert.equal(serials.data[0].barcode_value,serials.data[0].sen_serial); assert.equal(serials.data[0].status,"available"); assert.equal(serials.data[0].generation_batch_id,checked.data.purchase_receipts[0].purchase_receipt_items[0].serial_generation_batch_id);
   const balance=await db.from("inventory_balances").select("on_hand,incoming").eq("warehouse_id",warehouse.id).eq("product_id",productId).single(); assert.equal(balance.error,null,balance.error?.message); assert.equal(Number(balance.data.on_hand),1); assert.equal(Number(balance.data.incoming),0);
   const closed=await db.rpc("close_stock_received_purchase_order",{actor_profile_id:actor.id,requested_order_id:orderId,requested_note:"Automated local verification"}); assert.equal(closed.error,null,closed.error?.message);
 }finally{
   if(orderId) await cleanupOrder(orderId);
-  if(productId){await db.from("inventory_balances").delete().eq("product_id",productId);await db.from("products").delete().eq("id",productId);}
+  if(productId)await cleanupProduct(productId);
   if(supplierId) await db.from("suppliers").delete().eq("id",supplierId);
 }
-console.log(`Purchasing verification passed: ${routes.length} routes, 7 tables, 7 RPCs, local create/approval/order/inbound-shipment/stock-receipt/close workflow, stock integration, and cleanup.`);
+console.log(`Purchasing verification passed: ${routes.length} routes, 7 tables, 7 RPCs, local create/approval/order/inbound-shipment/stock-receipt/close workflow, atomic SEN serial generation, stock integration, and cleanup.`);

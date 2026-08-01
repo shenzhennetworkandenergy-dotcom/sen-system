@@ -67,6 +67,7 @@ export const routes = {
   adminPaymentSettings: "/admin/settings/payments",
   adminDataManagement: "/admin/settings/data-management",
   adminArchive: "/admin/archive",
+  adminTrashBin: "/admin/settings/trash-bin",
   environmentCheck: "/environment-check",
 } as const;
 

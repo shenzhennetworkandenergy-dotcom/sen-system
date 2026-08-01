@@ -53,6 +53,9 @@ export default async function PurchaseOrderPage({
   const cancellable = ["draft", "pending_approval", "approved", "ordered"].includes(
     order.status,
   );
+  const canReceiveNewStock = profile.role === "admin" || (
+    permissions.has("purchasing.receive") && permissions.has("inventory.receive_new_stock")
+  );
 
   return (
     <DashboardShell
@@ -159,7 +162,7 @@ export default async function PurchaseOrderPage({
             </button>
           </form>
         ) : null}
-        {["received", "partially_received"].includes(order.status) ? (
+        {["received", "partially_received"].includes(order.status) && canReceiveNewStock ? (
           <a
             href={`/admin/purchasing/${id}/receive`}
             className="rounded-xl bg-[var(--primary)] px-4 py-2.5 font-bold text-[var(--primary-foreground)]"
@@ -363,6 +366,11 @@ export default async function PurchaseOrderPage({
                   <span className="block text-xs text-[var(--muted-text)]">
                     {receipt.supplier_delivery_reference ?? "No delivery reference"}
                   </span>
+                  {receipt.purchase_receipt_items.some((item) => item.serial_generation_batch_id) ? (
+                    <span className="mt-1 block text-xs font-semibold text-emerald-700">
+                      Unique SEN serials generated automatically
+                    </span>
+                  ) : null}
                 </li>
               ))}
             </ul>

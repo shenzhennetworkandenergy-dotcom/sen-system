@@ -57,12 +57,12 @@ export default async function DataManagementSettingsPage({
         <h2 className="mt-2 text-2xl font-bold">
           {mode.permanentEnabled
             ? "Permanent deletion is ON"
-            : "Archive protection is ON"}
+            : "Recoverable deletion is ON"}
         </h2>
         <p className="mt-2 max-w-3xl">
           {mode.permanentEnabled
             ? "Administrators can permanently remove eligible development records. The action cannot be undone."
-            : "Delete actions move supported records out of dashboards and into the recoverable Archive."}
+            : "Delete actions move supported records out of dashboards and into the recoverable Trash Bin."}
         </p>
         {mode.updatedAt ? (
           <p className="mt-3 text-sm">
@@ -78,13 +78,13 @@ export default async function DataManagementSettingsPage({
 
       <div className="mt-6 grid gap-4 md:grid-cols-2">
         <Link
-          href={routes.adminArchive}
+          href={routes.adminTrashBin}
           className="rounded-2xl border bg-[var(--surface)] p-5"
         >
-          <h2 className="text-xl font-bold">Archive</h2>
+          <h2 className="text-xl font-bold">Trash Bin</h2>
           <p className="mt-2 text-sm text-[var(--muted-text)]">
-            Find and restore products and users removed while archive protection
-            was enabled.
+            Restore deleted records or permanently remove eligible items when
+            Permanent Deletion Mode is enabled.
           </p>
         </Link>
         <Link

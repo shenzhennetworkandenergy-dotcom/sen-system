@@ -175,7 +175,7 @@ export async function transitionPurchaseInboundShipmentAction(
 }
 
 export async function receivePurchaseOrderAction(purchaseId: string, form: FormData) {
-  const { profile } = await requireAllPermissions(["purchasing.receive", "inventory.receive"]);
+  const { profile } = await requireAllPermissions(["purchasing.receive", "inventory.receive_new_stock"]);
   let items: Record<string, unknown>[];
   try { items = jsonArray(form, "items") as Record<string, unknown>[]; }
   catch { redirect(target(purchaseId, "error", "Receipt items are invalid.")); }
@@ -203,7 +203,7 @@ export async function receivePurchaseOrderAction(purchaseId: string, form: FormD
   revalidatePath("/admin/inventory");
   revalidatePath("/admin/products");
   revalidatePath("/admin/serials");
-  redirect(target(purchaseId, "success", "Purchase receipt confirmed and inventory updated."));
+  redirect(target(purchaseId, "success", "Purchase receipt confirmed, inventory updated, and unique SEN serials generated for serialized units."));
 }
 
 export async function createSupplierAction(form: FormData) {

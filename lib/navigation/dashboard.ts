@@ -1,6 +1,6 @@
 import { routes } from "@/lib/constants/routes";
 
-export type DashboardNavigationItem = { key:string; label:string; route:string|null; group:"Administration"|"Commerce and Customers"|"Inventory and Logistics"|"Procurement and Finance"|"Organization"|"Insights and System"|"Workspace"; iconKey:string; requiredPermission:string|null; implemented:boolean; adminVisible:boolean; employeeVisible:boolean };
+export type DashboardNavigationItem = { key:string; label:string; route:string|null; group:"Administration"|"Commerce and Customers"|"Inventory and Logistics"|"Procurement and Finance"|"Organization"|"Insights and System"|"Workspace"; iconKey:string; requiredPermission:string|null; alternativePermissions?:string[]; implemented:boolean; adminVisible:boolean; employeeVisible:boolean };
 
 export const adminNavigation: DashboardNavigationItem[] = [
   {key:"overview",label:"Overview",route:routes.admin,group:"Administration",iconKey:"dashboard",requiredPermission:null,implemented:true,adminVisible:true,employeeVisible:false},
@@ -10,7 +10,7 @@ export const adminNavigation: DashboardNavigationItem[] = [
   {key:"team-activity",label:"Team Activity",route:routes.adminActivity,group:"Administration",iconKey:"activity",requiredPermission:"activity.view_all",implemented:true,adminVisible:true,employeeVisible:false},
   {key:"employees",label:"Employees",route:`${routes.adminUsers}?role=employee`,group:"Administration",iconKey:"employees",requiredPermission:"employees.view",implemented:true,adminVisible:true,employeeVisible:false},
   {key:"employee-activity",label:"Employee Activity",route:`${routes.adminActivity}?scope=employees`,group:"Administration",iconKey:"activity",requiredPermission:"employees.view_activity",implemented:true,adminVisible:true,employeeVisible:false},
-  {key:"archive",label:"Archive",route:routes.adminArchive,group:"Administration",iconKey:"archive",requiredPermission:null,implemented:true,adminVisible:true,employeeVisible:false},
+  {key:"trash-bin",label:"Trash Bin",route:routes.adminTrashBin,group:"Administration",iconKey:"archive",requiredPermission:null,implemented:true,adminVisible:true,employeeVisible:false},
   {key:"crm",label:"CRM",route:routes.adminCrm,group:"Commerce and Customers",iconKey:"crm",requiredPermission:"crm.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"products",label:"Products",route:"/admin/products",group:"Commerce and Customers",iconKey:"products",requiredPermission:"products.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"orders",label:"Orders",route:routes.adminOrders,group:"Commerce and Customers",iconKey:"orders",requiredPermission:"orders.view",implemented:true,adminVisible:true,employeeVisible:true},
@@ -25,7 +25,7 @@ export const adminNavigation: DashboardNavigationItem[] = [
   {key:"shipments",label:"Shipments",route:routes.adminShipments,group:"Inventory and Logistics",iconKey:"shipments",requiredPermission:"shipments.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"purchasing",label:"Purchasing",route:routes.adminPurchasing,group:"Procurement and Finance",iconKey:"purchasing",requiredPermission:"purchasing.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"suppliers",label:"Suppliers",route:routes.adminSuppliers,group:"Procurement and Finance",iconKey:"suppliers",requiredPermission:"suppliers.view",implemented:true,adminVisible:true,employeeVisible:true},
-  {key:"accounting",label:"Accounting",route:routes.adminAccounting,group:"Procurement and Finance",iconKey:"accounting",requiredPermission:"accounting.view",implemented:true,adminVisible:true,employeeVisible:true},
+  {key:"accounting",label:"Accounting",route:routes.adminAccounting,group:"Procurement and Finance",iconKey:"accounting",requiredPermission:"accounting.view",alternativePermissions:["accounting.manage_cashbook"],implemented:true,adminVisible:true,employeeVisible:true},
   {key:"hr",label:"HR",route:routes.adminHr,group:"Organization",iconKey:"hr",requiredPermission:null,implemented:true,adminVisible:true,employeeVisible:false},
   {key:"manufacturing",label:"Manufacturing",route:null,group:"Organization",iconKey:"manufacturing",requiredPermission:"manufacturing.view",implemented:false,adminVisible:true,employeeVisible:false},
   {key:"projects",label:"Projects",route:null,group:"Organization",iconKey:"projects",requiredPermission:"projects.view",implemented:false,adminVisible:true,employeeVisible:false},
@@ -44,4 +44,4 @@ export const employeeNavigation: DashboardNavigationItem[] = [
   ...adminNavigation.filter((item)=>item.employeeVisible),
 ];
 
-export function visibleEmployeeNavigation(permissionKeys:Iterable<string>){const permissions=new Set(permissionKeys);return employeeNavigation.filter((item)=>item.implemented&&item.employeeVisible&&(!item.requiredPermission||permissions.has(item.requiredPermission)));}
+export function visibleEmployeeNavigation(permissionKeys:Iterable<string>){const permissions=new Set(permissionKeys);return employeeNavigation.filter((item)=>item.implemented&&item.employeeVisible&&(!item.requiredPermission||permissions.has(item.requiredPermission)||item.alternativePermissions?.some((key)=>permissions.has(key))));}

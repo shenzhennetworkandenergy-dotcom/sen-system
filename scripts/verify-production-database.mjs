@@ -46,6 +46,9 @@ for (const table of [
   "quotation_requests",
   "crm_leads",
   "hr_employee_records",
+  "cashbook_descriptions",
+  "cashbook_entries",
+  "cashbook_days",
 ]) {
   const explicitRls = new RegExp(
     `alter table public\\.${table} enable row level security`,
@@ -80,6 +83,9 @@ const [
   hrAttendanceSchema,
   hrScheduleSchema,
   notificationSchema,
+  cashbookDescriptionsSchema,
+  cashbookEntriesSchema,
+  cashbookDaysSchema,
 ] = await Promise.all([
   db.from("business_categories").select("id,slug,is_active,sort_order"),
   db.from("business_category_fields").select("id,business_category_id"),
@@ -107,6 +113,15 @@ const [
   db
     .from("customer_notifications")
     .select("read_at", { head: true }),
+  db
+    .from("cashbook_descriptions")
+    .select("id,name,transaction_type,is_active", { head: true }),
+  db
+    .from("cashbook_entries")
+    .select("id,description_id,transaction_type,amount,payment_method,transaction_at,business_date,journal_entry_id", { head: true }),
+  db
+    .from("cashbook_days")
+    .select("business_date,opening_balance,closing_balance,is_closed,closed_at,closed_by", { head: true }),
 ]);
 
 for (const result of [
@@ -117,6 +132,9 @@ for (const result of [
   hrAttendanceSchema,
   hrScheduleSchema,
   notificationSchema,
+  cashbookDescriptionsSchema,
+  cashbookEntriesSchema,
+  cashbookDaysSchema,
 ]) {
   assert.equal(result.error, null, result.error?.message);
 }
