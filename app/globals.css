@@ -643,17 +643,15 @@ html { scroll-behavior: smooth; }
 .product-rich-content a { color: #176dc2; text-decoration: underline; }.product-rich-content img { max-width: 100%; height: auto; border-radius: .75rem; }
 .product-rich-content table { display:block;width:100%;max-width:100%;overflow-x:auto;border-collapse: collapse; }.product-rich-content th, .product-rich-content td { border: 1px solid var(--border); padding: .65rem; text-align: left; }
 
-.label-grid { display: grid; grid-template-columns: repeat(auto-fill, 60mm); justify-content: center; gap: 4mm; }
-.serial-label { box-sizing: border-box; width: 60mm; min-height: 40mm; overflow: hidden; }
-.preset-50x30 .label-grid { grid-template-columns: repeat(auto-fill, 50mm); }.preset-50x30 .serial-label { width: 50mm; min-height: 30mm; }
-.preset-a4 .label-grid { grid-template-columns: repeat(3, 60mm); align-content: start; }
+.label-grid { display: grid; justify-content: center; gap: 4mm; }
+.serial-label { box-sizing: border-box; overflow: hidden; }
 
 @media print {
-  @page { size: A4; margin: 8mm; }
   body { background: white !important; }
   .label-print { padding: 0 !important; }
-  .label-grid { gap: 3mm; }
-  .serial-label { break-inside: avoid; page-break-inside: avoid; }
+  .label-grid { display: block; }
+  .serial-label { break-after: page; break-inside: avoid; page-break-after: always; page-break-inside: avoid; }
+  .serial-label:last-child { break-after: auto; page-break-after: auto; }
 }
 
 @keyframes shipment-dash { to { stroke-dashoffset: -28; } }

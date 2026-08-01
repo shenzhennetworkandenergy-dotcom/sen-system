@@ -7,6 +7,7 @@ export const dynamic = "force-dynamic";
 
 export default async function SerialBatchesPage({ searchParams }: { searchParams: Promise<{ success?: string; error?: string; product?: string }> }) {
   const { profile, permissions } = await requirePermission("serials.view");
+  const canPrint = profile.role === "admin" || permissions.has("serials.print");
   const message = await searchParams;
   const db = createSupabaseAdminClient();
   let batchQuery = db
@@ -36,7 +37,7 @@ export default async function SerialBatchesPage({ searchParams }: { searchParams
           <td><span className={batch.status === "received" ? "rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-900" : "rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-900"}>{batch.status}</span></td>
           <td><div className="flex flex-wrap items-center gap-2">
             {batch.status === "generated" || batch.status === "partially_received" ? <form action={receiveExpectedSerialBatchAction}><input type="hidden" name="batch_id" value={batch.id}/><input type="hidden" name="return_product" value={batch.product_id}/><button className="rounded bg-[var(--primary)] px-3 py-2 text-sm font-semibold text-white">Receive into stock</button></form> : null}
-            <a href={`/admin/serials/print?batch=${batch.id}`} className="font-semibold">Print</a>
+            {canPrint ? <a href={`/admin/serials/print?batch=${batch.id}`} className="font-semibold">Print</a> : null}
             <a href={`/admin/serials/export?batch=${batch.id}`}>CSV</a>
           </div></td>
         </tr>)}</tbody>

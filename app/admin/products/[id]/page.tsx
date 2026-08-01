@@ -113,7 +113,7 @@ export default async function ProductDetailPage({
         {can("serials.generate") ? <a href={`/admin/products/${id}/serials/new`} className="rounded border bg-white px-4 py-3 font-semibold">Generate serial labels</a> : null}
         <a href={`/admin/serials?product=${id}`} className="rounded border bg-white px-4 py-3 font-semibold">View all serials</a>
         {can("inventory.adjust_stock") ? <a href={`/admin/inventory/adjustments/new?product=${id}`} className="rounded border bg-white px-4 py-3 font-semibold">Adjust / remove stock</a> : null}
-        <a href={`/admin/serials/print?product=${id}`} className="rounded border bg-white px-4 py-3 font-semibold">Print labels</a>
+        {can("serials.print") ? <a href={`/admin/serials/print?product=${id}`} className="rounded border bg-white px-4 py-3 font-semibold">Print labels</a> : null}
         <a href="/admin/serials/scan" className="rounded border bg-white px-4 py-3 font-semibold">Scan serial</a>
         <a href="#product-images" className="rounded border bg-white px-4 py-3 font-semibold">Manage images</a>
         <a href={`/admin/inventory/movements?product=${id}`} className="rounded border bg-white px-4 py-3 font-semibold">Inventory movements</a>
