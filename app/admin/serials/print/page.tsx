@@ -10,6 +10,10 @@ import {
   serialPrintQuery,
   type SerialPrintSelection,
 } from "@/lib/inventory/label-sizes";
+import {
+  createSerialLabelLayout,
+  selectSingleSerialForLabelPrinter,
+} from "@/lib/inventory/serial-label-layout";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSerialLabelSizeAction, deleteSerialLabelSizeAction } from "./actions";
 
@@ -59,18 +63,32 @@ export default async function SerialPrintPage({ searchParams }: { searchParams: 
     </main>;
   }
 
-  let query = db.from("serial_numbers").select("id,sen_serial,manufacturer_serial,status,condition,product_id,products(name,model_number,brands(name))").not("sen_serial", "is", null).limit(500);
+  let query = db.from("serial_numbers").select("id,sen_serial,manufacturer_serial,status,condition,product_id,products(name,model_number,brands(name))").not("sen_serial", "is", null).limit(1);
   if (selection.kind === "batch") query = query.eq("generation_batch_id", selection.id);
   else if (selection.kind === "product") query = query.eq("product_id", selection.id);
   else query = query.in("id", selection.ids);
   const { data, error } = await query.order("created_at");
   if (error) throw new Error("Unable to load printable serials.");
-  const labels = await Promise.all((data ?? []).map(async (unit) => ({ ...unit, assets: await createSerialLabelAssets(unit.sen_serial!) })));
+  const printableUnits = selectSingleSerialForLabelPrinter(data ?? []);
+  const labels = await Promise.all(printableUnits.map(async (unit) => ({ ...unit, assets: await createSerialLabelAssets(unit.sen_serial!) })));
+  const labelLayout = createSerialLabelLayout(Number(selectedSize.width_mm), Number(selectedSize.height_mm));
   const selectionQuery = serialPrintQuery(selection);
 
   return <main className="label-print min-h-screen bg-slate-100 p-6 text-black">
     <style>{`@media print { @page { size: ${selectedSize.width_mm}mm ${selectedSize.height_mm}mm; margin: 0; } }`}</style>
-    <div className="print:hidden mx-auto mb-6 flex max-w-5xl flex-wrap items-center gap-3 rounded-2xl border bg-white p-4 shadow-sm"><a href={`/admin/serials/print?${selectionQuery}`} className="rounded-xl border px-4 py-2.5 font-semibold">Change size</a>{labels.length ? <PrintButton/> : null}<span className="text-sm text-slate-600">{labels.length} label(s) · {selectedSize.name} · {selectedSize.width_mm} × {selectedSize.height_mm} mm</span></div>
-    {labels.length ? <div className="label-grid mx-auto" style={{ gridTemplateColumns: `repeat(auto-fit, ${selectedSize.width_mm}mm)` }}>{labels.map((unit) => { const product = unit.products as unknown as { name: string; model_number: string | null; brands: { name: string } | null }; return <article key={unit.id} className="serial-label relative break-inside-avoid border border-black bg-white p-2" style={{ width: `${selectedSize.width_mm}mm`, height: `${selectedSize.height_mm}mm` }}><div className="flex items-center justify-between"><Image src="/brand/sen-official-logo.png" alt="SEN" width={50} height={50} className="h-8 w-8 object-contain"/><strong className="text-[10px]">{product?.brands?.name ?? "SEN"}</strong></div><h2 className="truncate text-[10px] font-bold">{product?.name}</h2><p className="text-[8px]">Model: {product?.model_number ?? "—"}</p><div className="mt-1" dangerouslySetInnerHTML={{ __html: unit.assets.barcodeSvg }}/><p className="break-all text-center font-mono text-[7px] font-bold">{unit.sen_serial}</p><div className="mt-1 flex items-end justify-between gap-1"><img src={unit.assets.qrDataUrl} alt={`QR for ${unit.sen_serial}`} className="h-12 w-12"/><div className="text-right text-[7px]"><p>{unit.manufacturer_serial ? `MFR: ${unit.manufacturer_serial}` : "Manufacturer serial not provided"}</p><p>{unit.condition} · {unit.status}</p></div></div></article>; })}</div> : <div className="print:hidden mx-auto max-w-3xl rounded-2xl border bg-white p-8 text-center"><h2 className="text-xl font-bold">No printable serials found</h2><p className="mt-2 text-slate-600">The selected records do not contain active SEN serial values.</p></div>}
+    <div className="print:hidden mx-auto mb-6 flex max-w-5xl flex-wrap items-center gap-3 rounded-2xl border bg-white p-4 shadow-sm"><a href={`/admin/serials/print?${selectionQuery}`} className="rounded-xl border px-4 py-2.5 font-semibold">Change size</a>{labels.length ? <PrintButton/> : null}<span className="text-sm text-slate-600">{labels.length} label · {selectedSize.name} · {selectedSize.width_mm} × {selectedSize.height_mm} mm</span></div>
+    {labels.length ? <div className="label-grid mx-auto" style={{ gridTemplateColumns: `${selectedSize.width_mm}mm` }}>{labels.map((unit) => {
+      const product = unit.products as unknown as { name: string; model_number: string | null; brands: { name: string } | null };
+      return <article key={unit.id} className="serial-label relative break-inside-avoid border border-black bg-white" style={{ width: `${selectedSize.width_mm}mm`, height: `${selectedSize.height_mm}mm` }}>
+        <div className="serial-label-canvas" style={{ width: `${labelLayout.canvasWidthMm}mm`, height: `${labelLayout.canvasHeightMm}mm`, left: `${labelLayout.offsetXmm}mm`, top: `${labelLayout.offsetYmm}mm`, transform: `scale(${labelLayout.scale})` }}>
+          <div className="serial-label-header"><Image src="/brand/sen-official-logo.png" alt="SEN" width={50} height={50} className="serial-label-logo"/><strong className="serial-label-brand">{product?.brands?.name ?? "SEN"}</strong></div>
+          <h2 className="serial-label-product">{product?.name}</h2>
+          <p className="serial-label-model">Model: {product?.model_number ?? "—"}</p>
+          <div className="serial-label-barcode" dangerouslySetInnerHTML={{ __html: unit.assets.barcodeSvg }}/>
+          <p className="serial-label-number">{unit.sen_serial}</p>
+          <div className="serial-label-footer"><img src={unit.assets.qrDataUrl} alt={`QR for ${unit.sen_serial}`} className="serial-label-qr"/><div className="serial-label-meta"><p>{unit.manufacturer_serial ? `MFR: ${unit.manufacturer_serial}` : "Manufacturer serial not provided"}</p><p>{unit.condition} · {unit.status}</p></div></div>
+        </div>
+      </article>;
+    })}</div> : <div className="print:hidden mx-auto max-w-3xl rounded-2xl border bg-white p-8 text-center"><h2 className="text-xl font-bold">No printable serials found</h2><p className="mt-2 text-slate-600">The selected records do not contain active SEN serial values.</p></div>}
   </main>;
 }

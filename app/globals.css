@@ -645,6 +645,26 @@ html { scroll-behavior: smooth; }
 
 .label-grid { display: grid; justify-content: center; gap: 4mm; }
 .serial-label { box-sizing: border-box; overflow: hidden; }
+.serial-label-canvas {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 1.5mm;
+  transform-origin: top left;
+}
+.serial-label-header { display: flex; height: 5.5mm; flex: 0 0 5.5mm; align-items: center; justify-content: space-between; gap: 1mm; }
+.serial-label-logo { width: 5.5mm; height: 5.5mm; object-fit: contain; }
+.serial-label-brand { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; line-height: 1.1; }
+.serial-label-product { margin-top: .5mm; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; font-weight: 700; line-height: 1.2; }
+.serial-label-model { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 8px; line-height: 1.2; }
+.serial-label-barcode { margin-top: .6mm; height: 8mm; flex: 0 0 8mm; overflow: hidden; }
+.serial-label-barcode img { display: block; width: 100% !important; height: 8mm !important; object-fit: contain; }
+.serial-label-number { overflow: hidden; text-align: center; text-overflow: ellipsis; white-space: nowrap; font-family: monospace; font-size: 7px; font-weight: 700; line-height: 1.2; }
+.serial-label-footer { margin-top: auto; display: flex; min-height: 10mm; align-items: flex-end; justify-content: space-between; gap: 1mm; }
+.serial-label-qr { width: 10mm; height: 10mm; flex: 0 0 10mm; object-fit: contain; }
+.serial-label-meta { min-width: 0; overflow: hidden; text-align: right; font-size: 7px; line-height: 1.2; overflow-wrap: anywhere; }
 
 @media print {
   body { background: white !important; }
