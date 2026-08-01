@@ -57,3 +57,20 @@ test("purchase-order carrier lookup follows the migrated carrier status schema",
   assert.match(carrierLookup, /\.eq\("status",\s*"active"\)/);
   assert.doesNotMatch(carrierLookup, /\.eq\("is_active"/);
 });
+
+test("purchase orders load and display the SEN serials generated at confirmation", async () => {
+  const [loader, page] = await Promise.all([
+    readFile(new URL("../lib/purchasing/data.ts", import.meta.url), "utf8"),
+    readFile(
+      new URL("../app/admin/purchasing/[id]/page.tsx", import.meta.url),
+      "utf8",
+    ),
+  ]);
+
+  assert.match(loader, /db\s*\.from\("serial_numbers"\)/);
+  assert.match(loader, /purchase_order_item_id/);
+  assert.match(loader, /sen_serial/);
+  assert.match(page, /SEN serials generated for this supplier order/);
+  assert.match(page, /Expected until physically received/);
+  assert.match(page, /data\.serials/);
+});
