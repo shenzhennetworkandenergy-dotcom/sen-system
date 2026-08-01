@@ -57,7 +57,7 @@ export async function getShipment(shipmentId: string, customerProfileId?: string
   const shipment = await query.maybeSingle(); fail("Unable to load shipment.", shipment.error); if (!shipment.data) return null;
   const [items, serials, events, points, statuses, workplaces, documents, availableDocuments] = await Promise.all([
     db.from("shipment_items").select("*,sales_order_items(product_id,product_name_snapshot,sku_snapshot,quantity)").eq("shipment_id", shipmentId),
-    db.from("shipment_serials").select("*,serial_numbers(sen_serial,manufacturer_serial),shipment_items!inner(shipment_id)").eq("shipment_items.shipment_id", shipmentId),
+    db.from("shipment_serials").select("*,serial_numbers(id,sen_serial,manufacturer_serial),shipment_items!inner(shipment_id)").eq("shipment_items.shipment_id", shipmentId),
     db.from("shipment_tracking_events").select("*,tracking_status_definitions(key,name)").eq("shipment_id", shipmentId).order("occurred_at", { ascending: false }),
     db.from("shipment_route_points").select("*").eq("shipment_id", shipmentId).order("version", { ascending: false }).order("point_order"),
     db.from("tracking_status_definitions").select("id,key,name,description,customer_visible_default,sort_order").eq("is_active", true).order("sort_order"),
