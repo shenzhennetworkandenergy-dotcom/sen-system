@@ -3,7 +3,7 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { requirePermission } from "@/lib/auth/permissions";
 
 export default async function ProductImportPage({ searchParams }: { searchParams: Promise<{ success?: string; error?: string }> }) {
-  const [{ profile, permissions }, message] = await Promise.all([requirePermission("products.create"), searchParams]);
+  const [{ profile, permissions }, message] = await Promise.all([requirePermission("products.import"), searchParams]);
   return <DashboardShell admin={profile.role === "admin"} employeePermissions={profile.role === "employee" ? permissions : undefined} title="Import products" subtitle="Create up to 500 catalogue products from one CSV and attach matching image files.">
     {message.success ? <p className="mb-4 rounded-xl border border-green-200 bg-green-50 p-4 text-green-900">{message.success}</p> : null}
     {message.error ? <p className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4 text-red-900">{message.error}</p> : null}

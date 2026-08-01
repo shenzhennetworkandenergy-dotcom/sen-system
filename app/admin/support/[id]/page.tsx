@@ -24,7 +24,7 @@ export default async function SupportConversationPage({
   searchParams: Promise<{ success?: string; error?: string }>;
 }) {
   await connection();
-  await requirePermission("support.view");
+  const { profile, permissions } = await requirePermission("support.view");
   const { id } = await params;
   const notice = await searchParams;
   const db = createSupabaseAdminClient();
@@ -46,7 +46,8 @@ export default async function SupportConversationPage({
 
   return (
     <DashboardShell
-      admin
+      admin={profile.role === "admin"}
+      employeePermissions={profile.role === "employee" ? permissions : undefined}
       title={conversation.subject}
       subtitle={`${conversation.reference} · ${conversation.status}`}
     >
@@ -54,7 +55,7 @@ export default async function SupportConversationPage({
         <Link href="/admin/support" className="font-bold text-[var(--primary)]">
           ← All support
         </Link>
-        {conversation.status !== "closed" ? (
+        {conversation.status !== "closed" && (profile.role === "admin" || permissions.has("support.close")) ? (
           <form action={closeConversationAction.bind(null, id)}>
             <button className="rounded-lg border px-4 py-2 font-bold">
               Close conversation
@@ -102,7 +103,7 @@ export default async function SupportConversationPage({
           );
         })}
       </div>
-      <form
+      {profile.role === "admin" || permissions.has("support.update") ? <form
         action={replyToConversationAction.bind(null, id)}
         className="mt-5 rounded-2xl border bg-[var(--surface)] p-5"
       >
@@ -125,7 +126,7 @@ export default async function SupportConversationPage({
         <button className="mt-4 rounded-xl bg-[var(--primary)] px-5 py-3 font-bold text-[var(--primary-foreground)]">
           Send reply
         </button>
-      </form>
+      </form> : null}
     </DashboardShell>
   );
 }

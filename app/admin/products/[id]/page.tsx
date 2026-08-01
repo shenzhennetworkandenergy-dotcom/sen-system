@@ -103,7 +103,7 @@ export default async function ProductDetailPage({
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3"><span className="text-xs text-emerald-800">Available stock</span><strong className="block text-2xl text-emerald-950">{availableBalance}</strong><span className="text-xs text-emerald-800">{availableSerialCount} available serial(s)</span></div>
       </div>
 
-      {expectedCount ? <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950">
+      {expectedCount && can("inventory.receive") ? <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950">
         <div><strong>{expectedCount} serial label(s) are generated but not yet stock.</strong><p className="text-sm">Receive the generation batches to make these units available and update the stock quantity.</p></div>
         <a href={`/admin/serials/batches?product=${id}`} className="rounded bg-amber-900 px-4 py-2 font-semibold text-white">Receive expected units</a>
       </div> : null}
@@ -111,12 +111,12 @@ export default async function ProductDetailPage({
       <div className="mt-4 flex flex-wrap gap-2">
         {product.serial_tracking_required && can("inventory.receive") ? <a href={`/admin/products/${id}/stock/add`} className="rounded bg-[var(--primary)] px-4 py-3 font-semibold text-white">Add serialized stock</a> : null}
         {can("serials.generate") ? <a href={`/admin/products/${id}/serials/new`} className="rounded border bg-white px-4 py-3 font-semibold">Generate serial labels</a> : null}
-        <a href={`/admin/serials?product=${id}`} className="rounded border bg-white px-4 py-3 font-semibold">View all serials</a>
+        {can("serials.view") ? <a href={`/admin/serials?product=${id}`} className="rounded border bg-white px-4 py-3 font-semibold">View all serials</a> : null}
         {can("inventory.adjust_stock") ? <a href={`/admin/inventory/adjustments/new?product=${id}`} className="rounded border bg-white px-4 py-3 font-semibold">Adjust / remove stock</a> : null}
-        <a href={`/admin/serials/print?product=${id}`} className="rounded border bg-white px-4 py-3 font-semibold">Print labels</a>
-        <a href="/admin/serials/scan" className="rounded border bg-white px-4 py-3 font-semibold">Scan serial</a>
-        <a href="#product-images" className="rounded border bg-white px-4 py-3 font-semibold">Manage images</a>
-        <a href={`/admin/inventory/movements?product=${id}`} className="rounded border bg-white px-4 py-3 font-semibold">Inventory movements</a>
+        {can("serials.print") ? <a href={`/admin/serials/print?product=${id}`} className="rounded border bg-white px-4 py-3 font-semibold">Print labels</a> : null}
+        {can("serials.scan") ? <a href="/admin/serials/scan" className="rounded border bg-white px-4 py-3 font-semibold">Scan serial</a> : null}
+        {can("products.manage_media") ? <a href="#product-images" className="rounded border bg-white px-4 py-3 font-semibold">Manage images</a> : null}
+        {can("inventory.view") ? <a href={`/admin/inventory/movements?product=${id}`} className="rounded border bg-white px-4 py-3 font-semibold">Inventory movements</a> : null}
       </div>
     </section>
 
@@ -125,7 +125,7 @@ export default async function ProductDetailPage({
       {media?.some((item) => item.media_type === "image") ? <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {media.filter((item) => item.media_type === "image").map((item) => <article key={item.id} className="overflow-hidden rounded-xl border">
           <div className="aspect-[4/3] bg-[var(--muted-surface)]">{urlMap.get(item.storage_path) ? <img src={urlMap.get(item.storage_path)} alt={item.alt_text ?? product.name} className="h-full w-full object-contain" /> : null}</div>
-          <form action={manage} className="space-y-2 p-3">
+          {can("products.manage_media") ? <form action={manage} className="space-y-2 p-3">
             <input type="hidden" name="media_id" value={item.id} />
             <b>{item.is_primary ? "Main image" : "Gallery image"}</b>
             <input name="alt_text" defaultValue={item.alt_text ?? ""} aria-label="Image alt text" className="w-full rounded border p-2" />
@@ -134,25 +134,25 @@ export default async function ProductDetailPage({
               {!item.is_primary ? <button name="intent" value="main" className="rounded border px-2 py-1">Set as main</button> : null}
               <button name="intent" value="remove" className="rounded border border-red-300 px-2 py-1 text-red-700">Remove</button>
             </div>
-          </form>
+          </form> : null}
         </article>)}
       </div> : <p className="mt-3 text-[var(--muted-text)]">No product images uploaded.</p>}
       {can("products.manage_media") ? <ProductGalleryUploader productId={id} /> : null}
     </section>
 
-    <div id="product-settings"><ProductForm action={update} options={options} product={formProduct} /></div>
+    {can("products.edit") ? <div id="product-settings"><ProductForm action={update} options={options} product={formProduct} /></div> : null}
 
     {product.product_type === "variable" ? <section className="mt-6 rounded-xl border bg-[var(--surface)] p-6">
       <h2 className="text-xl font-semibold">Variations</h2>
       {variations?.length ? <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[600px] text-left text-sm"><thead><tr><th>SKU</th><th>Combination</th><th>Price</th><th>Stock level</th><th>Status</th></tr></thead><tbody>{variations.map((item) => <tr key={item.id} className="border-t"><td className="py-3">{item.sku}</td><td>{item.combination_key}</td><td>{item.regular_price ?? "—"}</td><td>{item.manage_stock ? "Variation" : "Parent"}</td><td>{item.status}</td></tr>)}</tbody></table></div> : <p className="mt-3 text-[var(--muted-text)]">No variations yet.</p>}
-      <form action={variation} className="mt-5 grid gap-3 md:grid-cols-4">
+      {can("products.edit") ? <form action={variation} className="mt-5 grid gap-3 md:grid-cols-4">
         <label>Variation SKU<input name="sku" required className="mt-1 w-full rounded border p-2" /></label>
         <label>Combination<input name="combination_key" required className="mt-1 w-full rounded border p-2" /></label>
         <label>Regular price<input name="regular_price" type="number" inputMode="decimal" min="0" step=".01" className="mt-1 w-full rounded border p-2" /></label>
         <label>Purchase cost<input name="purchase_cost" type="number" inputMode="decimal" min="0" step=".01" className="mt-1 w-full rounded border p-2" /></label>
         <label className="flex items-center gap-2"><input type="checkbox" name="manage_stock" />Manage variation stock</label>
         <button className="rounded border px-4 py-2 font-semibold">Add variation</button>
-      </form>
+      </form> : null}
     </section> : null}
 
     <section className="mt-6 rounded-xl border bg-[var(--surface)] p-6">

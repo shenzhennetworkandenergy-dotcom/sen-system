@@ -37,8 +37,11 @@ export async function hasPermission(profileId: string, permissionKey: string) {
 export async function requirePermission(permissionKey: string) {
   const context = await requireProfile();
   if (isAdmin(context.profile)) return { ...context, permissions: new Set<string>([permissionKey]) };
-  if (!isActiveEmployee(context.profile) || !(await hasPermission(context.profile.id, permissionKey))) redirect(dashboardPathForRole(context.profile.role));
-  return { ...context, permissions: await getEffectivePermissions(context.profile.id) };
+  const permissions = isActiveEmployee(context.profile)
+    ? await getEffectivePermissions(context.profile.id)
+    : new Set<string>();
+  if (!permissions.has(permissionKey)) redirect(dashboardPathForRole(context.profile.role));
+  return { ...context, permissions };
 }
 
 export async function requireAnyPermission(permissionKeys: string[]) {
