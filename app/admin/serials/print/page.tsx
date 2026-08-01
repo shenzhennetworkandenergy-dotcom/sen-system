@@ -1,8 +1,10 @@
 /* eslint-disable @next/next/no-img-element, @next/next/no-html-link-for-pages */
 import Image from "next/image";
+import { redirect } from "next/navigation";
 import { PrintButton } from "@/components/inventory/PrintButton";
 import { ConfirmSubmitButton } from "@/components/ui/ConfirmSubmitButton";
-import { requirePermission } from "@/lib/auth/permissions";
+import { requireAnyPermission } from "@/lib/auth/permissions";
+import { getEmployeePrimaryWarehouseId } from "@/lib/inventory/employee-stock-receiving";
 import { createSerialLabelAssets } from "@/lib/inventory/labels";
 import {
   isUuid,
@@ -41,7 +43,12 @@ function Notice({ params }: { params: PrintParams }) {
 }
 
 export default async function SerialPrintPage({ searchParams }: { searchParams: Promise<PrintParams> }) {
-  const { profile } = await requirePermission("serials.print");
+  const { profile, permissions } = await requireAnyPermission([
+    "serials.print",
+    "inventory.receive_new_stock",
+  ]);
+  const canPrintAnySerial =
+    profile.role === "admin" || permissions.has("serials.print");
   const params = await searchParams;
   const selection = parseSerialPrintSelection(params);
   if (!selection) return <main className="min-h-screen bg-slate-50 p-8 text-slate-950"><div className="mx-auto max-w-3xl rounded-2xl border bg-white p-8 shadow-sm"><h1 className="text-2xl font-bold">No serials selected</h1><p className="mt-2 text-slate-600">Choose one or more SEN serials before generating labels.</p><a href="/admin/serials" className="mt-5 inline-block rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white">Return to Serial Tracking</a></div></main>;
@@ -63,12 +70,55 @@ export default async function SerialPrintPage({ searchParams }: { searchParams: 
     </main>;
   }
 
-  let query = db.from("serial_numbers").select("id,sen_serial,manufacturer_serial,status,condition,product_id,products(name,model_number,brands(name))").not("sen_serial", "is", null).limit(1);
+  let query = db.from("serial_numbers").select("id,sen_serial,manufacturer_serial,status,condition,product_id,purchase_order_item_id,products(name,model_number,brands(name))").not("sen_serial", "is", null).limit(1);
   if (selection.kind === "batch") query = query.eq("generation_batch_id", selection.id);
   else if (selection.kind === "product") query = query.eq("product_id", selection.id);
   else query = query.in("id", selection.ids);
   const { data, error } = await query.order("created_at");
   if (error) throw new Error("Unable to load printable serials.");
+  if (!canPrintAnySerial) {
+    const units = data ?? [];
+    const purchaseItemIds = units
+      .map((unit) => unit.purchase_order_item_id)
+      .filter((id): id is string => Boolean(id));
+    const [warehouseId, purchaseItemsResult] = await Promise.all([
+      getEmployeePrimaryWarehouseId(profile.id),
+      purchaseItemIds.length
+        ? db
+            .from("purchase_order_items")
+            .select("id,purchase_orders(status,destination_warehouse_id)")
+            .in("id", purchaseItemIds)
+        : Promise.resolve({ data: [] }),
+    ]);
+    const eligible = new Set(
+      (purchaseItemsResult.data ?? [])
+        .filter((item) => {
+          const order = item.purchase_orders as unknown as {
+            status: string;
+            destination_warehouse_id: string;
+          } | null;
+          return Boolean(
+            warehouseId &&
+              order?.destination_warehouse_id === warehouseId &&
+              ["received", "partially_received"].includes(order.status),
+          );
+        })
+        .map((item) => item.id),
+    );
+    if (
+      !units.length ||
+      units.some(
+        (unit) =>
+          unit.status !== "expected" ||
+          !unit.purchase_order_item_id ||
+          !eligible.has(unit.purchase_order_item_id),
+      )
+    ) {
+      redirect(
+        "/employee/inventory/receive?error=Only%20expected%20serials%20from%20physically%20arrived%20supplier%20orders%20can%20be%20printed%20here.",
+      );
+    }
+  }
   const printableUnits = selectSingleSerialForLabelPrinter(data ?? []);
   const labels = await Promise.all(printableUnits.map(async (unit) => ({ ...unit, assets: await createSerialLabelAssets(unit.sen_serial!) })));
   const labelLayout = createSerialLabelLayout(Number(selectedSize.width_mm), Number(selectedSize.height_mm));

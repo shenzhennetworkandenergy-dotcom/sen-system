@@ -3,7 +3,7 @@ import { routes } from "@/lib/constants/routes";
 import { visibleAdminNavigation, visibleEmployeeNavigation } from "@/lib/navigation/dashboard";
 import { DashboardNavigation } from "@/components/dashboard/DashboardNavigation";
 import { ProductSearch } from "@/components/catalog/ProductSearch";
-import { getDashboardWorkCounts } from "@/lib/dashboard/work-counts";
+import { getDashboardWorkCounts, getEmployeeWorkCounts } from "@/lib/dashboard/work-counts";
 import { getCurrentProfile } from "@/lib/auth/session";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
@@ -28,7 +28,11 @@ export async function DashboardShell({ title, subtitle, children, admin = false,
     : profile?.role === "employee"
       ? visibleEmployeeNavigation(resolvedEmployeePermissions)
       : [];
-  const workCounts = isAdmin && admin ? await getDashboardWorkCounts() : {};
+  const workCounts = isAdmin && admin
+    ? await getDashboardWorkCounts()
+    : profile?.role === "employee"
+      ? await getEmployeeWorkCounts(profile.id, resolvedEmployeePermissions)
+      : {};
   let avatarUrl: string | null = null;
   if (profile?.avatar_path) {
     const signed = await createSupabaseAdminClient().storage

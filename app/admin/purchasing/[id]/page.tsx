@@ -53,9 +53,7 @@ export default async function PurchaseOrderPage({
   const cancellable = ["draft", "pending_approval", "approved", "ordered"].includes(
     order.status,
   );
-  const canReceiveNewStock = profile.role === "admin" || (
-    permissions.has("purchasing.receive") && permissions.has("inventory.receive_new_stock")
-  );
+  const canReceiveNewStock = profile.role === "admin" || permissions.has("inventory.receive_new_stock");
   const serialsByItem = new Map<string, typeof data.serials>();
   for (const serial of data.serials) {
     const itemSerials = serialsByItem.get(serial.purchase_order_item_id) ?? [];

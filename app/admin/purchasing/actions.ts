@@ -6,6 +6,7 @@ import { requireAllPermissions, requirePermission } from "@/lib/auth/permissions
 import { writeAuditLog } from "@/lib/audit/log";
 import { normalizeCurrencyCode } from "@/lib/currency/currencies";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getEmployeePrimaryWarehouseId } from "@/lib/inventory/employee-stock-receiving";
 import { jsonArray, optionalString, requiredString, uuid } from "@/lib/orders/validation";
 import { moneyFromForm, parseMoney, parseWholeNumber, wholeNumberFromForm } from "@/lib/validation/numbers";
 
@@ -175,20 +176,36 @@ export async function transitionPurchaseInboundShipmentAction(
 }
 
 export async function receivePurchaseOrderAction(purchaseId: string, form: FormData) {
-  const { profile } = await requireAllPermissions(["purchasing.receive", "inventory.receive_new_stock"]);
+  const { profile } = await requirePermission("inventory.receive_new_stock");
+  const receiptTarget = (kind: "success" | "error", message: string) => profile.role === "employee"
+    ? `/employee/inventory/receive?${kind}=${encodeURIComponent(message)}`
+    : `${purchasingPath}/${purchaseId}${kind === "error" ? "/receive" : ""}?${kind}=${encodeURIComponent(message)}`;
+  const db = createSupabaseAdminClient();
+  if (profile.role === "employee") {
+    const [warehouseId, order] = await Promise.all([
+      getEmployeePrimaryWarehouseId(profile.id),
+      db.from("purchase_orders").select("destination_warehouse_id").eq("id", purchaseId).maybeSingle(),
+    ]);
+    if (order.error) {
+      redirect(receiptTarget("error", "Unable to verify the purchase order warehouse."));
+    }
+    if (!warehouseId || order.data?.destination_warehouse_id !== warehouseId) {
+      redirect(receiptTarget("error", "This purchase order is not assigned to your warehouse."));
+    }
+  }
   let items: Record<string, unknown>[];
   try { items = jsonArray(form, "items") as Record<string, unknown>[]; }
-  catch { redirect(target(purchaseId, "error", "Receipt items are invalid.")); }
-  if (!items.length) redirect(target(purchaseId, "error", "Enter at least one received quantity."));
+  catch { redirect(receiptTarget("error", "Receipt items are invalid.")); }
+  if (!items.length) redirect(receiptTarget("error", "Enter at least one received quantity."));
   try {
     items = items.map((item, index) => ({
       ...item,
       quantity: parseWholeNumber(item.quantity, `Receipt item ${index + 1} quantity`, { required: true, minimum: 0 }),
     }));
   } catch (error) {
-    redirect(target(purchaseId, "error", error instanceof Error ? error.message : "Receipt quantities are invalid."));
+    redirect(receiptTarget("error", error instanceof Error ? error.message : "Receipt quantities are invalid."));
   }
-  const result = await createSupabaseAdminClient().rpc("post_received_purchase_order", {
+  const result = await db.rpc("post_received_purchase_order", {
     actor_profile_id: profile.id,
     requested_order_id: purchaseId,
     requested_receipt_date: String(form.get("receipt_date") ?? "") || new Date().toISOString().slice(0, 10),
@@ -197,13 +214,14 @@ export async function receivePurchaseOrderAction(purchaseId: string, form: FormD
     requested_notes: optionalString(form, "notes", 1000),
     requested_items: items,
   });
-  if (result.error || !result.data) redirect(target(purchaseId, "error", safeMessage(result.error?.message, "Unable to receive purchase order.")));
+  if (result.error || !result.data) redirect(receiptTarget("error", safeMessage(result.error?.message, "Unable to receive purchase order.")));
   revalidatePath(purchasingPath);
   revalidatePath(`${purchasingPath}/${purchaseId}`);
   revalidatePath("/admin/inventory");
   revalidatePath("/admin/products");
   revalidatePath("/admin/serials");
-  redirect(target(purchaseId, "success", "Purchase receipt confirmed, inventory updated, and unique SEN serials generated for serialized units."));
+  revalidatePath("/employee/inventory/receive");
+  redirect(receiptTarget("success", "Purchase receipt confirmed, inventory updated, and SEN serials activated for the received units."));
 }
 
 export async function createSupplierAction(form: FormData) {

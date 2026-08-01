@@ -1,7 +1,12 @@
+import Link from "next/link";
 import { connection } from "next/server";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
-import { requirePermission } from "@/lib/auth/permissions";
+import {
+  employeePermissionModuleKeys,
+  resolveEmployeeDirectoryAccess,
+} from "@/lib/auth/employee-permission-submodules";
+import { requireAnyPermission } from "@/lib/auth/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -14,12 +19,13 @@ export default async function EmployeeDirectoryPage({
   searchParams: Promise<{ q?: string }>;
 }) {
   await connection();
-  const { permissions } = await requirePermission("employees.view");
+  const { permissions } = await requireAnyPermission([...employeePermissionModuleKeys]);
+  const access = resolveEmployeeDirectoryAccess(permissions);
   const params = await searchParams;
   const queryText = params.q?.trim().slice(0, 80) ?? "";
   let query = createSupabaseAdminClient()
     .from("profiles")
-    .select("id,full_name,email,phone,country_name,company_name")
+    .select("id,full_name,email,phone,country,company_name")
     .eq("role", "employee")
     .eq("status", "active")
     .is("archived_at", null)
@@ -27,12 +33,11 @@ export default async function EmployeeDirectoryPage({
     .limit(100);
   if (queryText) {
     const escaped = queryText.replaceAll(",", " ");
-    query = query.or(
-      `full_name.ilike.%${escaped}%,email.ilike.%${escaped}%,phone.ilike.%${escaped}%,company_name.ilike.%${escaped}%`,
-    );
+    query = access.canViewContactSummary
+      ? query.or(`full_name.ilike.%${escaped}%,email.ilike.%${escaped}%,phone.ilike.%${escaped}%,company_name.ilike.%${escaped}%`)
+      : query.ilike("full_name", `%${escaped}%`);
   }
   const { data: employees, error } = await query;
-  const canViewDetails = permissions.has("employees.view_detail");
 
   return (
     <DashboardShell
@@ -46,19 +51,15 @@ export default async function EmployeeDirectoryPage({
           <input
             name="q"
             defaultValue={queryText}
-            placeholder="Name, email, phone or company"
+            placeholder={access.canViewContactSummary ? "Name, email, phone or company" : "Employee name"}
             className="mt-1 w-full rounded-lg border p-3 font-normal"
           />
         </label>
-        <button className="self-end rounded-lg bg-[var(--primary)] px-5 py-3 font-semibold text-[var(--primary-foreground)]">
-          Search
-        </button>
+        <button className="self-end rounded-lg bg-[var(--primary)] px-5 py-3 font-semibold text-[var(--primary-foreground)]">Search</button>
       </form>
 
       {error ? (
-        <p className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-900">
-          Unable to load employees. Please try again or contact an administrator.
-        </p>
+        <p className="rounded-xl border border-red-200 bg-red-50 p-5 text-red-900">Unable to load employees. Please try again or contact an administrator.</p>
       ) : employees?.length ? (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {employees.map((employee) => (
@@ -69,19 +70,20 @@ export default async function EmployeeDirectoryPage({
                 </span>
                 <div className="min-w-0">
                   <h2 className="truncate font-semibold">{display(employee.full_name)}</h2>
-                  <p className="truncate text-sm text-[var(--muted-text)]">{display(employee.email)}</p>
+                  {access.canViewContactSummary ? <p className="truncate text-sm text-[var(--muted-text)]">{display(employee.email)}</p> : null}
                 </div>
               </div>
-              <dl className="mt-4 grid gap-2 text-sm">
+              {access.canViewContactSummary ? <dl className="mt-4 grid gap-2 text-sm">
                 <div><dt className="text-[var(--muted-text)]">Phone</dt><dd>{display(employee.phone)}</dd></div>
                 <div><dt className="text-[var(--muted-text)]">Company</dt><dd>{display(employee.company_name)}</dd></div>
-                <div><dt className="text-[var(--muted-text)]">Country</dt><dd>{display(employee.country_name)}</dd></div>
-              </dl>
-              {canViewDetails ? (
-                <a href={`/employee/employees/${employee.id}`} className="mt-4 inline-block rounded-lg border px-3 py-2 text-sm font-semibold">
-                  View employee details
-                </a>
-              ) : null}
+                <div><dt className="text-[var(--muted-text)]">Country</dt><dd>{display(employee.country)}</dd></div>
+              </dl> : null}
+              <div className="mt-4 flex flex-wrap gap-2">
+                {access.canViewDetails ? <Link href={`/employee/employees/${employee.id}`} className="rounded-lg border px-3 py-2 text-sm font-semibold">View employee details</Link> : null}
+                {access.canEditProfile ? <Link href={`/employee/employees/${employee.id}#edit-employee-profile`} className="rounded-lg border px-3 py-2 text-sm font-semibold">Edit employee profile</Link> : null}
+                {access.canViewPermissions || access.canManagePermissions ? <Link href={`/employee/employees/${employee.id}/permissions`} className="rounded-lg border px-3 py-2 text-sm font-semibold">{access.canManagePermissions ? "Manage permissions" : "View permissions"}</Link> : null}
+                {access.canViewActivity ? <Link href={`/employee/employees/${employee.id}/activity`} className="rounded-lg border px-3 py-2 text-sm font-semibold">View activity</Link> : null}
+              </div>
             </article>
           ))}
         </div>

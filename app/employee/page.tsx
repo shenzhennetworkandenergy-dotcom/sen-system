@@ -15,9 +15,11 @@ export default async function EmployeePage() {
   const permittedModules = modules.filter((module) =>
     module.permissions.some((permission) => matrix.effectiveKeys.includes(permission.key)),
   );
-  const visibleRoutes = new Map(
-    visibleEmployeeNavigation(matrix.effectiveKeys).map((item) => [item.moduleKey ?? item.key, item.route]),
-  );
+  const visibleRoutes = new Map<string,string>();
+  for(const item of visibleEmployeeNavigation(matrix.effectiveKeys)){
+    const key=item.moduleKey??item.requiredPermission?.split(".",1)[0]??item.key;
+    if(item.route&&!visibleRoutes.has(key))visibleRoutes.set(key,item.route);
+  }
   const canViewActivity = matrix.effectiveKeys.includes("activity.view_own");
   const { data: activity } = canViewActivity
     ? await createSupabaseAdminClient()
@@ -61,14 +63,16 @@ export default async function EmployeePage() {
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             {permittedModules.map((module) => {
               const route = visibleRoutes.get(module.key);
+              const grantedPermissions=module.permissions.filter((permission)=>matrix.effectiveKeys.includes(permission.key));
               const content = (
                 <>
                   <h3 className="font-semibold">{module.name}</h3>
                   <p className="mt-1 text-sm text-[var(--muted-text)]">
-                    {module.is_implemented && route
+                    {route
                       ? "Open permitted workspace"
-                      : "Permission reserved for a future module"}
+                      : "Permission granted; this module is not available yet"}
                   </p>
+                  <ul className="mt-3 space-y-1 text-xs text-[var(--muted-text)]">{grantedPermissions.slice(0,4).map((permission)=><li key={permission.id}>✓ {permission.name}</li>)}{grantedPermissions.length>4?<li>+ {grantedPermissions.length-4} more</li>:null}</ul>
                 </>
               );
               return route ? (
