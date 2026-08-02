@@ -49,6 +49,11 @@ const requiredSearchTokens = [
   "sen-search-button",
 ];
 const requiredCssTokens = [
+  '@custom-variant dark (&:where(html[data-theme="dark"], html[data-theme="dark"] *));',
+  'html[data-theme="dark"] .public-experience',
+  'html[data-theme="dark"] .public-experience .sen-catalogue-card',
+  'html[data-theme="dark"] .public-experience .product-rich-content',
+  'html[data-theme="dark"] .public-experience .sen-chat-panel',
   "@keyframes sen-header-enter",
   ".sen-menu-box::before",
   ".sen-mobile-menu-panel",
@@ -78,6 +83,10 @@ for (const token of requiredMobileTokens) {
 for (const token of requiredCssTokens) {
   assert.ok(css.includes(token), `globals.css is missing ${token}`);
 }
+assert.ok(
+  !css.includes("@media (prefers-color-scheme: dark)"),
+  "globals.css must resolve dark presentation from data-theme, not the operating system",
+);
 
 assert.ok(header.includes('aria-label="Public navigation"'));
 assert.ok(search.includes('role="search"'));
