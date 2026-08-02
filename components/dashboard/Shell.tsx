@@ -44,21 +44,27 @@ export async function DashboardShell({ title, subtitle, children, admin = false,
 
   return <div className="sen-dashboard-shell min-h-screen" data-dashboard-role={profile?.role ?? "guest"}>
     <header className="sen-dashboard-header sticky top-0 z-30 border-b bg-[#07152f] text-white shadow-lg backdrop-blur">
-      <div className="mx-auto flex h-14 max-w-[100rem] items-center justify-between gap-4 px-3 sm:px-5">
+      <div className="sen-dashboard-header-bar mx-auto flex h-14 max-w-[100rem] min-w-0 items-center justify-between gap-2 px-2 sm:px-5">
         <a href={routes.home} className="flex min-w-0 items-center gap-2.5 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">
           <span className="grid h-9 w-9 shrink-0 overflow-hidden rounded-lg border border-[var(--border)] bg-white shadow-sm">
             <Image src="/brand/sen-official-logo.png" alt="SEN logo" width={144} height={144} className="h-full w-full object-contain" priority />
           </span>
         </a>
-        <ProductSearch compact className="hidden w-full max-w-md md:block" />
-        <nav aria-label="Account navigation" className="flex shrink-0 items-center gap-1 text-xs font-semibold sm:gap-2 sm:text-sm">
+        <ProductSearch compact className="sen-dashboard-header-search hidden min-w-0 flex-1 md:block md:max-w-sm xl:max-w-md" />
+        <nav aria-label="Account navigation" className="sen-dashboard-header-actions flex shrink-0 items-center gap-1 text-xs font-semibold sm:gap-2 sm:text-sm">
           <ThemeSelector compact />
-          <a href={routes.home} className="rounded-lg px-2.5 py-2 !text-slate-100 hover:bg-white/10 hover:!text-white sm:px-3">Public website</a>
-          <a href={routes.profile} className="flex items-center gap-2 rounded-lg px-2 py-1.5 !text-slate-100 hover:bg-white/10 hover:!text-white">
-            <ProfileAvatar imageUrl={avatarUrl} emoji={profile?.avatar_emoji} name={profile?.full_name} size={28} className="ring-1 ring-white/30" />
-            <span className="hidden sm:inline">My Profile</span>
+          <a href={routes.home} aria-label="Public website" title="Public website" className="flex min-h-9 items-center justify-center rounded-lg px-2 !text-slate-100 hover:bg-white/10 hover:!text-white sm:px-2.5">
+            <span className="sen-dashboard-action-icon" aria-hidden="true">↗</span>
+            <span className="sen-dashboard-action-label hidden xl:inline">Public website</span>
           </a>
-          <a href={routes.logout} className="rounded-lg border border-white/20 bg-white/5 px-2.5 py-1.5 !text-white hover:bg-white/15 hover:!text-white sm:px-3">Logout</a>
+          <a href={routes.profile} aria-label="My Profile" title="My Profile" className="flex min-h-9 items-center gap-2 rounded-lg px-1.5 !text-slate-100 hover:bg-white/10 hover:!text-white sm:px-2">
+            <ProfileAvatar imageUrl={avatarUrl} emoji={profile?.avatar_emoji} name={profile?.full_name} size={28} className="ring-1 ring-white/30" />
+            <span className="sen-dashboard-action-label hidden xl:inline">My Profile</span>
+          </a>
+          <a href={routes.logout} aria-label="Logout" title="Logout" className="flex min-h-9 items-center justify-center rounded-lg border border-white/20 bg-white/5 px-2 !text-white hover:bg-white/15 hover:!text-white sm:px-2.5">
+            <span className="sen-dashboard-action-icon" aria-hidden="true">↪</span>
+            <span className="sen-dashboard-action-label hidden xl:inline">Logout</span>
+          </a>
         </nav>
       </div>
     </header>

@@ -3,6 +3,16 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const read = (path: string) => readFile(path, "utf8");
+const readOptional = async (path: string) => {
+  try {
+    return await read(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return "";
+    }
+    throw error;
+  }
+};
 
 test("root layout bootstraps a validated appearance preference before paint", async () => {
   const layout = await read("app/layout.tsx");
@@ -17,9 +27,43 @@ test("root layout bootstraps a validated appearance preference before paint", as
   assert.match(layout, /style\.colorScheme/);
 });
 
-test("appearance selector owns browser synchronization while surrounding headers stay server-rendered", async () => {
-  const [selector, header, mobile, shell, css] = await Promise.all([
+test("root layout mounts theme synchronization for routes without appearance selectors", async () => {
+  const [layout, login, register, forgotPassword] = await Promise.all([
+    read("app/layout.tsx"),
+    read("app/login/page.tsx"),
+    read("app/register/page.tsx"),
+    read("app/forgot-password/page.tsx"),
+  ]);
+
+  assert.match(layout, /import \{ ThemeSynchronizer \} from "@\/components\/ui\/ThemeSynchronizer"/);
+  assert.match(layout, /<body[^>]*>[\s\S]*<ThemeSynchronizer\s*\/>/);
+  assert.doesNotMatch(layout, /^"use client"/);
+
+  for (const authPage of [login, register, forgotPassword]) {
+    assert.doesNotMatch(authPage, /ThemeSelector/);
+  }
+});
+
+test("headless theme synchronizer owns cross-tab and automatic OS updates", async () => {
+  const synchronizer = await readOptional("components/ui/ThemeSynchronizer.tsx");
+
+  assert.match(synchronizer, /^"use client"/);
+  assert.match(synchronizer, /useEffect/);
+  assert.match(synchronizer, /window\.addEventListener\("storage", handleStorage\)/);
+  assert.match(synchronizer, /window\.removeEventListener\("storage", handleStorage\)/);
+  assert.match(synchronizer, /mediaQuery\.addEventListener\("change", handleSystemThemeChange\)/);
+  assert.match(synchronizer, /mediaQuery\.removeEventListener\("change", handleSystemThemeChange\)/);
+  assert.match(synchronizer, /event\.key === THEME_STORAGE_KEY/);
+  assert.match(synchronizer, /applyTheme\(parseThemeMode\(event\.newValue\), false\)/);
+  assert.match(synchronizer, /getThemeMode\(\) !== "auto"/);
+  assert.match(synchronizer, /applyTheme\("auto", false\)/);
+  assert.match(synchronizer, /return null/);
+});
+
+test("visible appearance selectors share the global store while headers stay server-rendered", async () => {
+  const [selector, store, header, mobile, shell, css] = await Promise.all([
     read("components/ui/ThemeSelector.tsx"),
+    readOptional("components/ui/theme-store.ts"),
     read("components/layout/PublicHeader.tsx"),
     read("components/layout/MobileNavigation.tsx"),
     read("components/dashboard/Shell.tsx"),
@@ -33,14 +77,17 @@ test("appearance selector owns browser synchronization while surrounding headers
   assert.match(selector, /Auto/);
   assert.match(selector, /Light/);
   assert.match(selector, /Dark/);
-  assert.match(selector, /matchMedia/);
-  assert.match(selector, /addEventListener\("change"/);
-  assert.match(selector, /addEventListener\("storage"/);
-  assert.match(selector, /THEME_CHANGE_EVENT/);
-  assert.match(selector, /dispatchEvent\(new CustomEvent\(THEME_CHANGE_EVENT/);
-  assert.match(selector, /addEventListener\(THEME_CHANGE_EVENT, handleThemeChange\)/);
+  assert.match(selector, /from "@\/components\/ui\/theme-store"/);
+  assert.doesNotMatch(selector, /addEventListener\("storage"/);
+  assert.doesNotMatch(selector, /addEventListener\("change"/);
   assert.match(selector, /compact/);
   assert.match(selector, /full/);
+  assert.match(store, /root\.dataset\.themeMode = mode/);
+  assert.match(store, /root\.dataset\.theme = resolved/);
+  assert.match(store, /root\.style\.colorScheme = resolved/);
+  assert.match(store, /window\.localStorage\.setItem\(THEME_STORAGE_KEY, mode\)/);
+  assert.match(store, /dispatchEvent\(new CustomEvent\(THEME_CHANGE_EVENT/);
+  assert.match(store, /addEventListener\(THEME_CHANGE_EVENT, handleThemeChange\)/);
   assert.match(header, /ThemeSelector/);
   assert.match(mobile, /ThemeSelector/);
   assert.match(shell, /ThemeSelector/);

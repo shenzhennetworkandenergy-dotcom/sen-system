@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  type FocusEvent,
   type MouseEvent,
   type PointerEvent,
   type ReactNode,
@@ -8,6 +9,7 @@ import {
 } from "react";
 
 import {
+  shouldCloseProfileMenuAfterFocusExit,
   shouldCloseProfileMenuAfterHover,
   shouldEnhanceProfileMenuHover,
   shouldOpenProfileMenuOnHover,
@@ -23,6 +25,7 @@ export function ProfileMenuDisclosure({
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const openedByHover = useRef(false);
   const clickedWithPointer = useRef(false);
+  const pointerInside = useRef(false);
 
   const isEligibleMousePointer = (pointerType: string) =>
     shouldEnhanceProfileMenuHover({
@@ -32,6 +35,10 @@ export function ProfileMenuDisclosure({
     });
 
   const handlePointerEnter = (event: PointerEvent<HTMLDetailsElement>) => {
+    if (!isEligibleMousePointer(event.pointerType)) return;
+
+    pointerInside.current = true;
+
     const details = detailsRef.current;
     if (
       !details ||
@@ -52,6 +59,8 @@ export function ProfileMenuDisclosure({
   const handlePointerLeave = (event: PointerEvent<HTMLDetailsElement>) => {
     if (!isEligibleMousePointer(event.pointerType)) return;
 
+    pointerInside.current = false;
+
     const details = detailsRef.current;
     if (
       !details ||
@@ -62,6 +71,29 @@ export function ProfileMenuDisclosure({
         pointerType: event.pointerType,
         canHover: window.matchMedia("(hover: hover)").matches,
         hasFinePointer: window.matchMedia("(pointer: fine)").matches,
+      })
+    ) {
+      return;
+    }
+
+    details.open = false;
+    openedByHover.current = false;
+  };
+
+  const handleBlur = (event: FocusEvent<HTMLDetailsElement>) => {
+    const details = detailsRef.current;
+    if (!details) return;
+
+    const nextFocusWithin =
+      event.relatedTarget instanceof Node &&
+      details.contains(event.relatedTarget);
+
+    if (
+      !shouldCloseProfileMenuAfterFocusExit({
+        isOpen: details.open,
+        openedByHover: openedByHover.current,
+        pointerInside: pointerInside.current,
+        nextFocusWithin,
       })
     ) {
       return;
@@ -101,6 +133,7 @@ export function ProfileMenuDisclosure({
       onPointerLeave={handlePointerLeave}
       onPointerDown={handlePointerDown}
       onClick={handleClick}
+      onBlur={handleBlur}
       onToggle={() => {
         if (!detailsRef.current?.open) openedByHover.current = false;
       }}

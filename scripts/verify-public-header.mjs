@@ -3,11 +3,14 @@ import { readFile } from "node:fs/promises";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
-const [header, mobile, search, selector, shell, profileDisclosure, css, packageJson] = await Promise.all([
+const [header, mobile, search, selector, synchronizer, themeStore, layout, shell, profileDisclosure, css, packageJson] = await Promise.all([
   read("components/layout/PublicHeader.tsx"),
   read("components/layout/MobileNavigation.tsx"),
   read("components/catalog/ProductSearch.tsx"),
   read("components/ui/ThemeSelector.tsx"),
+  read("components/ui/ThemeSynchronizer.tsx"),
+  read("components/ui/theme-store.ts"),
+  read("app/layout.tsx"),
   read("components/dashboard/Shell.tsx"),
   read("components/layout/ProfileMenuDisclosure.tsx"),
   read("app/globals.css"),
@@ -106,8 +109,14 @@ assert.ok(
   "Authenticated customers must retain Request a Quote in the compact menu",
 );
 assert.ok(selector.startsWith('"use client"'), "Appearance selector must be a client component");
-assert.ok(selector.includes('addEventListener("storage"'), "Appearance selector must synchronize saved preferences");
-assert.ok(selector.includes('addEventListener("change"'), "Appearance selector must follow the system in Auto mode");
+assert.ok(selector.includes('from "@/components/ui/theme-store"'), "Appearance selector must use the shared theme store");
+assert.ok(synchronizer.startsWith('"use client"'), "Global theme synchronizer must be a client component");
+assert.ok(synchronizer.includes('addEventListener("storage"'), "Global theme synchronizer must synchronize saved preferences");
+assert.ok(synchronizer.includes('addEventListener("change"'), "Global theme synchronizer must follow the system in Auto mode");
+assert.ok(synchronizer.includes('getThemeMode() !== "auto"'), "System changes must only resolve Auto mode");
+assert.ok(themeStore.includes("THEME_CHANGE_EVENT"), "Visible selectors and the global synchronizer must share one event store");
+assert.ok(layout.includes("<ThemeSynchronizer/>"), "Root layout must synchronize routes without an appearance selector");
+assert.ok(!layout.startsWith('"use client"'), "Root layout must remain server-rendered");
 assert.ok(shell.includes("ThemeSelector"), "Dashboard header must expose an appearance control");
 assert.ok(!header.startsWith('"use client"'), "Public header must remain server-rendered");
 assert.ok(profileDisclosure.startsWith('"use client"'), "Profile disclosure must be a client component");

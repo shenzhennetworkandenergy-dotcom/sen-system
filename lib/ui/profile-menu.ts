@@ -13,6 +13,13 @@ type ProfileMenuHoverLeaveRequest = ProfileMenuHoverOpenRequest & {
   hasFocusWithin: boolean;
 };
 
+type ProfileMenuFocusExitRequest = {
+  isOpen: boolean;
+  openedByHover: boolean;
+  pointerInside: boolean;
+  nextFocusWithin: boolean;
+};
+
 export function shouldEnhanceProfileMenuHover({
   pointerType,
   canHover,
@@ -40,4 +47,13 @@ export function shouldCloseProfileMenuAfterHover({
     !hasFocusWithin &&
     shouldEnhanceProfileMenuHover(capabilities)
   );
+}
+
+export function shouldCloseProfileMenuAfterFocusExit({
+  isOpen,
+  openedByHover,
+  pointerInside,
+  nextFocusWithin,
+}: ProfileMenuFocusExitRequest) {
+  return isOpen && openedByHover && !pointerInside && !nextFocusWithin;
 }
