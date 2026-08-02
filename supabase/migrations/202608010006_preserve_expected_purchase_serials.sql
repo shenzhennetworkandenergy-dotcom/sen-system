@@ -38,7 +38,6 @@ declare
   all_received boolean;
 begin
   perform public.assert_actor_permission(actor_profile_id,'inventory.receive_new_stock');
-  perform public.assert_actor_permission(actor_profile_id,'inventory.receive');
 
   select * into order_row
   from public.purchase_orders
@@ -244,6 +243,7 @@ begin
   );
   return receipt_id;
 end $$;
+
 -- Confirmation creates SEN codes for every physical unit. Serialized products
 -- are activated by receive_purchase_order above; this trigger handles only
 -- products that do not require a manufacturer serial.
@@ -317,6 +317,7 @@ begin
   );
   return new;
 end $$;
+
 revoke all on function public.receive_purchase_order(uuid,uuid,date,text,text,text,jsonb)
 from public,anon,authenticated;
 grant execute on function public.receive_purchase_order(uuid,uuid,date,text,text,text,jsonb)

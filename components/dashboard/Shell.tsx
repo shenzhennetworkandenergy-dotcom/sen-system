@@ -1,12 +1,13 @@
 import Image from "next/image";
 import { routes } from "@/lib/constants/routes";
-import { adminNavigation, visibleEmployeeNavigation } from "@/lib/navigation/dashboard";
+import { visibleAdminNavigation, visibleEmployeeNavigation } from "@/lib/navigation/dashboard";
 import { DashboardNavigation } from "@/components/dashboard/DashboardNavigation";
 import { ProductSearch } from "@/components/catalog/ProductSearch";
-import { getDashboardWorkCounts } from "@/lib/dashboard/work-counts";
+import { getDashboardWorkCounts, getEmployeeWorkCounts } from "@/lib/dashboard/work-counts";
 import { getCurrentProfile } from "@/lib/auth/session";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
+import { getEffectivePermissions } from "@/lib/auth/permissions";
 
 type DashboardShellProps = {
   title: string;
@@ -17,11 +18,21 @@ type DashboardShellProps = {
 };
 
 export async function DashboardShell({ title, subtitle, children, admin = false, employeePermissions }: DashboardShellProps) {
-  const navigation = admin ? adminNavigation : employeePermissions ? visibleEmployeeNavigation(employeePermissions) : [];
-  const [{ profile }, workCounts] = await Promise.all([
-    getCurrentProfile(),
-    admin ? getDashboardWorkCounts() : Promise.resolve({}),
-  ]);
+  const { profile } = await getCurrentProfile();
+  const isAdmin = profile?.role === "admin";
+  const resolvedEmployeePermissions = profile?.role === "employee"
+    ? employeePermissions ?? await getEffectivePermissions(profile.id)
+    : [];
+  const navigation = isAdmin
+    ? visibleAdminNavigation()
+    : profile?.role === "employee"
+      ? visibleEmployeeNavigation(resolvedEmployeePermissions)
+      : [];
+  const workCounts = isAdmin && admin
+    ? await getDashboardWorkCounts()
+    : profile?.role === "employee"
+      ? await getEmployeeWorkCounts(profile.id, resolvedEmployeePermissions)
+      : {};
   let avatarUrl: string | null = null;
   if (profile?.avatar_path) {
     const signed = await createSupabaseAdminClient().storage

@@ -133,7 +133,7 @@ export default async function SharedProfilePage({
           <label className="text-sm font-semibold">Region or state<input name="region" defaultValue={data.region ?? ""} className={field}/></label>
           <label className="text-sm font-semibold">Postal code<input name="postal_code" defaultValue={data.postal_code ?? ""} className={field}/></label>
           <label className="text-sm font-semibold">Country code<input name="country_code" maxLength={2} defaultValue={data.country_code ?? "BD"} className={field}/></label>
-          <label className="text-sm font-semibold">Country<input name="country_name" defaultValue={data.country_name ?? "Bangladesh"} className={field}/></label>
+          <label className="text-sm font-semibold">Country<input name="country" defaultValue={data.country ?? data.country_name ?? "Bangladesh"} className={field}/></label>
         </Section>
         <Section title="Work" description="Company and professional information." action={updateProfileSectionAction.bind(null,"work")}>
           <label className="text-sm font-semibold">Company<input name="company_name" defaultValue={data.company_name ?? ""} className={field}/></label>

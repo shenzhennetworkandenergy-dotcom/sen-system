@@ -23,6 +23,7 @@ begin
   end if;
   execute new_definition;
 end $$;
+
 revoke all on function public.receive_purchase_order(uuid,uuid,date,text,text,text,jsonb)
 from public,anon,authenticated;
 grant execute on function public.receive_purchase_order(uuid,uuid,date,text,text,text,jsonb)

@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { requirePermission } from "@/lib/auth/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
+import { normalizeBasicCustomerInput } from "@/lib/customers/basic";
 import { parseQuotationItems } from "@/lib/quotations/create";
 import { defaultQuotationExpiration } from "@/lib/quotations/validity";
 
@@ -22,6 +23,96 @@ const statuses = new Set([
   "expired",
   "converted_to_invoice",
 ]);
+
+const newQuotationTarget = (kind: "success" | "error", message: string) =>
+  `/admin/quotations/new?${kind}=${encodeURIComponent(message)}`;
+
+export async function createQuotationCustomerAction(form: FormData) {
+  const { profile } = await requirePermission("quotations.create");
+  let input;
+  try {
+    input = normalizeBasicCustomerInput({
+      fullName: form.get("full_name"),
+      email: form.get("email"),
+      phone: form.get("phone"),
+      addressLine1: form.get("address_line_1"),
+    });
+  } catch (error) {
+    redirect(
+      newQuotationTarget(
+        "error",
+        error instanceof Error ? error.message : "Customer details are invalid.",
+      ),
+    );
+  }
+
+  const db = createSupabaseAdminClient();
+  const created = await db.auth.admin.createUser({
+    email: input.email,
+    email_confirm: true,
+    user_metadata: {
+      full_name: input.fullName,
+      phone: input.phone,
+      role: "customer",
+      status: "active",
+    },
+  });
+  if (created.error || !created.data.user) {
+    redirect(
+      newQuotationTarget(
+        "error",
+        "Unable to add customer. The email may already be in use.",
+      ),
+    );
+  }
+
+  const customerId = created.data.user.id;
+  const { error: profileError } = await db
+    .from("profiles")
+    .update({
+      full_name: input.fullName,
+      phone: input.phone,
+      role: "customer",
+      status: "active",
+    })
+    .eq("id", customerId);
+  if (profileError) {
+    await db.auth.admin.deleteUser(customerId);
+    redirect(newQuotationTarget("error", "Unable to save the customer profile."));
+  }
+
+  const { error: addressError } = await db.from("customer_addresses").insert({
+    profile_id: customerId,
+    recipient_name: input.fullName,
+    phone: input.phone,
+    address_line_1: input.addressLine1,
+    city: "Not specified",
+    country_code: "BD",
+    is_default_shipping: true,
+  });
+  if (addressError) {
+    await db.auth.admin.deleteUser(customerId);
+    redirect(newQuotationTarget("error", "Unable to save the customer address."));
+  }
+
+  await writeAuditLog({
+    actorId: profile.id,
+    actorRole: profile.role,
+    action: "quotation.customer_created",
+    module: "quotations",
+    entityType: "profile",
+    entityId: customerId,
+    targetProfileId: customerId,
+    description: "Basic customer created from Create Quotation.",
+  });
+  revalidatePath("/admin/quotations/new");
+  redirect(
+    newQuotationTarget(
+      "success",
+      `Customer ${input.fullName} added. Select them below to create the quotation.`,
+    ),
+  );
+}
 
 export async function createQuotationAction(form: FormData) {
   const { profile, permissions } = await requirePermission("quotations.create");

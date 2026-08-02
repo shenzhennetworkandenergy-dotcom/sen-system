@@ -87,7 +87,9 @@ begin
   );
 end;
 $$;
+
 revoke all on function public.admin_set_profile_permissions(uuid,uuid,uuid,text[],text[]) from public,anon,authenticated;
 grant execute on function public.admin_set_profile_permissions(uuid,uuid,uuid,text[],text[]) to service_role;
+
 comment on function public.admin_set_profile_permissions(uuid,uuid,uuid,text[],text[]) is
   'Atomically updates another employee permissions for an active admin or an employee with employees.manage_permissions; self-updates are forbidden.';
