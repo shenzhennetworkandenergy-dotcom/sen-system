@@ -3,6 +3,16 @@ export type ResolvedTheme = "light" | "dark";
 
 export const THEME_STORAGE_KEY = "sen-theme-mode";
 
+const themeModeGlyphs: Record<ThemeMode, string> = {
+  auto: "◐",
+  light: "☀",
+  dark: "☾",
+};
+
+export function themeModeGlyph(mode: ThemeMode) {
+  return themeModeGlyphs[mode];
+}
+
 export function parseThemeMode(value: unknown): ThemeMode {
   return value === "auto" || value === "light" || value === "dark"
     ? value

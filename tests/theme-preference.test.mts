@@ -5,6 +5,7 @@ import {
   parseThemeMode,
   resolveTheme,
   THEME_STORAGE_KEY,
+  themeModeGlyph,
 } from "../lib/ui/theme.ts";
 
 test("preserves supported appearance preferences", () => {
@@ -28,4 +29,10 @@ test("resolves explicit and automatic appearance preferences", () => {
 
 test("uses the stable appearance preference storage key", () => {
   assert.equal(THEME_STORAGE_KEY, "sen-theme-mode");
+});
+
+test("gives every appearance preference a compact recognizable glyph", () => {
+  assert.equal(themeModeGlyph("auto"), "◐");
+  assert.equal(themeModeGlyph("light"), "☀");
+  assert.equal(themeModeGlyph("dark"), "☾");
 });

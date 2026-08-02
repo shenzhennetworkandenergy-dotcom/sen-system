@@ -105,6 +105,25 @@ test("resolved theme selectors override the operating system without global tran
   assert.doesNotMatch(css, /(?:html|body|\*)\s*\{[^}]*transition:\s*(?:all|background|color)/);
 });
 
+test("appearance preference animates only its decorative mode glyph", async () => {
+  const [selector, css] = await Promise.all([
+    read("components/ui/ThemeSelector.tsx"),
+    read("app/globals.css"),
+  ]);
+
+  assert.match(selector, /themeModeGlyph\(mode\)/);
+  assert.match(selector, /key=\{mode\}/);
+  assert.match(selector, /data-theme-mode=\{mode\}/);
+  assert.match(selector, /sen-theme-mode-icon/);
+  assert.match(css, /@keyframes sen-theme-mode-pop/);
+
+  const iconRule = css.match(/\.sen-theme-mode-icon\s*\{([^}]*)\}/)?.[1] ?? "";
+  assert.match(iconRule, /animation:\s*sen-theme-mode-pop\s+[^;]*\b1\b/);
+  assert.match(iconRule, /pointer-events:\s*none/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.sen-theme-mode-icon\s*\{\s*animation:\s*none/);
+  assert.doesNotMatch(css, /(?:html|body|\*)\s*\{[^}]*transition:\s*(?:all|background|color)/);
+});
+
 test("catalogue dark tokens apply when public and catalogue classes share the page root", async () => {
   const [css, listing, detail] = await Promise.all([
     read("app/globals.css"),

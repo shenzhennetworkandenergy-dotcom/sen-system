@@ -7,7 +7,7 @@ import {
   getThemeMode,
   subscribeToThemeMode,
 } from "@/components/ui/theme-store";
-import { parseThemeMode, type ThemeMode } from "@/lib/ui/theme";
+import { parseThemeMode, themeModeGlyph, type ThemeMode } from "@/lib/ui/theme";
 
 type ThemeSelectorProps = {
   variant?: "compact" | "full";
@@ -29,7 +29,7 @@ export function ThemeSelector({ variant = "compact", compact = false }: ThemeSel
     : "sen-theme-selector sen-theme-selector-compact inline-flex items-center";
 
   return (
-    <div className={containerClassName}>
+    <div className={containerClassName} data-theme-mode={mode}>
       <label
         htmlFor={selectId}
         className={resolvedVariant === "compact"
@@ -38,6 +38,9 @@ export function ThemeSelector({ variant = "compact", compact = false }: ThemeSel
       >
         Appearance
       </label>
+      <span key={mode} className="sen-theme-mode-icon" aria-hidden="true">
+        {themeModeGlyph(mode)}
+      </span>
       <select
         id={selectId}
         value={mode}
