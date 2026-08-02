@@ -27,6 +27,7 @@ test("appearance selector owns browser synchronization while surrounding headers
   ]);
 
   assert.match(selector, /^"use client"/);
+  assert.match(selector, /useSyncExternalStore/);
   assert.match(selector, /<label/);
   assert.match(selector, /<select/);
   assert.match(selector, /Auto/);
@@ -35,6 +36,9 @@ test("appearance selector owns browser synchronization while surrounding headers
   assert.match(selector, /matchMedia/);
   assert.match(selector, /addEventListener\("change"/);
   assert.match(selector, /addEventListener\("storage"/);
+  assert.match(selector, /THEME_CHANGE_EVENT/);
+  assert.match(selector, /dispatchEvent\(new CustomEvent\(THEME_CHANGE_EVENT/);
+  assert.match(selector, /addEventListener\(THEME_CHANGE_EVENT, handleThemeChange\)/);
   assert.match(selector, /compact/);
   assert.match(selector, /full/);
   assert.match(header, /ThemeSelector/);

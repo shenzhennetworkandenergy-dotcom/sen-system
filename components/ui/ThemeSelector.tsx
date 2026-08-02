@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useSyncExternalStore } from "react";
 
 import {
   parseThemeMode,
@@ -15,6 +15,7 @@ type ThemeSelectorProps = {
 };
 
 const colorSchemeQuery = "(prefers-color-scheme: dark)";
+const THEME_CHANGE_EVENT = "sen-theme-change";
 
 function applyTheme(mode: ThemeMode, persist: boolean) {
   const root = document.documentElement;
@@ -30,18 +31,40 @@ function applyTheme(mode: ThemeMode, persist: boolean) {
     } catch {
       // Appearance selection remains usable when storage is unavailable.
     }
+
   }
+
+  window.dispatchEvent(new CustomEvent(THEME_CHANGE_EVENT, { detail: mode }));
+}
+
+function getThemeMode() {
+  return parseThemeMode(document.documentElement.dataset.themeMode);
+}
+
+function getServerThemeMode(): ThemeMode {
+  return "auto";
+}
+
+function subscribeToThemeMode(onStoreChange: () => void) {
+  const handleThemeChange = () => onStoreChange();
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === THEME_STORAGE_KEY) {
+      applyTheme(parseThemeMode(event.newValue), false);
+    }
+  };
+
+  window.addEventListener(THEME_CHANGE_EVENT, handleThemeChange);
+  window.addEventListener("storage", handleStorage);
+  return () => {
+    window.removeEventListener(THEME_CHANGE_EVENT, handleThemeChange);
+    window.removeEventListener("storage", handleStorage);
+  };
 }
 
 export function ThemeSelector({ variant = "compact", compact = false }: ThemeSelectorProps) {
-  const [mode, setMode] = useState<ThemeMode>("auto");
+  const mode = useSyncExternalStore(subscribeToThemeMode, getThemeMode, getServerThemeMode);
   const id = useId();
   const resolvedVariant = compact ? "compact" : variant;
-
-  useEffect(() => {
-    const currentMode = parseThemeMode(document.documentElement.dataset.themeMode);
-    setMode(currentMode);
-  }, []);
 
   useEffect(() => {
     if (mode !== "auto") {
@@ -53,21 +76,6 @@ export function ThemeSelector({ variant = "compact", compact = false }: ThemeSel
     mediaQuery.addEventListener("change", handleChange);
     return () => mediaQuery.removeEventListener("change", handleChange);
   }, [mode]);
-
-  useEffect(() => {
-    const handleStorage = (event: StorageEvent) => {
-      if (event.key !== THEME_STORAGE_KEY) {
-        return;
-      }
-
-      const nextMode = parseThemeMode(event.newValue);
-      setMode(nextMode);
-      applyTheme(nextMode, false);
-    };
-
-    window.addEventListener("storage", handleStorage);
-    return () => window.removeEventListener("storage", handleStorage);
-  }, []);
 
   const selectId = `theme-selector-${id}`;
   const containerClassName = resolvedVariant === "full"
@@ -83,7 +91,6 @@ export function ThemeSelector({ variant = "compact", compact = false }: ThemeSel
         className="min-h-9 rounded-md border border-current bg-transparent px-2 py-1 text-inherit"
         onChange={(event) => {
           const nextMode = parseThemeMode(event.target.value);
-          setMode(nextMode);
           applyTheme(nextMode, true);
         }}
       >
