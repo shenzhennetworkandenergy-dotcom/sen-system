@@ -5,6 +5,7 @@ import { archiveProductAction } from "@/app/admin/products/actions";
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { ProductQuickEdit } from "@/components/inventory/ProductQuickEdit";
 import { requirePermission } from "@/lib/auth/permissions";
+import { featuredFilterOptions } from "@/lib/inventory/product-list-view";
 import { getProductList, getProductOptions, productListPageHref, type ProductListParams } from "@/lib/inventory/products";
 
 export const dynamic = "force-dynamic";
@@ -31,6 +32,7 @@ export default async function ProductsPage({searchParams}:{searchParams:Promise<
       <select name="type" aria-label="Product type" defaultValue={params.type} className="rounded-lg border p-2.5"><option value="">All types</option><option value="simple">Simple</option><option value="variable">Variable</option></select>
       <select name="stock" aria-label="Stock status" defaultValue={params.stock} className="rounded-lg border p-2.5"><option value="">All stock states</option><option value="in_stock">In stock</option><option value="low_stock">Low stock</option><option value="out_of_stock">Out of stock</option><option value="on_backorder">On backorder</option></select>
       <select name="status" aria-label="Publication status" defaultValue={params.status} className="rounded-lg border p-2.5"><option value="">All publication states</option><option value="draft">Draft</option><option value="active">Active</option></select>
+      <select name="featured" aria-label="Featured state" defaultValue={params.featured} className="rounded-lg border p-2.5">{featuredFilterOptions.map((option)=><option key={option.value||"all"} value={option.value}>{option.label}</option>)}</select>
       <select name="sort" aria-label="Sort products" defaultValue={params.sort} className="rounded-lg border p-2.5"><option value="updated">Recently updated</option><option value="name">Name</option></select>
       <button className="rounded-lg border px-4 py-2 font-semibold">Apply filters</button>
     </form>
