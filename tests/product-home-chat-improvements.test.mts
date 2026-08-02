@@ -204,10 +204,37 @@ function cssDeclarations(selector: string) {
   return declarations;
 }
 
-test("floating chat keeps its width while gaining a tall responsive viewport", () => {
+function mediaCssDeclarations(media: string, selector: string) {
+  const declarations = new Map<string, string>();
+  stylesheet.walkAtRules("media", (rule) => {
+    if (rule.params !== media) return;
+    rule.walkRules(selector, (nestedRule) => {
+      nestedRule.walkDecls((declaration) => {
+        declarations.set(declaration.prop, declaration.value);
+      });
+    });
+  });
+  return declarations;
+}
+
+test("floating chat keeps its width within a balanced dynamic viewport", () => {
   const window = cssDeclarations(".sen-messenger-window");
   assert.equal(window.get("width"), "min(24rem, calc(100vw - 1.5rem))");
-  assert.equal(window.get("height"), "min(46rem, calc(100vh - 6.5rem))");
+  assert.equal(window.get("height"), "clamp(30rem, 62vh, 36rem)");
+  assert.equal(window.get("max-height"), "calc(100dvh - 6.5rem)");
+});
+
+test("floating chat applies height caps for tablet, portrait mobile, and short landscape", () => {
+  const tablet = mediaCssDeclarations("(max-width: 1024px)", ".sen-messenger-window");
+  const portraitMobile = mediaCssDeclarations("(max-width: 480px)", ".sen-messenger-window");
+  const shortLandscape = mediaCssDeclarations(
+    "(max-height: 600px) and (orientation: landscape)",
+    ".sen-messenger-window",
+  );
+
+  assert.equal(tablet.get("height"), "min(34rem, calc(100dvh - 6.5rem))");
+  assert.equal(portraitMobile.get("height"), "min(31rem, calc(100dvh - 6rem))");
+  assert.equal(shortLandscape.get("height"), "calc(100dvh - 7rem)");
 });
 
 test("floating chat typography and spacing are compact", () => {
