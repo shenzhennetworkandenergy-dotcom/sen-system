@@ -7,7 +7,11 @@ import {
   useRef,
 } from "react";
 
-import { shouldEnhanceProfileMenuHover } from "@/lib/ui/profile-menu";
+import {
+  shouldCloseProfileMenuAfterHover,
+  shouldEnhanceProfileMenuHover,
+  shouldOpenProfileMenuOnHover,
+} from "@/lib/ui/profile-menu";
 
 type ProfileMenuDisclosureProps = {
   children: ReactNode;
@@ -28,9 +32,20 @@ export function ProfileMenuDisclosure({
     });
 
   const handlePointerEnter = (event: PointerEvent<HTMLDetailsElement>) => {
-    if (!isEligibleMousePointer(event.pointerType)) return;
+    const details = detailsRef.current;
+    if (
+      !details ||
+      !shouldOpenProfileMenuOnHover({
+        isOpen: details.open,
+        pointerType: event.pointerType,
+        canHover: window.matchMedia("(hover: hover)").matches,
+        hasFinePointer: window.matchMedia("(pointer: fine)").matches,
+      })
+    ) {
+      return;
+    }
 
-    detailsRef.current!.open = true;
+    details.open = true;
     openedByHover.current = true;
   };
 
@@ -38,7 +53,17 @@ export function ProfileMenuDisclosure({
     if (!isEligibleMousePointer(event.pointerType)) return;
 
     const details = detailsRef.current;
-    if (!details || details.matches(":focus-within") || !openedByHover.current) {
+    if (
+      !details ||
+      !shouldCloseProfileMenuAfterHover({
+        isOpen: details.open,
+        openedByHover: openedByHover.current,
+        hasFocusWithin: details.matches(":focus-within"),
+        pointerType: event.pointerType,
+        canHover: window.matchMedia("(hover: hover)").matches,
+        hasFinePointer: window.matchMedia("(pointer: fine)").matches,
+      })
+    ) {
       return;
     }
 
