@@ -25,7 +25,7 @@ async function unresolvedCount(
 }
 
 export async function getDashboardWorkCounts(): Promise<DashboardWorkCounts> {
-  const [crm, orders, support, quotations, shipments, purchasing] =
+  const [crm, orders, support, quotations, shipments, purchasing, rma] =
     await Promise.all([
       getUnreadChatbotInquiryCount(),
       unresolvedCount("sales_orders", [
@@ -59,6 +59,13 @@ export async function getDashboardWorkCounts(): Promise<DashboardWorkCounts> {
         "received",
         "partially_received",
       ]),
+      unresolvedCount("rma_claims", [
+        "submitted",
+        "under_review",
+        "return_requested",
+        "product_received",
+        "resolution_in_progress",
+      ]),
     ]);
-  return { crm, orders, support, quotations, shipments, purchasing };
+  return { crm, orders, support, quotations, shipments, purchasing, rma };
 }

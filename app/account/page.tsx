@@ -41,6 +41,11 @@ const modules = [
     href: "/account/messages",
     description: "Chat securely with the SEN team.",
   },
+  {
+    label: "Warranty & Returns",
+    href: "/account/rma",
+    description: "View warranty coverage and track your claims.",
+  },
 ];
 
 export default async function AccountPage() {

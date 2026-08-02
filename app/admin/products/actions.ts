@@ -90,6 +90,16 @@ async function saveSubmittedAttributes(productId: string, form: FormData) {
 }
 async function saveProduct(actorId: string, productId: string | null, form: FormData, canManageIdentifiers: boolean) {
   const baseData = payload(form);
+  const warrantyEnabled = checked(form, "warranty_enabled");
+  const warrantyDurationMonths = optionalWholeNumber(form, "warranty_duration_months", "Warranty duration") ?? 0;
+  if (warrantyEnabled && warrantyDurationMonths < 1) throw new Error("Warranty duration must be at least 1 month when warranty is enabled.");
+  if (warrantyDurationMonths > 240) throw new Error("Warranty duration cannot exceed 240 months.");
+  const structuredWarranty = {
+    warranty_enabled: warrantyEnabled,
+    warranty_duration_months: warrantyDurationMonths,
+    warranty_terms: optionalText(form, "warranty_terms", 5000),
+    warranty_exclusions: optionalText(form, "warranty_exclusions", 5000),
+  };
   const businessCategoryId = uuidOrNull(form.get("business_category_id"));
   if (!businessCategoryId) throw new Error("An active business category is required.");
   const db = createSupabaseAdminClient();
@@ -126,6 +136,8 @@ async function saveProduct(actorId: string, productId: string | null, form: Form
   if (duplicate) throw new Error(`This product model already exists as ${duplicate.name} (${duplicate.sku}).`);
   const { data: savedId, error } = await db.rpc("admin_save_product", { actor_profile_id: actorId, requested_product_id: productId, requested_product: data, requested_category_id: uuidOrNull(form.get("category_id")) });
   if (error || !savedId) throw new Error(error?.message ?? "Product save failed");
+  const { error: warrantyError } = await db.from("products").update(structuredWarranty).eq("id", String(savedId));
+  if (warrantyError) throw new Error(warrantyError.message || "Unable to save product warranty settings.");
   await saveSubmittedAttributes(String(savedId), form);
   return String(savedId);
 }

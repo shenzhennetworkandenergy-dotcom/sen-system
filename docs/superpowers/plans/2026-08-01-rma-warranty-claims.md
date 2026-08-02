@@ -27,7 +27,7 @@
 
 ## Task 2: Database foundation
 
-- [ ] Add migration `202608010004_rma_warranty_claims.sql`.
+- [ ] Add migration `202608010008_rma_warranty_claims.sql`.
 - [ ] Add structured product warranty defaults and immutable sales-line warranty snapshots.
 - [ ] Add `warranty_coverages`, `rma_claims`, `rma_events`, and `rma_attachments` with constraints, indexes, timestamps, RLS, grants, and human-readable RMA numbers.
 - [ ] Add customer submission and staff transition RPCs with fixed `search_path`, ownership checks, permission checks, audit logs, and notifications.
