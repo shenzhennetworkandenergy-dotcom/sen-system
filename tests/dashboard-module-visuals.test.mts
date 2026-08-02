@@ -43,11 +43,14 @@ test("dashboard surfaces expose semantic tone hooks and finite accessible motion
   assert.match(employee, /data-dashboard-module-card/);
   assert.match(employee, /data-dashboard-availability=/);
   assert.doesNotMatch(employee, /rounded border p-4 opacity-70/);
+  assert.doesNotMatch(employee, /text-blue-(?:950|900)/);
   assert.match(account, /dashboardToneForIndex\(index\)/);
   assert.match(account, /data-dashboard-module-card/);
   assert.match(css, /--dashboard-module-accent/);
   assert.match(css, /data-dashboard-tone="emerald"/);
   assert.match(css, /data-dashboard-role="admin"/);
-  assert.match(css, /animation:\s*sen-dashboard-module-accent\s+.*\b1\b/);
-  assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*sen-dashboard-module-card/);
+  assert.match(css, /\.sen-dashboard-content \.sen-dashboard-module-card::after\s*\{[^}]*animation:\s*sen-dashboard-module-accent\s+[\s\S]*\b1\b/);
+  assert.doesNotMatch(css.match(/\.sen-dashboard-content \.sen-dashboard-module-card\s*\{[^}]*\}/)?.[0] ?? "", /animation:/);
+  assert.match(css, /\.sen-dashboard-content \.sen-dashboard-module-card:nth-child\(2\)::after\s*\{\s*animation-delay:/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\)[\s\S]*sen-dashboard-module-card::after\s*\{\s*animation:\s*none/);
 });

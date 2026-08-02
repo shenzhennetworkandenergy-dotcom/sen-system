@@ -52,8 +52,8 @@ export default async function EmployeePage() {
       </section>
 
       <section data-dashboard-module-card data-dashboard-tone={dashboardToneForModule({ key: "hr" })} data-dashboard-availability="available" className="sen-dashboard-module-card mt-6 rounded-xl border p-6">
-        <h2 className="text-xl font-semibold text-blue-950">My HR workspace</h2>
-        <p className="mt-2 text-blue-900">Review attendance and leave, submit correction requests, and follow administrator decisions.</p>
+        <h2 className="text-xl font-semibold">My HR workspace</h2>
+        <p className="mt-2 text-[var(--muted-text)]">Review attendance and leave, submit correction requests, and follow administrator decisions.</p>
         <a href={routes.employeeHr} className="mt-4 inline-block rounded-lg bg-blue-700 px-4 py-2 font-semibold text-white">Open My HR</a>
       </section>
 
