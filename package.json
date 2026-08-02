@@ -24,6 +24,7 @@
     "test:accounting-cashbook": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/accounting-cashbook.test.mts",
     "test:hr-management": "node scripts/verify-hr-management.mjs && node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/hr-validation.test.mts tests/hr-device-ingestion.test.mts",
     "test:hr-attendance-enhancements": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/hr-attendance.test.mts tests/currencies.test.mts tests/hr-documents.test.mts",
+    "test:rma": "node scripts/verify-rma.mjs && node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/rma-workflow.test.mts",
     "test:currency-inputs": "node scripts/verify-currency-inputs.mjs",
     "test:offline-permissions": "node scripts/verify-offline-permissions.mjs",
     "test:employee-permission-submodules": "node scripts/verify-employee-permission-submodules.mjs",

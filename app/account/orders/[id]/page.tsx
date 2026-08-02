@@ -145,6 +145,32 @@ export default async function CustomerOrderPage({
           </div>
         </aside>
       </section>
+      <section className="mt-6 rounded-2xl border bg-[var(--surface)] p-5">
+        <h2 className="text-xl font-semibold">Warranty & returns</h2>
+        <p className="mt-1 text-sm text-[var(--muted-text)]">
+          Coverage starts when SEN records delivery. Claims cannot exceed the delivered covered quantity.
+        </p>
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          {data.warranties.map((coverage) => {
+            const item = data.items.find((entry) => entry.id === coverage.sales_order_item_id);
+            const remaining = Math.max(0, Number(coverage.covered_quantity) - Number(coverage.claimed_quantity));
+            const eligible = coverage.status === "active" && remaining > 0 && String(coverage.ends_at) >= new Date().toISOString().slice(0, 10);
+            return <article key={coverage.id} className="rounded-xl border p-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div><b>{item?.product_name_snapshot ?? "Covered product"}</b><p className="text-xs text-[var(--muted-text)]">{coverage.coverage_number}</p></div>
+                <span className={`rounded-full px-3 py-1 text-xs font-semibold ${eligible ? "bg-emerald-50 text-emerald-800" : "bg-slate-100 text-slate-600"}`}>{eligible ? "Covered" : "Not eligible"}</span>
+              </div>
+              <dl className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                <div><dt className="text-[var(--muted-text)]">Period</dt><dd>{coverage.starts_at} to {coverage.ends_at}</dd></div>
+                <div><dt className="text-[var(--muted-text)]">Available</dt><dd>{remaining} of {coverage.covered_quantity}</dd></div>
+              </dl>
+              {coverage.warranty_terms ? <p className="mt-3 text-sm">{coverage.warranty_terms}</p> : null}
+              {eligible ? <Link href={`/account/rma/new?coverage=${coverage.id}`} className="mt-4 inline-flex rounded-lg bg-[var(--primary)] px-4 py-2 font-semibold text-[var(--primary-foreground)]">Claim Warranty</Link> : null}
+            </article>;
+          })}
+          {!data.warranties.length ? <p className="text-sm text-[var(--muted-text)]">Warranty coverage will appear after an eligible product is delivered.</p> : null}
+        </div>
+      </section>
       <section className="mt-6 space-y-7">
         <h2 className="text-xl font-semibold">Shipment tracking</h2>
         {details.map((detail) =>
