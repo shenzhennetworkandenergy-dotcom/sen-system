@@ -15,6 +15,7 @@ import {
   pickProductListImage,
   productListPageHref,
 } from "../lib/inventory/product-list-view.ts";
+import { buildConfirmedProductReply } from "../lib/chatbot/product-reply.ts";
 
 type ImageFixture = {
   product_id: string;
@@ -245,4 +246,59 @@ test("floating chat typography and spacing are compact", () => {
   assert.equal(bubble.get("font-size"), ".8rem");
   assert.equal(bubble.get("line-height"), "1.28");
   assert.equal(composer.get("font-size"), ".78rem");
+});
+
+test("confirmed product replies contain only compact customer-facing information", () => {
+  const reply = buildConfirmedProductReply({
+    name: "Cisco Nexus N3K-C3064PQ-10GX 48-Port Switch",
+    price: 58_000,
+    priceMax: null,
+    currency: "BDT",
+    available: false,
+  });
+
+  assert.deepEqual(reply, {
+    name: "Cisco Nexus N3K-C3064PQ-10GX 48-Port Switch",
+    price: "BDT 58,000",
+    availability: "Available through SEN / SEN-এর মাধ্যমে পাওয়া যাবে",
+    prompt: "Please enter your WhatsApp number with country code.\n\nদেশের কোডসহ WhatsApp নম্বর লিখুন।",
+  });
+
+  const content = Object.values(reply).join("\n");
+  assert.doesNotMatch(content, /Model \/ মডেল:/);
+  assert.doesNotMatch(content, /SKU:/);
+  assert.doesNotMatch(content, /high-density data center switch/i);
+});
+
+test("confirmed product replies format ranges and price-on-request", () => {
+  assert.equal(
+    buildConfirmedProductReply({
+      name: "Variable product",
+      price: 10_000,
+      priceMax: 12_500,
+      currency: "BDT",
+      available: true,
+    }).price,
+    "BDT 10,000–12,500",
+  );
+  assert.equal(
+    buildConfirmedProductReply({
+      name: "Quoted product",
+      price: null,
+      priceMax: null,
+      currency: "BDT",
+      available: true,
+    }).price,
+    "Price on request / মূল্য জানতে যোগাযোগ করুন",
+  );
+});
+
+test("confirmed product replies render a dedicated highlighted price", async () => {
+  const source = await readFile(new URL("../components/support/FloatingChat.tsx", import.meta.url), "utf8");
+  const price = cssDeclarations(".sen-chat-product-price");
+
+  assert.match(source, /item\.productReply/);
+  assert.match(source, /className="sen-chat-product-price"/);
+  assert.equal(price.get("font-size"), "1.1rem");
+  assert.equal(price.get("font-weight"), "900");
 });

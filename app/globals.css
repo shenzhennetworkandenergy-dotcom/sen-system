@@ -724,6 +724,11 @@ html { scroll-behavior: smooth; }
 .sen-chat-product-option:focus-visible { outline: 3px solid rgba(37,99,235,.3); outline-offset: 2px; }
 .sen-chat-product-option strong { font-size: .72rem; line-height: 1.25; }
 .sen-chat-product-option span { color: #64748b; font-size: .64rem; }
+.sen-chat-product-reply { display: grid; gap: .38rem; }
+.sen-chat-product-reply-name { font-size: .8rem; line-height: 1.24; font-weight: 750; }
+.sen-chat-product-price { color: #0f5bb7; font-size: 1.1rem; line-height: 1.1; font-weight: 900; letter-spacing: -.015em; }
+.sen-chat-product-availability { color: #166534; font-size: .73rem; font-weight: 700; }
+.sen-chat-product-prompt { margin-top: .08rem; color: #334155; font-size: .73rem; line-height: 1.28; }
 .sen-chat-product-option:disabled,.sen-chat-confirmation button:disabled,.sen-chat-consent-actions button:disabled { cursor: wait; opacity: .55; transform: none; }
 .sen-chat-confirmation { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; margin-top: .55rem; }
 .sen-chat-confirmation button,.sen-chat-consent-actions button,.sen-chat-finish-actions button { border-radius: 999px; padding: .5rem .7rem; font-size: .7rem; font-weight: 800; }
