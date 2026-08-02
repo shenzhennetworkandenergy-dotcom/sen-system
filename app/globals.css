@@ -1076,6 +1076,7 @@ html[data-theme="dark"] .sen-dashboard-shell .sen-admin-chat-header { border-col
 html[data-theme="dark"] .sen-dashboard-shell .sen-admin-chat-messages { background: #0b1426; }
 html[data-theme="dark"] .sen-dashboard-shell .sen-admin-message-row.is-customer .sen-admin-message-bubble { background: #1e293b; color: #e2e8f0; }
 html[data-theme="dark"] .sen-dashboard-shell .sen-admin-message-row.is-staff .sen-admin-message-bubble { background: #1877f2; color: #ffffff; }
+html[data-theme="dark"] .sen-dashboard-shell .sen-admin-document-attachment { background: #ffffff !important; color: #1d4ed8 !important; }
 html[data-theme="dark"] .sen-dashboard-shell .sen-admin-message-row time { color: #cbd5e1; }
 html[data-theme="dark"] .sen-dashboard-shell .sen-admin-chat-composer { border-color: #334155; background: #0f172a; }
 html[data-theme="dark"] .sen-dashboard-shell .sen-admin-chat-composer textarea { border-color: #64748b; background: #1e293b; color: #f8fafc; }

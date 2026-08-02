@@ -126,6 +126,22 @@ test("dashboard search, theme options, messenger, and password help have explici
   assert.match(css, /html\[data-theme="dark"\] \.sen-password-help-form :where\(input, textarea\)/);
 });
 
+test("only document attachments opt into the admin messenger chip treatment", async () => {
+  const messages = await read("app/admin/messages/page.tsx");
+  const conditionalStart = messages.indexOf('attachment.mime_type.startsWith("image/")');
+  const imageLinkStart = messages.indexOf("<a", conditionalStart);
+  const documentBranchStart = messages.indexOf(") : (", imageLinkStart);
+  const documentLinkEnd = messages.indexOf("</a>", documentBranchStart);
+
+  assert.ok(conditionalStart >= 0 && imageLinkStart >= 0 && documentBranchStart >= 0 && documentLinkEnd >= 0);
+
+  const imageBranch = messages.slice(imageLinkStart, documentBranchStart);
+  const documentBranch = messages.slice(documentBranchStart, documentLinkEnd);
+
+  assert.doesNotMatch(imageBranch, /sen-admin-document-attachment/);
+  assert.match(documentBranch, /className="[^"]*\bsen-admin-document-attachment\b[^"]*"/);
+});
+
 test("public purchase action and footer use dark-readable color contracts", async () => {
   const [purchase, footer, css] = await Promise.all([
     read("components/catalog/ProductPurchasePanel.tsx"),

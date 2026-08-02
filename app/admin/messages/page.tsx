@@ -226,7 +226,7 @@ export default async function AdminMessagesPage({
                               <a
                                 key={attachment.id}
                                 href={`/support/attachments/${attachment.id}`}
-                                className="mt-2 block rounded-lg bg-white/70 p-2 text-sm font-bold text-blue-700"
+                                className="sen-admin-document-attachment mt-2 block rounded-lg bg-white/70 p-2 text-sm font-bold text-blue-700"
                               >
                                 📎 {attachment.original_file_name}
                               </a>

@@ -178,3 +178,15 @@ test("intentionally light password help controls meet AA contrast", async () => 
   assert.ok(foreground && background, "password help panel must use explicit hex paper colors");
   assert.ok(contrastRatio(foreground, background) >= 4.5, "password help panel text must meet WCAG AA");
 });
+
+test("admin document attachment chip meets AA contrast in dark mode", async () => {
+  const css = await read("app/globals.css");
+  const rule = css.match(
+    /html\[data-theme="dark"\] \.sen-dashboard-shell \.sen-admin-document-attachment\s*\{([^}]*)\}/,
+  )?.[1] ?? "";
+  const foreground = rule.match(/(?:^|;)\s*color:\s*(#[0-9a-f]{6})/i)?.[1];
+  const background = rule.match(/background(?:-color)?:\s*(#[0-9a-f]{6})/i)?.[1];
+
+  assert.ok(foreground && background, "document attachment chip must declare explicit dark-mode colors");
+  assert.ok(contrastRatio(foreground, background) >= 4.5, "document attachment chip must meet WCAG AA");
+});
