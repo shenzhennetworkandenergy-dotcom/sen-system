@@ -3,12 +3,13 @@ import { readFile } from "node:fs/promises";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
-const [header, mobile, search, selector, shell, css, packageJson] = await Promise.all([
+const [header, mobile, search, selector, shell, profileDisclosure, css, packageJson] = await Promise.all([
   read("components/layout/PublicHeader.tsx"),
   read("components/layout/MobileNavigation.tsx"),
   read("components/catalog/ProductSearch.tsx"),
   read("components/ui/ThemeSelector.tsx"),
   read("components/dashboard/Shell.tsx"),
+  read("components/layout/ProfileMenuDisclosure.tsx"),
   read("app/globals.css"),
   read("package.json"),
 ]);
@@ -81,10 +82,8 @@ for (const token of requiredCssTokens) {
 assert.ok(header.includes('aria-label="Public navigation"'));
 assert.ok(search.includes('role="search"'));
 assert.ok(mobile.includes("<summary"));
-assert.ok(
-  header.includes('<details className="sen-profile-menu">'),
-  "Authenticated desktop navigation must use a profile disclosure",
-);
+assert.ok(header.includes("ProfileMenuDisclosure"), "Authenticated desktop navigation must use a profile disclosure");
+assert.ok(header.includes("<ProfileMenuDisclosure>"), "The profile disclosure must retain its server-rendered children");
 assert.ok(
   header.includes('className="sen-menu-box sen-profile-menu-dashboard"'),
   "The role dashboard must be highlighted inside the profile menu",
@@ -102,8 +101,19 @@ assert.ok(selector.includes('addEventListener("storage"'), "Appearance selector 
 assert.ok(selector.includes('addEventListener("change"'), "Appearance selector must follow the system in Auto mode");
 assert.ok(shell.includes("ThemeSelector"), "Dashboard header must expose an appearance control");
 assert.ok(!header.startsWith('"use client"'), "Public header must remain server-rendered");
+assert.ok(profileDisclosure.startsWith('"use client"'), "Profile disclosure must be a client component");
+assert.match(profileDisclosure, /<details[\s\S]*?ref=\{detailsRef\}[\s\S]*?className="sen-profile-menu"/, "Profile disclosure must render the native details element");
+assert.ok(profileDisclosure.includes("onPointerEnter"), "Profile disclosure must open on eligible pointer entry");
+assert.ok(profileDisclosure.includes("onPointerLeave"), "Profile disclosure must close hover-origin opens on pointer leave");
+assert.ok(profileDisclosure.includes("onToggle"), "Profile disclosure must clean up hover state after native toggles");
+assert.ok(profileDisclosure.includes("openedByHover"), "Profile disclosure must track hover-origin opens separately");
+assert.ok(profileDisclosure.includes(":focus-within"), "Profile disclosure must preserve focus-driven access");
+assert.ok(profileDisclosure.includes("pointerType"), "Profile disclosure must gate enhancements to mouse pointers");
+assert.ok(profileDisclosure.includes("preventDefault"), "Profile disclosure must pin a hover-opened menu on pointer click");
+assert.ok(header.includes("!user ? <ThemeSelector compact /> : null"), "Only guests must receive the compact header appearance selector");
 assert.ok(!shell.startsWith('"use client"'), "Dashboard shell must remain server-rendered");
 assert.ok(css.includes("prefers-reduced-motion"));
+assert.ok(css.includes(".sen-profile-menu-panel::before"), "Profile menu panel must bridge the pointer gap");
 assert.ok(
   css.match(
     /prefers-reduced-motion:[\s\S]*?\.sen-menu-box[\s\S]*?animation:\s*none/,

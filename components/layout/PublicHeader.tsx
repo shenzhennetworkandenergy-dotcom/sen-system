@@ -3,6 +3,7 @@ import Link from "next/link";
 import { connection } from "next/server";
 
 import { MobileNavigation } from "@/components/layout/MobileNavigation";
+import { ProfileMenuDisclosure } from "@/components/layout/ProfileMenuDisclosure";
 import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
 import { ProductSearch } from "@/components/catalog/ProductSearch";
 import { Button } from "@/components/ui/Button";
@@ -129,14 +130,14 @@ export async function PublicHeader() {
         </nav>
         <ProductSearch compact className="sen-header-search sen-header-search-desktop hidden xl:block" />
         <div className="sen-header-actions hidden items-center gap-2 xl:flex">
-          <ThemeSelector compact />
+          {!user ? <ThemeSelector compact /> : null}
           {dash ? (
             <>
               {profile?.role === "customer" ? <Link href="/request-quote/general" className="sen-menu-box">Request a Quote</Link> : null}
               <Link href={routes.cart} className={`sen-menu-box sen-cart-link ${cartCount > 0 ? "has-items" : ""}`}>
                 Cart {cartCount > 0 ? <span>{cartCount}</span> : null}
               </Link>
-              <details className="sen-profile-menu">
+              <ProfileMenuDisclosure>
                 <summary className="sen-menu-box sen-profile-box">
                   <ProfileAvatar
                     imageUrl={avatarUrl}
@@ -161,7 +162,7 @@ export async function PublicHeader() {
                     Logout
                   </a>
                 </div>
-              </details>
+              </ProfileMenuDisclosure>
             </>
           ) : (
             <>
