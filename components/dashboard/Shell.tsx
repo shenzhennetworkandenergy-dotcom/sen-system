@@ -42,7 +42,7 @@ export async function DashboardShell({ title, subtitle, children, admin = false,
     avatarUrl = signed.data?.signedUrl ?? null;
   }
 
-  return <div className="sen-dashboard-shell min-h-screen">
+  return <div className="sen-dashboard-shell min-h-screen" data-dashboard-role={profile?.role ?? "guest"}>
     <header className="sen-dashboard-header sticky top-0 z-30 border-b bg-[#07152f] text-white shadow-lg backdrop-blur">
       <div className="mx-auto flex h-14 max-w-[100rem] items-center justify-between gap-4 px-3 sm:px-5">
         <a href={routes.home} className="flex min-w-0 items-center gap-2.5 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]">

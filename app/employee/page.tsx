@@ -3,7 +3,7 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { getPermissionCatalogue, getPermissionMatrix } from "@/lib/auth/permissions";
 import { requireProfile } from "@/lib/auth/session";
 import { routes } from "@/lib/constants/routes";
-import { visibleEmployeeNavigation } from "@/lib/navigation/dashboard";
+import { dashboardToneForModule, visibleEmployeeNavigation } from "@/lib/navigation/dashboard";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export default async function EmployeePage() {
@@ -51,7 +51,7 @@ export default async function EmployeePage() {
         </article>
       </section>
 
-      <section className="mt-6 rounded-xl border border-blue-200 bg-blue-50 p-6">
+      <section data-dashboard-module-card data-dashboard-tone={dashboardToneForModule({ key: "hr" })} data-dashboard-availability="available" className="sen-dashboard-module-card mt-6 rounded-xl border p-6">
         <h2 className="text-xl font-semibold text-blue-950">My HR workspace</h2>
         <p className="mt-2 text-blue-900">Review attendance and leave, submit correction requests, and follow administrator decisions.</p>
         <a href={routes.employeeHr} className="mt-4 inline-block rounded-lg bg-blue-700 px-4 py-2 font-semibold text-white">Open My HR</a>
@@ -64,6 +64,7 @@ export default async function EmployeePage() {
             {permittedModules.map((module) => {
               const route = visibleRoutes.get(module.key);
               const grantedPermissions=module.permissions.filter((permission)=>matrix.effectiveKeys.includes(permission.key));
+              const tone = dashboardToneForModule({ key: module.key });
               const content = (
                 <>
                   <h3 className="font-semibold">{module.name}</h3>
@@ -79,12 +80,15 @@ export default async function EmployeePage() {
                 <a
                   key={module.id}
                   href={route}
-                  className="rounded border p-4 transition hover:-translate-y-0.5 hover:border-blue-400 hover:bg-blue-50 hover:shadow-md"
+                  data-dashboard-module-card
+                  data-dashboard-tone={tone}
+                  data-dashboard-availability="available"
+                  className="sen-dashboard-module-card rounded border p-4"
                 >
                   {content}
                 </a>
               ) : (
-                <article key={module.id} className="rounded border p-4 opacity-70">
+                <article key={module.id} data-dashboard-module-card data-dashboard-tone={tone} data-dashboard-availability="unavailable" className="sen-dashboard-module-card rounded border p-4">
                   {content}
                 </article>
               );

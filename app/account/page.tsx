@@ -4,39 +4,47 @@ import Link from "next/link";
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { requireProfile } from "@/lib/auth/session";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { dashboardToneForIndex } from "@/lib/navigation/dashboard";
 
 const modules = [
   {
+    key: "notifications",
     label: "Notifications",
     href: "/account/notifications",
     description: "Read highlighted order and support updates.",
   },
   {
+    key: "profile",
     label: "Edit Profile",
     href: "/account/profile",
     description: "Update your details and profile picture.",
   },
   {
+    key: "addresses",
     label: "Shipping Addresses",
     href: "/account/addresses",
     description: "Manage reusable delivery addresses.",
   },
   {
+    key: "orders",
     label: "My Orders",
     href: "/account/orders",
     description: "View products, shipments, tracking and documents.",
   },
   {
+    key: "sales",
     label: "Sales History",
     href: "/account/sales",
     description: "Purchases, payments and assigned serials.",
   },
   {
+    key: "quotations",
     label: "Quotations",
     href: "/account/quotations",
     description: "Track product quotation requests.",
   },
   {
+    key: "messages",
     label: "Messages",
     href: "/account/messages",
     description: "Chat securely with the SEN team.",
@@ -159,11 +167,13 @@ export default async function AccountPage() {
         </div>
       </section>
       <section className="mt-6 grid gap-4 md:grid-cols-3">
-        {modules.map((item) => (
+        {modules.map((item, index) => (
           <Link
             href={item.href}
-            key={item.label}
-            className="rounded-xl border bg-[var(--surface)] p-5 transition hover:-translate-y-0.5 hover:shadow-md"
+            key={item.key}
+            data-dashboard-module-card
+            data-dashboard-tone={dashboardToneForIndex(index)}
+            className="sen-dashboard-module-card rounded-xl border p-5"
           >
             <h3 className="font-semibold text-[var(--primary)]">
               {item.label}

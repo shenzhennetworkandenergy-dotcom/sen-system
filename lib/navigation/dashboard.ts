@@ -2,6 +2,48 @@ import { routes } from "../constants/routes.ts";
 
 export type DashboardNavigationItem = { key:string; moduleKey?:string; label:string; route:string|null; employeeRoute?:string|null; group:"Administration"|"Commerce and Customers"|"Inventory and Logistics"|"Procurement and Finance"|"Organization"|"Insights and System"|"Workspace"; iconKey:string; requiredPermission:string|null; alternativePermissions?:string[]; implemented:boolean; adminVisible:boolean; employeeVisible:boolean };
 
+export type DashboardModuleTone = "blue" | "violet" | "emerald" | "amber" | "rose" | "cyan";
+
+const dashboardGroupTones: Record<DashboardNavigationItem["group"], DashboardModuleTone> = {
+  "Administration": "violet",
+  "Commerce and Customers": "blue",
+  "Inventory and Logistics": "emerald",
+  "Procurement and Finance": "amber",
+  "Organization": "rose",
+  "Insights and System": "cyan",
+  "Workspace": "blue",
+};
+
+const dashboardModuleTones: Record<string, DashboardModuleTone> = {
+  dashboard: "blue",
+  inventory: "emerald",
+  warehouses: "violet",
+  serials: "amber",
+  purchasing: "amber",
+  suppliers: "amber",
+  accounting: "cyan",
+  hr: "rose",
+  crm: "blue",
+  products: "violet",
+  orders: "cyan",
+  sales: "rose",
+  quotations: "violet",
+};
+
+const dashboardAccountTones: DashboardModuleTone[] = ["blue", "violet", "emerald", "amber", "rose", "cyan"];
+
+export function dashboardToneForGroup(group: DashboardNavigationItem["group"]): DashboardModuleTone {
+  return dashboardGroupTones[group];
+}
+
+export function dashboardToneForModule(module: Pick<DashboardNavigationItem, "key" | "moduleKey">): DashboardModuleTone {
+  return dashboardModuleTones[module.moduleKey ?? module.key] ?? "blue";
+}
+
+export function dashboardToneForIndex(index: number): DashboardModuleTone {
+  return dashboardAccountTones[Math.abs(index) % dashboardAccountTones.length];
+}
+
 export const adminNavigation: DashboardNavigationItem[] = [
   {key:"overview",label:"Overview",route:routes.admin,group:"Administration",iconKey:"dashboard",requiredPermission:null,implemented:true,adminVisible:true,employeeVisible:false},
   {key:"my-profile",label:"My Profile",route:routes.profile,group:"Administration",iconKey:"profile",requiredPermission:null,implemented:true,adminVisible:true,employeeVisible:false},

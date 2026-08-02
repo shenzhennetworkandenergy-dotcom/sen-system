@@ -4,14 +4,17 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { routes } from "@/lib/constants/routes";
 import { activityLabel, formatActivityTime } from "@/lib/audit/format";
 import { getDashboardWorkCounts } from "@/lib/dashboard/work-counts";
-import { adminNavigation } from "@/lib/navigation/dashboard";
+import { adminNavigation, dashboardToneForModule } from "@/lib/navigation/dashboard";
 
-const plannedModules = ["Manufacturing", "Projects", "Reports", "AI Assistant"];
+const plannedModules = [
+  { key: "manufacturing", label: "Manufacturing" }, { key: "projects", label: "Projects" },
+  { key: "reports", label: "Reports" }, { key: "ai", label: "AI Assistant" },
+] as const;
 const operationalModules = [
-  ["Products", routes.adminProducts], ["Orders", routes.adminOrders], ["Sales", routes.adminSales], ["Inventory", routes.adminInventory],
-  ["Warehouses", routes.adminWarehouses], ["Serials", routes.adminSerials], ["Shipments", routes.adminShipments],
-  ["Purchasing", routes.adminPurchasing], ["Suppliers", routes.adminSuppliers],
-  ["CRM", routes.adminCrm], ["Accounting", routes.adminAccounting], ["HR", routes.adminHr],
+  { key: "products", label: "Products", href: routes.adminProducts }, { key: "orders", label: "Orders", href: routes.adminOrders }, { key: "sales", label: "Sales", href: routes.adminSales }, { key: "inventory", label: "Inventory", href: routes.adminInventory },
+  { key: "warehouses", label: "Warehouses", href: routes.adminWarehouses }, { key: "serials", label: "Serials", href: routes.adminSerials }, { key: "shipments", label: "Shipments", href: routes.adminShipments },
+  { key: "purchasing", label: "Purchasing", href: routes.adminPurchasing }, { key: "suppliers", label: "Suppliers", href: routes.adminSuppliers },
+  { key: "crm", label: "CRM", href: routes.adminCrm }, { key: "accounting", label: "Accounting", href: routes.adminAccounting }, { key: "hr", label: "HR", href: routes.adminHr },
 ] as const;
 
 const statStyles = ["border-l-blue-500", "border-l-cyan-500", "border-l-violet-500", "border-l-indigo-500", "border-l-emerald-500", "border-l-amber-500", "border-l-teal-500", "border-l-orange-500"];
@@ -54,9 +57,9 @@ export default async function AdminPage(){
 
     <section className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,1.35fr)_minmax(18rem,.65fr)]">
       <div className="grid gap-3 md:grid-cols-2">{activityPanels.map((panel)=><article key={panel.title} className="rounded-xl border bg-[var(--surface)] p-3 shadow-sm"><div className="flex items-center justify-between gap-3"><h2 className="text-sm font-bold">{panel.title}</h2><a href={panel.href} className="text-xs font-semibold text-[var(--primary)]">View all</a></div>{panel.items.length?<ul className="mt-2 divide-y divide-[var(--border)]">{panel.items.map((item)=><li key={item.id} className="py-2 first:pt-1 last:pb-0"><div className="flex items-start justify-between gap-3"><span className="min-w-0 truncate text-xs font-semibold">{activityLabel(item.action)}</span><time className="shrink-0 text-[10px] text-[var(--muted-text)]">{formatActivityTime(item.created_at)}</time></div><p className="mt-0.5 truncate text-[11px] text-[var(--muted-text)]">{item.description??"Activity recorded"}</p></li>)}</ul>:<p className="mt-3 rounded-lg bg-[var(--muted-surface)] p-3 text-xs text-[var(--muted-text)]">{panel.empty}</p>}</article>)}</div>
-      <article className="rounded-xl border bg-[var(--surface)] p-3 shadow-sm"><h2 className="text-sm font-bold">Operational modules</h2><p className="mt-0.5 text-[11px] text-[var(--muted-text)]">Open the areas currently available.</p><div className="mt-2 grid grid-cols-2 gap-1.5">{operationalModules.map(([label,href])=><a key={label} href={href} className="flex items-center justify-between rounded-lg border px-2.5 py-2 text-xs font-semibold hover:border-[var(--primary)] hover:bg-[var(--muted-surface)]"><span>{label}</span><span aria-hidden="true">→</span></a>)}</div></article>
+      <article className="rounded-xl border bg-[var(--surface)] p-3 shadow-sm"><h2 className="text-sm font-bold">Operational modules</h2><p className="mt-0.5 text-[11px] text-[var(--muted-text)]">Open the areas currently available.</p><div className="mt-2 grid grid-cols-2 gap-1.5">{operationalModules.map((module)=><a key={module.key} href={module.href} data-dashboard-module-card data-dashboard-tone={dashboardToneForModule(module)} className="sen-dashboard-module-card flex items-center justify-between rounded-lg border px-2.5 py-2 text-xs font-semibold"><span>{module.label}</span><span aria-hidden="true">→</span></a>)}</div></article>
     </section>
 
-    <section className="mt-3 rounded-xl border bg-[var(--surface)] p-3 shadow-sm"><div className="flex flex-wrap items-center gap-x-3 gap-y-1"><h2 className="text-sm font-bold">Planned modules</h2><p className="text-[11px] text-[var(--muted-text)]">Visible for roadmap awareness; no operational data yet.</p></div><div className="mt-2 flex flex-wrap gap-1.5">{plannedModules.map((module)=><span key={module} className="rounded-full border bg-[var(--muted-surface)] px-2.5 py-1 text-[11px] font-medium text-[var(--muted-text)]">{module}</span>)}</div></section>
+    <section className="mt-3 rounded-xl border bg-[var(--surface)] p-3 shadow-sm"><div className="flex flex-wrap items-center gap-x-3 gap-y-1"><h2 className="text-sm font-bold">Planned modules</h2><p className="text-[11px] text-[var(--muted-text)]">Visible for roadmap awareness; no operational data yet.</p></div><div className="mt-2 flex flex-wrap gap-1.5">{plannedModules.map((module)=><span key={module.key} data-dashboard-module-card data-dashboard-tone={dashboardToneForModule(module)} data-dashboard-availability="planned" className="sen-dashboard-module-card rounded-full border px-2.5 py-1 text-[11px] font-medium">{module.label}</span>)}</div></section>
   </DashboardShell>;
 }
