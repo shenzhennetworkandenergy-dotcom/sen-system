@@ -27,6 +27,22 @@ export const metadata: Metadata = {
   robots: { index: true, follow: true },
 };
 
+const themeBootstrap = `
+  var stored;
+  try {
+    stored = window.localStorage.getItem("sen-theme-mode");
+  } catch (_) {}
+  try {
+    var root = document.documentElement;
+    var mode = stored === "light" || stored === "dark" || stored === "auto" ? stored : "auto";
+    var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    var theme = mode === "auto" ? (prefersDark ? "dark" : "light") : mode;
+    root.dataset.themeMode = mode;
+    root.dataset.theme = theme;
+    root.style.colorScheme = theme;
+  } catch (_) {}
+`;
+
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en" className="h-full antialiased" data-scroll-behavior="smooth"><body suppressHydrationWarning className="min-h-full flex flex-col"><JsonLd data={{"@context":"https://schema.org","@type":"Organization",name:siteConfig.company.fullName,alternateName:siteConfig.company.shortName,url:"https://sen.com.bd",logo:"https://sen.com.bd/brand/sen-official-logo.png",description:siteConfig.description,contactPoint:{"@type":"ContactPoint",telephone:"+8801805226599",contactType:"sales and customer support",areaServed:["BD","CN"],availableLanguage:["English","Bengali"]},address:{"@type":"PostalAddress",streetAddress:"House 67, Level 3, Laboratory Road, New Elephant Road",addressLocality:"Dhaka",postalCode:"1205",addressCountry:"BD"}}}/><JsonLd data={{"@context":"https://schema.org","@type":"WebSite",name:siteConfig.company.fullName,url:"https://sen.com.bd",potentialAction:{"@type":"SearchAction",target:"https://sen.com.bd/products?q={search_term_string}","query-input":"required name=search_term_string"}}}/><Suspense fallback={null}><NavigationProgress/></Suspense>{children}</body></html>;
+  return <html lang="en" className="h-full antialiased" data-scroll-behavior="smooth" data-theme="light" data-theme-mode="auto" suppressHydrationWarning><head><script dangerouslySetInnerHTML={{ __html: themeBootstrap }} /></head><body className="min-h-full flex flex-col"><JsonLd data={{"@context":"https://schema.org","@type":"Organization",name:siteConfig.company.fullName,alternateName:siteConfig.company.shortName,url:"https://sen.com.bd",logo:"https://sen.com.bd/brand/sen-official-logo.png",description:siteConfig.description,contactPoint:{"@type":"ContactPoint",telephone:"+8801805226599",contactType:"sales and customer support",areaServed:["BD","CN"],availableLanguage:["English","Bengali"]},address:{"@type":"PostalAddress",streetAddress:"House 67, Level 3, Laboratory Road, New Elephant Road",addressLocality:"Dhaka",postalCode:"1205",addressCountry:"BD"}}}/><JsonLd data={{"@context":"https://schema.org","@type":"WebSite",name:siteConfig.company.fullName,url:"https://sen.com.bd",potentialAction:{"@type":"SearchAction",target:"https://sen.com.bd/products?q={search_term_string}","query-input":"required name=search_term_string"}}}/><Suspense fallback={null}><NavigationProgress/></Suspense>{children}</body></html>;
 }

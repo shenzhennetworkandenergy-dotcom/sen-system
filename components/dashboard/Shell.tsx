@@ -8,6 +8,7 @@ import { getCurrentProfile } from "@/lib/auth/session";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
 import { getEffectivePermissions } from "@/lib/auth/permissions";
+import { ThemeSelector } from "@/components/ui/ThemeSelector";
 
 type DashboardShellProps = {
   title: string;
@@ -51,6 +52,7 @@ export async function DashboardShell({ title, subtitle, children, admin = false,
         </a>
         <ProductSearch compact className="hidden w-full max-w-md md:block" />
         <nav aria-label="Account navigation" className="flex shrink-0 items-center gap-1 text-xs font-semibold sm:gap-2 sm:text-sm">
+          <ThemeSelector compact />
           <a href={routes.home} className="rounded-lg px-2.5 py-2 !text-slate-100 hover:bg-white/10 hover:!text-white sm:px-3">Public website</a>
           <a href={routes.profile} className="flex items-center gap-2 rounded-lg px-2 py-1.5 !text-slate-100 hover:bg-white/10 hover:!text-white">
             <ProfileAvatar imageUrl={avatarUrl} emoji={profile?.avatar_emoji} name={profile?.full_name} size={28} className="ring-1 ring-white/30" />

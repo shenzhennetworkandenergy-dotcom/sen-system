@@ -3,6 +3,7 @@
 import Link from "next/link";
 
 import { ProductSearch } from "@/components/catalog/ProductSearch";
+import { ThemeSelector } from "@/components/ui/ThemeSelector";
 import { routes } from "@/lib/constants/routes";
 
 export function MobileNavigation({
@@ -32,6 +33,7 @@ export function MobileNavigation({
       </summary>
       <div className="sen-mobile-menu-panel">
         <ProductSearch compact className="sen-header-search sen-mobile-menu-search" />
+        <ThemeSelector variant="full" />
         <nav className="grid gap-2" aria-label="Mobile navigation">
           <Link href={routes.home} className="sen-mobile-menu-link">
             Home

@@ -7,6 +7,7 @@ import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
 import { ProductSearch } from "@/components/catalog/ProductSearch";
 import { Button } from "@/components/ui/Button";
 import { Container } from "@/components/ui/Container";
+import { ThemeSelector } from "@/components/ui/ThemeSelector";
 import { siteConfig } from "@/config/site";
 import { getCurrentProfile } from "@/lib/auth/session";
 import { dashboardPathForRole, routes } from "@/lib/constants/routes";
@@ -128,6 +129,7 @@ export async function PublicHeader() {
         </nav>
         <ProductSearch compact className="sen-header-search sen-header-search-desktop hidden xl:block" />
         <div className="sen-header-actions hidden items-center gap-2 xl:flex">
+          <ThemeSelector compact />
           {dash ? (
             <>
               {profile?.role === "customer" ? <Link href="/request-quote/general" className="sen-menu-box">Request a Quote</Link> : null}
@@ -147,6 +149,7 @@ export async function PublicHeader() {
                   <span className="sen-profile-menu-chevron" aria-hidden="true">⌄</span>
                 </summary>
                 <div className="sen-profile-menu-panel">
+                  <ThemeSelector variant="full" />
                   <Link href={dash} className="sen-menu-box sen-profile-menu-dashboard">
                     <span>{label}</span>
                     <small>Open workspace</small>

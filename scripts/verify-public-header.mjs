@@ -3,10 +3,12 @@ import { readFile } from "node:fs/promises";
 
 const read = (path) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
-const [header, mobile, search, css, packageJson] = await Promise.all([
+const [header, mobile, search, selector, shell, css, packageJson] = await Promise.all([
   read("components/layout/PublicHeader.tsx"),
   read("components/layout/MobileNavigation.tsx"),
   read("components/catalog/ProductSearch.tsx"),
+  read("components/ui/ThemeSelector.tsx"),
+  read("components/dashboard/Shell.tsx"),
   read("app/globals.css"),
   read("package.json"),
 ]);
@@ -25,6 +27,7 @@ const requiredHeaderTokens = [
   "max-w-[92rem]",
   "sen-header-search",
   "z-[80]",
+  "ThemeSelector",
   "Enterprise technology · Energy · Medical · Global sourcing",
   "China → Bangladesh → Worldwide",
 ];
@@ -36,6 +39,7 @@ const requiredMobileTokens = [
   "is-dashboard",
   "showRequestQuote",
   "ProductSearch",
+  "ThemeSelector",
   "xl:hidden",
 ];
 const requiredSearchTokens = [
@@ -93,6 +97,12 @@ assert.ok(
   mobile.includes("showRequestQuote ?"),
   "Authenticated customers must retain Request a Quote in the compact menu",
 );
+assert.ok(selector.startsWith('"use client"'), "Appearance selector must be a client component");
+assert.ok(selector.includes('addEventListener("storage"'), "Appearance selector must synchronize saved preferences");
+assert.ok(selector.includes('addEventListener("change"'), "Appearance selector must follow the system in Auto mode");
+assert.ok(shell.includes("ThemeSelector"), "Dashboard header must expose an appearance control");
+assert.ok(!header.startsWith('"use client"'), "Public header must remain server-rendered");
+assert.ok(!shell.startsWith('"use client"'), "Dashboard shell must remain server-rendered");
 assert.ok(css.includes("prefers-reduced-motion"));
 assert.ok(
   css.match(
