@@ -71,3 +71,71 @@ test("catalogue dark tokens apply when public and catalogue classes share the pa
   assert.match(css, /html\[data-theme="dark"\] \.public-experience\.catalogue-theme\b/);
   assert.match(css, /html\[data-theme="dark"\] \.public-experience\.catalogue-theme-dynamic\b/);
 });
+
+test("cart and quotation output routes participate in the explicit public theme", async () => {
+  const [cart, productQuote, generalQuote] = await Promise.all([
+    read("app/cart/page.tsx"),
+    read("app/request-quote/page.tsx"),
+    read("app/request-quote/general/page.tsx"),
+  ]);
+
+  for (const route of [cart, productQuote, generalQuote]) {
+    assert.match(route, /className="public-experience"/);
+    assert.match(route, /<PublicHeader/);
+    assert.match(route, /<PublicFooter/);
+  }
+});
+
+test("dashboard search, theme options, messenger, and password help have explicit dark contracts", async () => {
+  const [css, search, selector, messages, passwordHelp] = await Promise.all([
+    read("app/globals.css"),
+    read("components/catalog/ProductSearch.tsx"),
+    read("components/ui/ThemeSelector.tsx"),
+    read("app/admin/messages/page.tsx"),
+    read("components/auth/PasswordHelpChat.tsx"),
+  ]);
+
+  assert.match(search, /sen-search-input/);
+  assert.match(search, /role="listbox"/);
+  assert.match(selector, /<option/);
+  assert.match(css, /html\[data-theme="dark"\] \.sen-dashboard-header \.sen-search-input\b/);
+  assert.match(css, /html\[data-theme="dark"\] \.sen-dashboard-header \[role="listbox"\]/);
+  assert.match(css, /html\[data-theme="dark"\] \.sen-dashboard-header select option/);
+
+  assert.match(messages, /sen-admin-chat-header/);
+  for (const selectorName of [
+    ".sen-admin-messenger",
+    ".sen-admin-chat-list",
+    ".sen-admin-chat-thread",
+    ".sen-admin-chat-header",
+    ".sen-admin-chat-messages",
+    ".sen-admin-message-row.is-customer .sen-admin-message-bubble",
+    ".sen-admin-message-row.is-staff .sen-admin-message-bubble",
+    ".sen-admin-chat-composer",
+    ".sen-admin-chat-info",
+  ]) {
+    assert.ok(
+      css.includes(`html[data-theme="dark"] .sen-dashboard-shell ${selectorName}`),
+      `globals.css is missing dark messenger rule ${selectorName}`,
+    );
+  }
+
+  assert.match(passwordHelp, /sen-password-help-panel/);
+  assert.match(passwordHelp, /sen-password-help-form/);
+  assert.match(css, /html\[data-theme="dark"\] \.sen-password-help-panel\s*\{/);
+  assert.match(css, /html\[data-theme="dark"\] \.sen-password-help-form :where\(input, textarea\)/);
+});
+
+test("public purchase action and footer use dark-readable color contracts", async () => {
+  const [purchase, footer, css] = await Promise.all([
+    read("components/catalog/ProductPurchasePanel.tsx"),
+    read("components/layout/PublicFooter.tsx"),
+    read("app/globals.css"),
+  ]);
+
+  assert.match(purchase, /Add to cart/);
+  assert.match(purchase, /bg-white[^"]*text-cyan-900/);
+  assert.match(css, /html\[data-theme="dark"\] \.public-experience :where\([^\n}]*\.text-cyan-900/);
+  assert.match(footer, /border-t border-white\/10 py-5 text-sm text-slate-400/);
+  assert.doesNotMatch(footer, /border-t border-white\/10 py-5 text-sm text-slate-500/);
+});

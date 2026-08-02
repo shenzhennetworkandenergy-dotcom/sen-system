@@ -151,7 +151,7 @@ export default async function AdminMessagesPage({
         <section className="sen-admin-chat-thread">
           {selected ? (
             <>
-              <header className="flex items-center gap-3 border-b p-4">
+              <header className="sen-admin-chat-header flex items-center gap-3 border-b p-4">
                 <span className="sen-chat-person-avatar">
                   {customer?.avatar_emoji ||
                     customer?.full_name?.charAt(0) ||

@@ -71,7 +71,7 @@ export async function PublicFooter() {
           })}
         </div>
       </Container>
-      <Container className="flex flex-col gap-3 border-t border-white/10 py-5 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+      <Container className="flex flex-col gap-3 border-t border-white/10 py-5 text-sm text-slate-400 sm:flex-row sm:items-center sm:justify-between">
         <span>
           © {year} {siteConfig.company.fullName}. All rights reserved.
         </span>

@@ -127,3 +127,54 @@ test("broad dashboard dark rules exclude paper roots and every paper descendant"
     );
   }
 });
+
+test("dashboard utility remaps never recolor branded header or sidebar descendants", async () => {
+  const css = await read("app/globals.css");
+  const mappings = css
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith('html[data-theme="dark"] .sen-dashboard-shell :where(.'));
+
+  assert.ok(mappings.length >= 16, "expected the dashboard neutral and semantic compatibility mappings");
+  for (const mapping of mappings) {
+    assert.match(mapping, /:not\(\.sen-dashboard-header \*\)/);
+    assert.match(mapping, /:not\(\.sen-dashboard-sidebar \*\)/);
+  }
+});
+
+test("cyan, sky, and indigo utility pairs receive scoped dark compatibility", async () => {
+  const css = await read("app/globals.css");
+
+  for (const scope of [".sen-dashboard-shell", ".public-experience"]) {
+    const escapedScope = scope.replace(".", "\\.");
+    for (const hue of ["cyan", "sky", "indigo"]) {
+      assert.match(css, new RegExp(`html\\[data-theme="dark"\\] ${escapedScope} :where\\([^\\n}]*\\.bg-${hue}-50`));
+      assert.match(css, new RegExp(`html\\[data-theme="dark"\\] ${escapedScope} :where\\([^\\n}]*\\.text-${hue}-(?:700|800|900|950)`));
+      assert.match(css, new RegExp(`html\\[data-theme="dark"\\] ${escapedScope} :where\\([^\\n}]*\\.border-${hue}-(?:100|200|300|700)`));
+    }
+  }
+
+  const newHueMappings = css
+    .split(/\r?\n/)
+    .filter((line) => /\.(?:bg|text|border)-(?:cyan|sky|indigo)-/.test(line));
+  for (const mapping of newHueMappings.filter((line) => line.includes(".sen-dashboard-shell :where("))) {
+    assert.match(mapping, /:not\(\.cashbook-print-sheet \*\)/);
+    assert.match(mapping, /:not\(\.sen-dashboard-header \*\)/);
+    assert.match(mapping, /:not\(\.sen-dashboard-sidebar \*\)/);
+  }
+  for (const mapping of newHueMappings.filter((line) => line.includes(".public-experience :where("))) {
+    assert.match(mapping, /:not\(\.quotation-page \*\)/);
+    assert.match(mapping, /:not\(\.sen-header \*\)/);
+    assert.match(mapping, /:not\(\.sen-hero \*\)/);
+    assert.match(mapping, /:not\(\.sen-footer \*\)/);
+  }
+});
+
+test("intentionally light password help controls meet AA contrast", async () => {
+  const css = await read("app/globals.css");
+  const panel = css.match(/html\[data-theme="dark"\] \.sen-password-help-panel\s*\{([^}]*)\}/)?.[1] ?? "";
+  const foreground = panel.match(/color:\s*(#[0-9a-f]{6})/i)?.[1];
+  const background = panel.match(/background(?:-color)?:\s*(#[0-9a-f]{6})/i)?.[1];
+
+  assert.ok(foreground && background, "password help panel must use explicit hex paper colors");
+  assert.ok(contrastRatio(foreground, background) >= 4.5, "password help panel text must meet WCAG AA");
+});

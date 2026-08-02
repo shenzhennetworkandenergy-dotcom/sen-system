@@ -81,7 +81,7 @@ export default async function CartPage({
   }, 0);
 
   return (
-    <>
+    <div className="public-experience">
       <PublicHeader />
       <main className="min-h-[70vh] bg-slate-50 py-12">
         <Container>
@@ -194,6 +194,6 @@ export default async function CartPage({
         </Container>
       </main>
       <PublicFooter />
-    </>
+    </div>
   );
 }
