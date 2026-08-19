@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { requireAllPermissions, requirePermission } from "@/lib/auth/permissions";
 import { writeAuditLog } from "@/lib/audit/log";
 import { normalizeCurrencyCode } from "@/lib/currency/currencies";
+import { normalizePurchaseCarrier } from "@/lib/purchasing/carriers";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { getEmployeePrimaryWarehouseId } from "@/lib/inventory/employee-stock-receiving";
 import { jsonArray, optionalString, requiredString, uuid } from "@/lib/orders/validation";
@@ -14,9 +15,19 @@ const purchasingPath = "/admin/purchasing";
 const target = (id: string | null, kind: "success" | "error", message: string) =>
   `${id ? `${purchasingPath}/${id}` : purchasingPath}?${kind}=${encodeURIComponent(message)}`;
 const safeMessage = (message: string | undefined, fallback: string) =>
-  message && /purchase|supplier|warehouse|product|variation|quantity|cost|amount|date|draft|approval|ordered|receive|serial|permission|stock/i.test(message)
+  message && /purchase|supplier|warehouse|product|variation|quantity|cost|amount|date|draft|approval|ordered|receive|serial|permission|stock|carrier/i.test(message)
     ? message
     : fallback;
+
+export type PurchaseCarrierActionResult = {
+  ok: boolean;
+  message: string;
+};
+
+const carrierFailure = (error: { code?: string; message?: string } | null, fallback: string) =>
+  error?.code === "23505"
+    ? "A carrier with this name already exists."
+    : safeMessage(error?.message, fallback);
 
 function purchasePayload(form: FormData) {
   const items = jsonArray(form, "items");
@@ -123,13 +134,80 @@ export async function transitionPurchaseOrderAction(purchaseId: string, action: 
 
 export async function createPurchaseCarrierAction(purchaseId: string, form: FormData) {
   const { profile } = await requireAllPermissions(["purchasing.edit", "shipments.create"]);
-  const name = requiredString(form, "carrier_name", 200);
+  let carrier: ReturnType<typeof normalizePurchaseCarrier>;
+  try {
+    carrier = normalizePurchaseCarrier(form);
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "Carrier details are invalid." } satisfies PurchaseCarrierActionResult;
+  }
   const db = createSupabaseAdminClient();
-  const { data, error } = await db.from("purchase_carriers").insert({ name, created_by: profile.id }).select("id").single();
-  if (error || !data) redirect(target(purchaseId, "error", safeMessage(error?.message, "Unable to create carrier.")));
-  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "purchasing.carrier.created", module: "purchasing", entityType: "purchase_carrier", entityId: data.id, description: "Purchase carrier created.", newValues: { name } });
+  const { data, error } = await db.from("purchase_carriers").insert({ ...carrier, created_by: profile.id, updated_by: profile.id }).select("id").single();
+  if (error || !data) return { ok: false, message: carrierFailure(error, "Unable to create carrier.") };
+  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "purchasing.carrier.created", module: "purchasing", entityType: "purchase_carrier", entityId: data.id, description: "Purchase carrier created.", newValues: carrier });
   revalidatePath(`${purchasingPath}/${purchaseId}`);
-  redirect(target(purchaseId, "success", "Carrier created and ready to select."));
+  return { ok: true, message: "Carrier created and ready to select." } satisfies PurchaseCarrierActionResult;
+}
+
+export async function updatePurchaseCarrierAction(purchaseId: string, carrierId: string, form: FormData) {
+  const { profile } = await requireAllPermissions(["purchasing.edit", "shipments.create"]);
+  let carrier: ReturnType<typeof normalizePurchaseCarrier>;
+  try {
+    carrier = normalizePurchaseCarrier(form);
+    carrierId = uuid(carrierId, "Carrier");
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "Carrier details are invalid." } satisfies PurchaseCarrierActionResult;
+  }
+  const db = createSupabaseAdminClient();
+  const old = await db.from("purchase_carriers").select("name,phone_number,address,description,status").eq("id", carrierId).maybeSingle();
+  if (!old.data) return { ok: false, message: "Carrier not found." };
+  const { error } = await db.from("purchase_carriers").update({ ...carrier, updated_by: profile.id, updated_at: new Date().toISOString() }).eq("id", carrierId);
+  if (error) return { ok: false, message: carrierFailure(error, "Unable to update carrier.") };
+  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "purchasing.carrier.updated", module: "purchasing", entityType: "purchase_carrier", entityId: carrierId, description: "Purchase carrier updated.", oldValues: old.data, newValues: carrier });
+  revalidatePath(`${purchasingPath}/${purchaseId}`);
+  return { ok: true, message: "Carrier updated." };
+}
+
+export async function togglePurchaseCarrierStatusAction(purchaseId: string, carrierId: string) {
+  const { profile } = await requireAllPermissions(["purchasing.edit", "shipments.create"]);
+  carrierId = uuid(carrierId, "Carrier");
+  const db = createSupabaseAdminClient();
+  const current = await db.from("purchase_carriers").select("status").eq("id", carrierId).maybeSingle();
+  if (!current.data) return { ok: false, message: "Carrier not found." } satisfies PurchaseCarrierActionResult;
+  const status = current.data.status === "active" ? "inactive" : "active";
+  const { error } = await db.from("purchase_carriers").update({ status, updated_by: profile.id, updated_at: new Date().toISOString() }).eq("id", carrierId);
+  if (error) return { ok: false, message: carrierFailure(error, "Unable to change carrier status.") };
+  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "purchasing.carrier.status_changed", module: "purchasing", entityType: "purchase_carrier", entityId: carrierId, description: `Purchase carrier marked ${status}.`, oldValues: current.data, newValues: { status } });
+  revalidatePath(`${purchasingPath}/${purchaseId}`);
+  return { ok: true, message: `Carrier marked ${status}.` };
+}
+
+export async function deletePurchaseCarrierAction(purchaseId: string, carrierId: string) {
+  const { profile } = await requireAllPermissions(["purchasing.edit", "shipments.create"]);
+  carrierId = uuid(carrierId, "Carrier");
+  const db = createSupabaseAdminClient();
+  const existing = await db.from("purchase_carriers").select("name,status").eq("id", carrierId).maybeSingle();
+  if (!existing.data) return { ok: false, message: "Carrier not found." } satisfies PurchaseCarrierActionResult;
+  const usage = await db.from("purchase_inbound_shipments").select("id", { count: "exact", head: true }).eq("carrier_id", carrierId);
+  if (usage.error) return { ok: false, message: "Unable to check carrier usage." } satisfies PurchaseCarrierActionResult;
+  if ((usage.count ?? 0) > 0) {
+    const { error } = await db.from("purchase_carriers").update({ status: "inactive", updated_by: profile.id, updated_at: new Date().toISOString() }).eq("id", carrierId);
+    if (error) return { ok: false, message: carrierFailure(error, "Unable to deactivate carrier.") };
+    await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "purchasing.carrier.status_changed", module: "purchasing", entityType: "purchase_carrier", entityId: carrierId, description: "Used purchase carrier deactivated instead of deleted.", oldValues: existing.data, newValues: { status: "inactive" } });
+    revalidatePath(`${purchasingPath}/${purchaseId}`);
+    return { ok: true, message: "This carrier has shipment history, so it was deactivated instead of deleted." };
+  }
+  const { error } = await db.from("purchase_carriers").delete().eq("id", carrierId);
+  if (error?.code === "23503") {
+    const fallback = await db.from("purchase_carriers").update({ status: "inactive", updated_by: profile.id, updated_at: new Date().toISOString() }).eq("id", carrierId);
+    if (fallback.error) return { ok: false, message: carrierFailure(fallback.error, "Unable to deactivate carrier.") };
+    await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "purchasing.carrier.status_changed", module: "purchasing", entityType: "purchase_carrier", entityId: carrierId, description: "Related purchase carrier deactivated instead of deleted.", oldValues: existing.data, newValues: { status: "inactive" } });
+    revalidatePath(`${purchasingPath}/${purchaseId}`);
+    return { ok: true, message: "This carrier has related records, so it was deactivated instead of deleted." };
+  }
+  if (error) return { ok: false, message: carrierFailure(error, "Unable to delete carrier.") };
+  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "purchasing.carrier.deleted", module: "purchasing", entityType: "purchase_carrier", entityId: carrierId, description: "Unused purchase carrier deleted.", oldValues: existing.data });
+  revalidatePath(`${purchasingPath}/${purchaseId}`);
+  return { ok: true, message: "Unused carrier deleted." };
 }
 
 export async function transitionPurchaseInboundShipmentAction(
@@ -144,12 +222,20 @@ export async function transitionPurchaseInboundShipmentAction(
         ? ["purchasing.edit", "shipments.confirm_dispatch"]
         : ["purchasing.receive", "shipments.confirm_receipt"];
   const { profile } = await requireAllPermissions(requiredPermissions);
-  const result = await createSupabaseAdminClient().rpc("transition_purchase_inbound_shipment", {
+  let carrierId: string | null = null;
+  if (action === "prepare") {
+    try {
+      carrierId = uuid(form.get("carrier_id"), "Carrier");
+    } catch (error) {
+      redirect(target(purchaseId, "error", error instanceof Error ? error.message : "Carrier is invalid."));
+    }
+  }
+  const result = await createSupabaseAdminClient().rpc("transition_purchase_inbound_shipment_with_carrier", {
     actor_profile_id: profile.id,
     requested_order_id: purchaseId,
     requested_action: action,
     requested_transport_mode: optionalString(form, "transport_mode", 30),
-    requested_carrier_name: optionalString(form, "carrier_name", 200),
+    requested_carrier_id: carrierId,
     requested_tracking_number: optionalString(form, "tracking_number", 200),
     requested_expected_departure_at: String(form.get("expected_departure_at") ?? "") || null,
     requested_expected_arrival_at: String(form.get("expected_arrival_at") ?? "") || null,
