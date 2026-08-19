@@ -2,10 +2,10 @@ import { connection } from "next/server";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { DashboardShell } from "@/components/dashboard/Shell";
+import { PurchaseCarrierManager } from "@/components/purchasing/PurchaseCarrierManager";
 import { requirePermission } from "@/lib/auth/permissions";
 import { getPurchaseOrder } from "@/lib/purchasing/data";
 import {
-  createPurchaseCarrierAction,
   transitionPurchaseInboundShipmentAction,
   transitionPurchaseOrderAction,
 } from "../actions";
@@ -55,6 +55,18 @@ export default async function PurchaseOrderPage({
   );
   const canReceiveNewStock = profile.role === "admin" || (
     permissions.has("purchasing.receive") && permissions.has("inventory.receive_new_stock")
+  );
+  const canManageCarriers = profile.role === "admin" || (
+    permissions.has("purchasing.edit") && permissions.has("shipments.create")
+  );
+  const serialsByItem = new Map<string, typeof data.serials>();
+  for (const serial of data.serials) {
+    const itemSerials = serialsByItem.get(serial.purchase_order_item_id) ?? [];
+    itemSerials.push(serial);
+    serialsByItem.set(serial.purchase_order_item_id, itemSerials);
+  }
+  const serialGenerationExpected = !["draft", "pending_approval", "approved", "cancelled"].includes(
+    order.status,
   );
 
   return (
@@ -188,23 +200,20 @@ export default async function PurchaseOrderPage({
 
       {order.status === "ordered" ? (
         <>
-        <details className="mb-3 rounded-2xl border border-cyan-200 bg-cyan-50 p-4">
-          <summary className="cursor-pointer font-bold text-cyan-950">+ Create carrier</summary>
-          <form action={createPurchaseCarrierAction.bind(null, id)} className="mt-3 flex flex-col gap-3 sm:flex-row">
-            <input name="carrier_name" required maxLength={200} placeholder="Carrier name" className="min-h-11 flex-1 rounded-xl border bg-white px-3" />
-            <button className="rounded-xl bg-cyan-700 px-5 py-2.5 font-bold text-white">Save carrier</button>
-          </form>
-        </details>
         <form
           action={transitionPurchaseInboundShipmentAction.bind(null, id, "prepare")}
           className="mb-3 rounded-2xl border border-blue-200 bg-blue-50 p-4"
         >
           <div className="mb-3">
-            <h2 className="font-bold text-blue-950">Prepare supplier shipment</h2>
-            <p className="text-sm text-blue-800">
-              Choose the inbound channel and add available carrier details before
-              dispatch.
-            </p>
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <h2 className="font-bold text-blue-950">Prepare supplier shipment</h2>
+                <p className="text-sm text-blue-800">
+                  Choose the inbound channel and select an active carrier before dispatch.
+                </p>
+              </div>
+              {canManageCarriers ? <PurchaseCarrierManager purchaseId={id} carriers={data.allCarriers} /> : null}
+            </div>
           </div>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <label className="text-sm font-semibold">
@@ -226,17 +235,16 @@ export default async function PurchaseOrderPage({
               </select>
             </label>
             <label className="text-sm font-semibold">
-              Carrier
-              <input
-                name="carrier_name"
-                list="purchase-carriers"
-                maxLength={200}
-                placeholder="Type or select a saved carrier"
+              Carrier *
+              <select
+                name="carrier_id"
+                required
+                defaultValue=""
                 className="mt-1 block w-full rounded-xl border bg-white px-3 py-2.5"
-              />
-              <datalist id="purchase-carriers">
-                {data.carriers.map((carrier) => <option key={carrier.id} value={carrier.name} />)}
-              </datalist>
+              >
+                <option value="" disabled>Select carrier</option>
+                {data.carriers.map((carrier) => <option key={carrier.id} value={carrier.id}>{carrier.name}</option>)}
+              </select>
             </label>
             <label className="text-sm font-semibold">
               Tracking number
