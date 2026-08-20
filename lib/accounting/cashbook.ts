@@ -5,6 +5,46 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3
 const LOCAL_DATE_TIME_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/;
 const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 
+export function normalizeCashbookTransactionTypeInput(input: {
+  nameEn: unknown;
+  nameBn: unknown;
+  balanceEffect: unknown;
+}) {
+  const nameEn = String(input.nameEn ?? "").trim();
+  const nameBn = String(input.nameBn ?? "").trim();
+  const balanceEffect = String(input.balanceEffect ?? "").trim().toLowerCase();
+
+  if (nameEn.length < 2 || nameEn.length > 80) {
+    throw new Error("English transaction type name must be between 2 and 80 characters.");
+  }
+  if (nameBn.length < 2 || nameBn.length > 80) {
+    throw new Error("Bangla transaction type name must be between 2 and 80 characters.");
+  }
+  if (balanceEffect !== "income" && balanceEffect !== "expense") {
+    throw new Error("Cash flow effect must be Income or Expense.");
+  }
+
+  return {
+    nameEn,
+    nameBn,
+    balanceEffect: balanceEffect as CashbookTransactionType,
+  };
+}
+
+export function normalizeCashbookDescriptionTypeInput(input: {
+  name: unknown;
+  transactionTypeId: unknown;
+}) {
+  const name = String(input.name ?? "").trim();
+  const transactionTypeId = String(input.transactionTypeId ?? "").trim();
+
+  if (name.length < 2) throw new Error("খাত/বিবরণ must be at least 2 characters.");
+  if (name.length > 160) throw new Error("খাত/বিবরণ cannot exceed 160 characters.");
+  if (!UUID_PATTERN.test(transactionTypeId)) throw new Error("Select a valid transaction type.");
+
+  return { name, transactionTypeId };
+}
+
 export function normalizeCashbookDescriptionInput(input: { name: unknown; transactionType: unknown }) {
   const name = String(input.name ?? "").trim();
   const transactionType = String(input.transactionType ?? "").trim().toLowerCase();

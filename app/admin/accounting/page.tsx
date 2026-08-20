@@ -34,6 +34,7 @@ export default async function AccountingPage({ searchParams }: { searchParams: P
       selectedDate={selectedDate}
       defaultOccurredAt={selectedDate === today ? currentBusinessDateTime : `${selectedDate}T12:00`}
       statementGeneratedAt={currentBusinessDateTime}
+      transactionTypes={data.cashbook.transactionTypes}
       descriptions={data.cashbook.descriptions}
       entries={data.cashbook.entries}
       summary={data.cashbook.summary}

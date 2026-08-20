@@ -4,8 +4,9 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import {
   normalizeCashbookDate,
-  normalizeCashbookDescriptionInput,
+  normalizeCashbookDescriptionTypeInput,
   normalizeCashbookEntryInput,
+  normalizeCashbookTransactionTypeInput,
   normalizeOpeningBalance,
   toCashbookTimestamp,
 } from "@/lib/accounting/cashbook";
@@ -21,6 +22,56 @@ const destination = (kind: "success" | "error", message: string, selectedDate?: 
   if (selectedDate) params.set("cashbook_date", normalizeCashbookDate(selectedDate));
   return `${path}?${params.toString()}`;
 };
+
+export type CreateCashbookTransactionTypeResult = {
+  ok: boolean;
+  message: string;
+  transactionType?: {
+    id: string;
+    nameEn: string;
+    nameBn: string;
+    balanceEffect: "income" | "expense";
+  };
+};
+
+export async function createCashbookTransactionTypeAction(
+  form: FormData,
+): Promise<CreateCashbookTransactionTypeResult> {
+  const { profile } = await requireProfile(["admin"]);
+  try {
+    const input = normalizeCashbookTransactionTypeInput({
+      nameEn: form.get("name_en"),
+      nameBn: form.get("name_bn"),
+      balanceEffect: form.get("balance_effect"),
+    });
+    const { data, error } = await createSupabaseAdminClient().rpc(
+      "create_cashbook_transaction_type",
+      {
+        actor_profile_id: profile.id,
+        requested_name_en: input.nameEn,
+        requested_name_bn: input.nameBn,
+        requested_balance_effect: input.balanceEffect,
+      },
+    );
+    if (error) throw error;
+    const id = String(data ?? "");
+    if (!id) throw new Error("Unable to create the transaction type.");
+    revalidatePath(path);
+    return {
+      ok: true,
+      message: "Transaction type created successfully.",
+      transactionType: { id, ...input },
+    };
+  } catch (error) {
+    console.error("Cashbook transaction type creation failed", {
+      message: error instanceof Error ? error.message : "Unknown error",
+    });
+    const message = error instanceof Error && /transaction type|english|bangla|income|expense|already exists|character/i.test(error.message)
+      ? error.message
+      : "Unable to create the transaction type.";
+    return { ok: false, message };
+  }
+}
 
 export async function setCashbookOpeningBalanceAction(form: FormData) {
   const { profile } = await requireAnyPermission(cashbookEditPermissions);
@@ -71,14 +122,14 @@ export async function createCashbookDescriptionAction(form: FormData) {
   const selectedDate = normalizeCashbookDate(form.get("cashbook_date"));
   let failure: string | null = null;
   try {
-    const input = normalizeCashbookDescriptionInput({
+    const input = normalizeCashbookDescriptionTypeInput({
       name: form.get("name"),
-      transactionType: form.get("transaction_type"),
+      transactionTypeId: form.get("transaction_type_id"),
     });
-    const { error } = await createSupabaseAdminClient().rpc("create_cashbook_description", {
+    const { error } = await createSupabaseAdminClient().rpc("create_cashbook_description_with_type", {
       actor_profile_id: profile.id,
       requested_name: input.name,
-      requested_transaction_type: input.transactionType,
+      requested_transaction_type_id: input.transactionTypeId,
     });
     if (error) throw error;
   } catch (error) {

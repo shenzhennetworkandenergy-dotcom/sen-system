@@ -6,7 +6,7 @@ export async function getAccountingDashboard(selectedDate: string, options: { in
   const db = createSupabaseAdminClient();
   const includeLedger = options.includeLedger ?? true;
   const emptyResult = Promise.resolve({ data: [], error: null });
-  const [accounts, entries, lines, cashbookDays, cashbookDescriptions, cashbookEntries] = await Promise.all([
+  const [accounts, entries, lines, cashbookDays, cashbookTransactionTypes, cashbookDescriptions, cashbookEntries] = await Promise.all([
     includeLedger ? db.from("accounting_accounts").select("id,code,name,account_type,currency,is_active").order("code") : emptyResult,
     includeLedger ? db.from("journal_entries").select("id,entry_number,entry_date,description,status,currency,reference_type,posted_at,created_at").order("entry_date", { ascending: false }).limit(100) : emptyResult,
     includeLedger ? db.from("journal_lines").select("journal_entry_id,debit,credit") : emptyResult,
@@ -16,13 +16,14 @@ export async function getAccountingDashboard(selectedDate: string, options: { in
       .or(`business_date.eq.${selectedDate},is_closed.eq.true`)
       .order("business_date", { ascending: false })
       .limit(1),
-    db.from("cashbook_descriptions").select("id,name,transaction_type,is_active").eq("is_active", true).order("transaction_type").order("name"),
+    db.from("cashbook_transaction_types").select("id,name_en,name_bn,balance_effect,is_active,sort_order").eq("is_active", true).order("sort_order").order("name_en"),
+    db.from("cashbook_descriptions").select("id,name,transaction_type,transaction_type_id,is_active").eq("is_active", true).order("transaction_type").order("name"),
     db.from("cashbook_entries")
       .select("id,transaction_type,amount,payment_method,transaction_at,business_date,journal_entry_id,remark,cashbook_descriptions(name)")
       .eq("business_date", selectedDate)
       .order("transaction_at", { ascending: false }),
   ]);
-  const error = accounts.error ?? entries.error ?? lines.error ?? cashbookDays.error ?? cashbookDescriptions.error ?? cashbookEntries.error;
+  const error = accounts.error ?? entries.error ?? lines.error ?? cashbookDays.error ?? cashbookTransactionTypes.error ?? cashbookDescriptions.error ?? cashbookEntries.error;
   if (error) throw new Error("Unable to load accounting data.");
   const totals = new Map<string, { debit: number; credit: number }>();
   for (const line of lines.data ?? []) {
@@ -62,9 +63,16 @@ export async function getAccountingDashboard(selectedDate: string, options: { in
     entries: (entries.data ?? []).map((entry) => ({ ...entry, ...(totals.get(entry.id) ?? { debit: 0, credit: 0 }) })),
     cashbook: {
       selectedDate,
+      transactionTypes: (cashbookTransactionTypes.data ?? []).map((transactionType) => ({
+        id: transactionType.id,
+        nameEn: transactionType.name_en,
+        nameBn: transactionType.name_bn,
+        balanceEffect: transactionType.balance_effect as "income" | "expense",
+      })),
       descriptions: (cashbookDescriptions.data ?? []).map((description) => ({
         id: description.id,
         name: description.name,
+        transactionTypeId: description.transaction_type_id,
         transactionType: description.transaction_type as "income" | "expense",
       })),
       entries: dailyEntries,

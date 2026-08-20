@@ -32,7 +32,18 @@ test("only admins can see or call cashbook description creation", async () => {
   );
 
   assert.match(page, /canCreateDescription=\{profile\.role === "admin"\}/);
-  assert.match(component, /\{canCreateDescription \? <div className="mt-5 flex justify-end">/);
+  assert.match(component, /\{canCreateDescription \? <>/);
   assert.match(descriptionAction, /requireProfile\(\["admin"\]\)/);
   assert.doesNotMatch(descriptionAction, /requireAnyPermission/);
+});
+
+test("only admins can create dynamic cashbook transaction types", async () => {
+  const actions = await readFile("app/admin/accounting/actions.ts", "utf8");
+  const transactionTypeAction = actions.slice(
+    actions.indexOf("export async function createCashbookTransactionTypeAction"),
+    actions.indexOf("export async function setCashbookOpeningBalanceAction"),
+  );
+
+  assert.match(transactionTypeAction, /requireProfile\(\["admin"\]\)/);
+  assert.doesNotMatch(transactionTypeAction, /requireAnyPermission/);
 });

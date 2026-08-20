@@ -1,19 +1,31 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition, type FormEvent } from "react";
 import {
   closeCashbookDayAction,
   createCashbookDescriptionAction,
   createCashbookEntryAction,
+  createCashbookTransactionTypeAction,
   setCashbookOpeningBalanceAction,
 } from "@/app/admin/accounting/actions";
 
-type TransactionType = "income" | "expense";
+type BalanceEffect = "income" | "expense";
 type PaymentMethod = "cash" | "bank" | "mfs";
-type Description = { id: string; name: string; transactionType: TransactionType };
+type TransactionType = {
+  id: string;
+  nameEn: string;
+  nameBn: string;
+  balanceEffect: BalanceEffect;
+};
+type Description = {
+  id: string;
+  name: string;
+  transactionTypeId: string;
+  transactionType: BalanceEffect;
+};
 type Entry = {
   id: string;
-  transactionType: TransactionType;
+  transactionType: BalanceEffect;
   amount: number;
   paymentMethod: PaymentMethod;
   transactionAt: string;
@@ -24,7 +36,8 @@ type Entry = {
 const field = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-blue-600 focus:ring-2 focus:ring-blue-100";
 const paymentMethods: PaymentMethod[] = ["cash", "bank", "mfs"];
 const paymentLabels: Record<PaymentMethod, string> = { cash: "Cash (ক্যাশ)", bank: "Bank (ব্যাংক)", mfs: "MFS (বিকাশ/নগদ)" };
-const typeLabels: Record<TransactionType, string> = { income: "Income (আয়)", expense: "Expense (ব্যয়)" };
+const transactionTypeLabel = (transactionType: TransactionType) =>
+  `${transactionType.nameEn} (${transactionType.nameBn})`;
 const money = (value: number) => {
   const [whole, decimal] = Number(value || 0).toFixed(2).split(".");
   return `৳ ${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",")}.${decimal}`;
@@ -40,6 +53,7 @@ export function QuickCashbook({
   selectedDate,
   defaultOccurredAt,
   statementGeneratedAt,
+  transactionTypes,
   descriptions,
   entries,
   summary,
@@ -50,6 +64,7 @@ export function QuickCashbook({
   selectedDate: string;
   defaultOccurredAt: string;
   statementGeneratedAt: string;
+  transactionTypes: TransactionType[];
   descriptions: Description[];
   entries: Entry[];
   summary: { opening: number; income: number; expense: number; net: number; closing: number };
@@ -57,13 +72,33 @@ export function QuickCashbook({
   canCreate: boolean;
   canCreateDescription: boolean;
 }) {
-  const [transactionType, setTransactionType] = useState<TransactionType>("income");
+  const [availableTransactionTypes, setAvailableTransactionTypes] = useState(transactionTypes);
+  const [transactionTypeId, setTransactionTypeId] = useState(transactionTypes[0]?.id ?? "");
+  const [isTypeModalOpen, setIsTypeModalOpen] = useState(false);
+  const [typeMessage, setTypeMessage] = useState("");
+  const [isCreatingType, startCreatingType] = useTransition();
   const filteredDescriptions = useMemo(
-    () => descriptions.filter((description) => description.transactionType === transactionType),
-    [descriptions, transactionType],
+    () => descriptions.filter((description) => description.transactionTypeId === transactionTypeId),
+    [descriptions, transactionTypeId],
   );
   const incomeEntries = entries.filter((entry) => entry.transactionType === "income");
   const expenseEntries = entries.filter((entry) => entry.transactionType === "expense");
+
+  function handleTransactionTypeSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    setTypeMessage("");
+    startCreatingType(async () => {
+      const result = await createCashbookTransactionTypeAction(formData);
+      setTypeMessage(result.message);
+      if (!result.ok || !result.transactionType) return;
+      setAvailableTransactionTypes((current) => [...current, result.transactionType!]);
+      setTransactionTypeId(result.transactionType.id);
+      form.reset();
+      setIsTypeModalOpen(false);
+    });
+  }
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm sm:p-6">
@@ -131,24 +166,33 @@ export function QuickCashbook({
 
       {canCreate ? (
         <div className="print:hidden">
-          {canCreateDescription ? <div className="mt-5 flex justify-end">
-            <details className="group w-full rounded-xl border bg-white p-3 sm:w-auto sm:min-w-[30rem]">
-              <summary className="cursor-pointer list-none rounded-lg bg-slate-800 px-4 py-2.5 text-center text-sm font-bold text-white hover:bg-slate-900">+ Create খাত/বিবরণ</summary>
-              <form action={createCashbookDescriptionAction} className="mt-3 grid gap-3 sm:grid-cols-[1fr_1.4fr_auto]">
-                <input type="hidden" name="cashbook_date" value={selectedDate} />
-                <label className="text-xs font-bold">Type
-                  <select name="transaction_type" className={field} required>
-                    <option value="income">{typeLabels.income}</option>
-                    <option value="expense">{typeLabels.expense}</option>
-                  </select>
-                </label>
-                <label className="text-xs font-bold">খাত/বিবরণ
-                  <input name="name" minLength={2} maxLength={160} placeholder="e.g. Sales, Office rent" className={field} required />
-                </label>
-                <button className="self-end rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-bold text-white">Create</button>
-              </form>
-            </details>
-          </div> : null}
+          {canCreateDescription ? <>
+            <div className="mt-5 flex flex-wrap justify-end gap-3">
+              <details className="group w-full rounded-xl border bg-white p-3 sm:w-auto sm:min-w-[30rem]">
+                <summary className="cursor-pointer list-none rounded-lg bg-slate-800 px-4 py-2.5 text-center text-sm font-bold text-white hover:bg-slate-900">+ Create খাত/বিবরণ</summary>
+                <form action={createCashbookDescriptionAction} className="mt-3 grid gap-3 sm:grid-cols-[1fr_1.4fr_auto]">
+                  <input type="hidden" name="cashbook_date" value={selectedDate} />
+                  <label className="text-xs font-bold">Type
+                    <select name="transaction_type_id" className={field} required>
+                      {availableTransactionTypes.map((type) => <option key={type.id} value={type.id}>{transactionTypeLabel(type)}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-xs font-bold">খাত/বিবরণ
+                    <input name="name" minLength={2} maxLength={160} placeholder="e.g. Sales, Office rent" className={field} required />
+                  </label>
+                  <button disabled={!availableTransactionTypes.length} className="self-end rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">Create</button>
+                </form>
+              </details>
+              <button
+                type="button"
+                onClick={() => { setTypeMessage(""); setIsTypeModalOpen(true); }}
+                className="w-full self-start rounded-xl border bg-white p-3 text-sm font-bold sm:w-auto"
+              >
+                <span className="block rounded-lg bg-slate-800 px-4 py-2.5 text-white hover:bg-slate-900">+ Create Transaction Type</span>
+              </button>
+            </div>
+            {typeMessage ? <p className="mt-2 text-right text-sm font-semibold text-slate-700" aria-live="polite">{typeMessage}</p> : null}
+          </> : null}
 
           {day.isClosed ? (
             <p className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-center font-bold text-amber-900">This cashbook day is closed. Its statement is locked for audit.</p>
@@ -156,9 +200,8 @@ export function QuickCashbook({
             <form action={createCashbookEntryAction} className="mt-4 grid gap-3 rounded-xl border border-slate-200 bg-white p-4 md:grid-cols-2 xl:grid-cols-[1.1fr_1.4fr_1fr_1.2fr_1.2fr_auto]">
               <input type="hidden" name="cashbook_date" value={selectedDate} />
               <label className="text-xs font-bold">Transaction type
-                <select value={transactionType} onChange={(event) => setTransactionType(event.target.value as TransactionType)} className={field}>
-                  <option value="income">{typeLabels.income}</option>
-                  <option value="expense">{typeLabels.expense}</option>
+                <select value={transactionTypeId} onChange={(event) => setTransactionTypeId(event.target.value)} className={field}>
+                  {availableTransactionTypes.map((type) => <option key={type.id} value={type.id}>{transactionTypeLabel(type)}</option>)}
                 </select>
               </label>
               <label className="text-xs font-bold">খাত/বিবরণ
@@ -191,6 +234,44 @@ export function QuickCashbook({
               </form>
             ) : null}
           </div>
+        </div>
+      ) : null}
+
+      {isTypeModalOpen ? (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/60 p-4 print:hidden" role="presentation">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cashbook-transaction-type-title"
+            className="max-h-[calc(100vh-2rem)] w-full max-w-xl overflow-y-auto rounded-2xl border border-slate-200 bg-white p-5 text-slate-950 shadow-2xl sm:p-6"
+          >
+            <header className="flex items-start justify-between gap-4">
+              <div>
+                <h3 id="cashbook-transaction-type-title" className="text-xl font-black">Create Transaction Type</h3>
+                <p className="mt-1 text-sm text-slate-600">Add a reusable type to the Quick Cashbook dropdown.</p>
+              </div>
+              <button type="button" onClick={() => setIsTypeModalOpen(false)} aria-label="Close transaction type dialog" className="rounded-lg border px-3 py-1.5 text-lg font-bold">×</button>
+            </header>
+            <form onSubmit={handleTransactionTypeSubmit} className="mt-5 grid gap-4">
+              <label className="text-sm font-bold">Transaction Type Name (English)
+                <input name="name_en" minLength={2} maxLength={80} placeholder="e.g. Receivable" className={field} required autoFocus />
+              </label>
+              <label className="text-sm font-bold">Transaction Type Name (Bangla)
+                <input name="name_bn" minLength={2} maxLength={80} placeholder="e.g. পাওনা" className={field} required />
+              </label>
+              <label className="text-sm font-bold">Cash Flow Effect
+                <select name="balance_effect" className={field} required>
+                  <option value="income">Income — adds to cash</option>
+                  <option value="expense">Expense — subtracts from cash</option>
+                </select>
+                <span className="mt-1 block text-xs font-normal text-slate-600">This preserves the existing income, expense, ledger, and closing-balance calculations.</span>
+              </label>
+              {typeMessage ? <p className="rounded-lg bg-slate-100 p-3 text-sm font-semibold" aria-live="polite">{typeMessage}</p> : null}
+              <button disabled={isCreatingType} className="rounded-lg bg-blue-700 px-4 py-3 text-sm font-bold text-white disabled:opacity-50">
+                {isCreatingType ? "Saving…" : "Save Transaction Type"}
+              </button>
+            </form>
+          </section>
         </div>
       ) : null}
 

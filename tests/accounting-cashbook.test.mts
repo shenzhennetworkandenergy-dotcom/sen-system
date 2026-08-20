@@ -4,12 +4,54 @@ import {
   getBusinessDate,
   getBusinessDateTimeLocal,
   normalizeCashbookDate,
+  normalizeCashbookDescriptionTypeInput,
   normalizeCashbookDescriptionInput,
   normalizeCashbookEntryInput,
+  normalizeCashbookTransactionTypeInput,
   normalizeOpeningBalance,
   summarizeCashbookEntries,
   toCashbookTimestamp,
 } from "../lib/accounting/cashbook.ts";
+
+test("normalizes dynamic cashbook transaction type names and balance effect", () => {
+  assert.deepEqual(
+    normalizeCashbookTransactionTypeInput({
+      nameEn: "  Receivable  ",
+      nameBn: "  পাওনা  ",
+      balanceEffect: "INCOME",
+    }),
+    { nameEn: "Receivable", nameBn: "পাওনা", balanceEffect: "income" },
+  );
+  assert.throws(
+    () => normalizeCashbookTransactionTypeInput({ nameEn: "R", nameBn: "পাওনা", balanceEffect: "income" }),
+    /english transaction type/i,
+  );
+  assert.throws(
+    () => normalizeCashbookTransactionTypeInput({ nameEn: "Receivable", nameBn: "প", balanceEffect: "income" }),
+    /bangla transaction type/i,
+  );
+  assert.throws(
+    () => normalizeCashbookTransactionTypeInput({ nameEn: "Adjustment", nameBn: "সমন্বয়", balanceEffect: "neutral" }),
+    /income or expense/i,
+  );
+});
+
+test("links a cashbook description to a stored transaction type id", () => {
+  assert.deepEqual(
+    normalizeCashbookDescriptionTypeInput({
+      name: "  Customer receivable  ",
+      transactionTypeId: "54a8100e-4e70-42d6-951a-656b7d32a071",
+    }),
+    {
+      name: "Customer receivable",
+      transactionTypeId: "54a8100e-4e70-42d6-951a-656b7d32a071",
+    },
+  );
+  assert.throws(
+    () => normalizeCashbookDescriptionTypeInput({ name: "Customer receivable", transactionTypeId: "income" }),
+    /valid transaction type/i,
+  );
+});
 
 test("normalizes a reusable income or expense description", () => {
   assert.deepEqual(
