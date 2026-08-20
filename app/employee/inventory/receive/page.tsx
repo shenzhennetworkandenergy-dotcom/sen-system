@@ -21,6 +21,10 @@ type PurchaseOrderRow = {
   order_number: string;
   suppliers: { name: string } | null;
   warehouses: { name: string; code: string } | null;
+  purchase_inbound_shipments: {
+    carrier_name: string | null;
+    tracking_number: string | null;
+  } | null;
   purchase_order_items: PurchaseItem[];
 };
 
@@ -38,7 +42,7 @@ export default async function EmployeePurchaseStockReceiptPage({
   const query = createSupabaseAdminClient()
     .from("purchase_orders")
     .select(
-      "id,order_number,status,updated_at,suppliers(name),warehouses:destination_warehouse_id(name,code),purchase_order_items(id,quantity_ordered,quantity_received,quantity_rejected,product_name_snapshot)",
+      "id,order_number,status,updated_at,suppliers(name),warehouses:destination_warehouse_id(name,code),purchase_inbound_shipments(carrier_name,tracking_number),purchase_order_items(id,quantity_ordered,quantity_received,quantity_rejected,product_name_snapshot)",
     )
     .in("status", ["received", "partially_received"]);
   const { data, error } = warehouseId
@@ -104,6 +108,22 @@ export default async function EmployeePurchaseStockReceiptPage({
                       ? `${order.warehouses.name} (${order.warehouses.code})`
                       : "Destination warehouse"}
                   </p>
+                  <dl className="mt-2 space-y-1 text-sm">
+                    <div className="flex flex-wrap gap-x-2">
+                      <dt className="font-semibold">Carrier:</dt>
+                      <dd>
+                        {order.purchase_inbound_shipments?.carrier_name ??
+                          "Not provided"}
+                      </dd>
+                    </div>
+                    <div className="flex flex-wrap gap-x-2">
+                      <dt className="font-semibold">Tracking Number:</dt>
+                      <dd>
+                        {order.purchase_inbound_shipments?.tracking_number ??
+                          "Not provided"}
+                      </dd>
+                    </div>
+                  </dl>
                 </div>
                 <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-900">
                   {order.remaining} unit(s) remaining
