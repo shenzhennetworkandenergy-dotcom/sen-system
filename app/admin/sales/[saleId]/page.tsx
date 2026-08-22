@@ -1,12 +1,14 @@
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
 import { randomUUID } from "node:crypto";
+import Link from "next/link";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { SaleLineEditor } from "@/components/sales/SaleLineEditor";
 import { requireAnyPermission } from "@/lib/auth/permissions";
 import { dateTime, label, money } from "@/lib/orders/types";
 import { getSale } from "@/lib/sales/data";
+import { getAuthorizedPhysicalReturnLinks } from "@/lib/inventory/rma-return-data";
 import {
   cancelSaleAction,
   confirmSaleAction,
@@ -82,6 +84,13 @@ export default async function SaleDetail({
     (document) =>
       document.document_type === "invoice" && document.status === "superseded",
   );
+  const returnReceiptClaims = profile.role === "employee" && permissions.has("rma.receive")
+    ? await getAuthorizedPhysicalReturnLinks(
+        profile.id,
+        saleId,
+        order.fulfillment_warehouse_id,
+      )
+    : [];
 
   return (
     <DashboardShell
@@ -294,6 +303,7 @@ export default async function SaleDetail({
             <div className="mt-3 flex flex-wrap gap-2">
               <form action={generateSaleDocumentAction.bind(null, saleId, "invoice")}>
                 <input type="hidden" name="operation_id" value={invoiceOperationId} />
+                <input type="hidden" name="request_version" value={stockOutRequest?.version ?? 0} />
                 <button className="rounded-lg bg-[var(--primary)] px-4 py-2 font-semibold text-[var(--primary-foreground)]">
                   {hasSupersededInvoice ? "Generate Revised Invoice" : "Generate Invoice"}
                 </button>
@@ -318,6 +328,25 @@ export default async function SaleDetail({
               ) : null}
             </div>
           </article>
+          {returnReceiptClaims.length ? (
+            <article className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+              <h2 className="font-bold text-amber-950">Physical customer returns</h2>
+              <p className="mt-1 text-sm text-amber-900">
+                Confirm only products that have physically arrived back at your assigned warehouse.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {returnReceiptClaims.map((claim) => (
+                  <Link
+                    key={claim.id}
+                    href={`/employee/rma/${claim.id}/receive`}
+                    className="rounded-lg bg-amber-700 px-4 py-2 font-semibold text-white"
+                  >
+                    Receive {claim.rmaNumber} · {claim.quantityRemaining} remaining
+                  </Link>
+                ))}
+              </div>
+            </article>
+          ) : null}
         </div>
 
         <aside className="space-y-3">

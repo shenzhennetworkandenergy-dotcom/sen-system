@@ -147,8 +147,14 @@ export async function generateSaleDocumentAction(saleId: string, type: "invoice"
   let result;
   if (type === "invoice") {
     let operationId: string;
+    let requestVersion: number;
     try {
       operationId = uuid(form.get("operation_id"), "Invoice finalization operation");
+      requestVersion = parseWholeNumber(
+        form.get("request_version"),
+        "Stock Out request version",
+        { required: true, minimum: 0 },
+      )!;
     } catch (error) {
       redirect(target(saleId, "error", error instanceof Error ? error.message : "Invoice operation is invalid."));
     }
@@ -156,6 +162,7 @@ export async function generateSaleDocumentAction(saleId: string, type: "invoice"
       actor_profile_id: profile.id,
       requested_order_id: saleId,
       requested_operation_id: operationId,
+      requested_request_version: requestVersion,
     });
   } else {
     result = await db.rpc("generate_sale_document", {

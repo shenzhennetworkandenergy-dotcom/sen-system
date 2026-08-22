@@ -240,7 +240,6 @@ create table if not exists public.sales_stock_out_release_serials (
   previous_status text not null,
   new_status text not null default 'warehouse_released',
   created_at timestamptz not null default now(),
-  constraint sales_stock_out_release_serials_serial_unique unique(serial_number_id),
   constraint sales_stock_out_release_serials_release_serial_unique unique(release_item_id,serial_number_id),
   constraint sales_stock_out_release_serials_status_check check(new_status='warehouse_released')
 );
@@ -294,6 +293,12 @@ create table if not exists public.rma_return_receipt_serials (
   constraint rma_return_receipt_serials_receipt_unique unique(return_receipt_id,serial_number_id),
   constraint rma_return_receipt_serials_original_unique unique(original_release_serial_id)
 );
+
+-- A returned physical serial may later become eligible for a new sale after
+-- the existing RMA/service workflow clears it. Serial row locks plus the active
+-- allocation index and the unreturned-release checks below prevent double use.
+alter table public.sales_stock_out_release_serials
+  drop constraint if exists sales_stock_out_release_serials_serial_unique;
 
 create index if not exists sales_stock_out_requests_queue_idx
   on public.sales_stock_out_requests(warehouse_id,status,updated_at desc);
@@ -369,10 +374,12 @@ alter table public.sales_stock_out_serial_changes enable row level security;
 alter table public.rma_return_receipts enable row level security;
 alter table public.rma_return_receipt_serials enable row level security;
 
+drop policy if exists "authorized warehouse reads stock out requests" on public.sales_stock_out_requests;
 create policy "authorized warehouse reads stock out requests"
   on public.sales_stock_out_requests for select to authenticated
   using(public.can_access_stock_out_warehouse(warehouse_id));
 
+drop policy if exists "authorized warehouse reads stock out request items" on public.sales_stock_out_request_items;
 create policy "authorized warehouse reads stock out request items"
   on public.sales_stock_out_request_items for select to authenticated
   using(exists(
@@ -381,6 +388,7 @@ create policy "authorized warehouse reads stock out request items"
       and public.can_access_stock_out_warehouse(request.warehouse_id)
   ));
 
+drop policy if exists "authorized warehouse reads stock out revisions" on public.sales_stock_out_request_revisions;
 create policy "authorized warehouse reads stock out revisions"
   on public.sales_stock_out_request_revisions for select to authenticated
   using(exists(
@@ -389,6 +397,7 @@ create policy "authorized warehouse reads stock out revisions"
       and public.can_access_stock_out_warehouse(request.warehouse_id)
   ));
 
+drop policy if exists "authorized warehouse reads stock out revision items" on public.sales_stock_out_request_revision_items;
 create policy "authorized warehouse reads stock out revision items"
   on public.sales_stock_out_request_revision_items for select to authenticated
   using(exists(
@@ -399,10 +408,12 @@ create policy "authorized warehouse reads stock out revision items"
       and public.can_access_stock_out_warehouse(request.warehouse_id)
   ));
 
+drop policy if exists "authorized warehouse reads stock out releases" on public.sales_stock_out_releases;
 create policy "authorized warehouse reads stock out releases"
   on public.sales_stock_out_releases for select to authenticated
   using(public.can_access_stock_out_warehouse(warehouse_id));
 
+drop policy if exists "authorized warehouse reads stock out release items" on public.sales_stock_out_release_items;
 create policy "authorized warehouse reads stock out release items"
   on public.sales_stock_out_release_items for select to authenticated
   using(exists(
@@ -411,6 +422,7 @@ create policy "authorized warehouse reads stock out release items"
       and public.can_access_stock_out_warehouse(release.warehouse_id)
   ));
 
+drop policy if exists "authorized warehouse reads stock out release serials" on public.sales_stock_out_release_serials;
 create policy "authorized warehouse reads stock out release serials"
   on public.sales_stock_out_release_serials for select to authenticated
   using(exists(
@@ -421,6 +433,7 @@ create policy "authorized warehouse reads stock out release serials"
       and public.can_access_stock_out_warehouse(release.warehouse_id)
   ));
 
+drop policy if exists "authorized warehouse reads stock out serial changes" on public.sales_stock_out_serial_changes;
 create policy "authorized warehouse reads stock out serial changes"
   on public.sales_stock_out_serial_changes for select to authenticated
   using(exists(
@@ -431,10 +444,12 @@ create policy "authorized warehouse reads stock out serial changes"
       and public.can_access_stock_out_warehouse(request.warehouse_id)
   ));
 
+drop policy if exists "authorized warehouse reads RMA return receipts" on public.rma_return_receipts;
 create policy "authorized warehouse reads RMA return receipts"
   on public.rma_return_receipts for select to authenticated
   using(public.can_receive_rma_at_warehouse(warehouse_id));
 
+drop policy if exists "authorized warehouse reads RMA return receipt serials" on public.rma_return_receipt_serials;
 create policy "authorized warehouse reads RMA return receipt serials"
   on public.rma_return_receipt_serials for select to authenticated
   using(exists(
@@ -519,10 +534,291 @@ create trigger sale_documents_mark_stock_out_revision_pending
 after update of status on public.sale_documents
 for each row execute function public.mark_stock_out_invoice_revision_pending();
 
+-- Saving a commercial revision never mutates inventory. Reservation and serial
+-- allocation reconciliation happen only in finalize_sale_invoice below.
+create or replace function public.update_sale_lines(
+  actor_profile_id uuid,
+  requested_order_id uuid,
+  requested_reason text,
+  requested_items jsonb
+) returns void
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  sale public.sales_orders%rowtype;
+  current_item public.sales_order_items%rowtype;
+  entry jsonb;
+  item_count integer;
+  request_count integer;
+  distinct_request_count integer;
+  new_quantity numeric;
+  new_unit_price numeric;
+  new_discount_type text;
+  new_discount_value numeric;
+  new_subtotal numeric;
+  new_discount numeric;
+  new_total numeric;
+  physically_released_quantity numeric;
+  revised_subtotal numeric;
+  revised_line_total numeric;
+  revised_total numeric;
+  reason text;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'sales.edit');
+  reason:=nullif(left(trim(coalesce(requested_reason,'')),500),'');
+  if reason is null then raise exception 'Edit reason is required'; end if;
+  if jsonb_typeof(requested_items)<>'array' then raise exception 'Sale items are invalid'; end if;
+
+  select * into sale from public.sales_orders
+  where id=requested_order_id for update;
+  if sale.id is null then raise exception 'Sale not found'; end if;
+  if sale.status in('delivered','cancelled') then
+    raise exception 'A delivered or cancelled sale cannot be edited';
+  end if;
+
+  select count(*) into item_count from public.sales_order_items where order_id=sale.id;
+  select count(*),count(distinct value->>'id')
+  into request_count,distinct_request_count
+  from jsonb_array_elements(requested_items);
+  if request_count<>item_count or distinct_request_count<>item_count then
+    raise exception 'Every sale item must be submitted exactly once';
+  end if;
+
+  for entry in select value from jsonb_array_elements(requested_items)
+  loop
+    select * into current_item from public.sales_order_items
+    where id=(entry->>'id')::uuid and order_id=sale.id for update;
+    if current_item.id is null then raise exception 'Sale item not found'; end if;
+
+    select coalesce(stock_item.released_quantity,0)
+    into physically_released_quantity
+    from public.sales_stock_out_request_items stock_item
+    join public.sales_stock_out_requests stock_request on stock_request.id=stock_item.request_id
+    where stock_request.sales_order_id=sale.id
+      and stock_item.sales_order_item_id=current_item.id
+    for update of stock_item;
+    physically_released_quantity:=coalesce(physically_released_quantity,0);
+
+    new_quantity:=(entry->>'quantity')::numeric;
+    new_unit_price:=round((entry->>'unit_price')::numeric,2);
+    new_discount_type:=entry->>'discount_type';
+    new_discount_value:=round((entry->>'discount_value')::numeric,2);
+    if new_quantity<1 or new_quantity<>trunc(new_quantity) then
+      raise exception 'Quantity must be a whole number of at least 1';
+    end if;
+    if new_quantity<greatest(
+      current_item.shipped_quantity,current_item.delivered_quantity,
+      physically_released_quantity
+    ) then
+      if new_quantity<physically_released_quantity then
+        raise exception 'Invoice quantity cannot be lower than % unit(s) already physically released for %',
+          physically_released_quantity,current_item.product_name_snapshot;
+      end if;
+      raise exception 'Quantity cannot be reduced below fulfilled units';
+    end if;
+    if new_unit_price<0 then raise exception 'Unit price cannot be negative'; end if;
+    if new_discount_type not in('percentage','fixed') or new_discount_value<0
+      or (new_discount_type='percentage' and new_discount_value>100)
+    then raise exception 'Discount is invalid'; end if;
+
+    new_subtotal:=round(new_quantity*new_unit_price,2);
+    new_discount:=case when new_discount_type='percentage'
+      then round(new_subtotal*new_discount_value/100,2) else new_discount_value end;
+    if new_discount>new_subtotal then raise exception 'Fixed discount cannot exceed the line subtotal'; end if;
+    new_total:=round(new_subtotal-new_discount+current_item.line_tax,2);
+
+    if new_unit_price<>current_item.unit_price then
+      perform public.assert_actor_permission(actor_profile_id,'sales.change_price');
+      insert into public.sale_price_adjustments(
+        order_id,order_item_id,adjustment_type,previous_value,new_value,reason,actor_profile_id
+      ) values(
+        sale.id,current_item.id,'manual_unit_price',current_item.unit_price,
+        new_unit_price,reason,actor_profile_id
+      );
+    end if;
+    if new_discount<>current_item.line_discount
+      or new_discount_type<>current_item.discount_type
+      or new_discount_value<>current_item.discount_value
+    then
+      perform public.assert_actor_permission(actor_profile_id,'sales.apply_discount');
+      insert into public.sale_price_adjustments(
+        order_id,order_item_id,adjustment_type,previous_value,new_value,reason,actor_profile_id
+      ) values(
+        sale.id,current_item.id,
+        case when new_discount_type='percentage' then 'percentage_discount' else 'fixed_line_discount' end,
+        current_item.line_discount,
+        case when new_discount_type='percentage' then new_discount_value else new_discount end,
+        reason,actor_profile_id
+      );
+    end if;
+
+    if new_quantity<>current_item.quantity then
+      insert into public.sale_price_adjustments(
+        order_id,order_item_id,adjustment_type,previous_value,new_value,reason,actor_profile_id
+      ) values(
+        sale.id,current_item.id,'quantity_change',current_item.quantity,
+        new_quantity,reason,actor_profile_id
+      );
+
+    end if;
+
+    update public.sales_order_items set
+      quantity=new_quantity,unit_price=new_unit_price,line_subtotal=new_subtotal,
+      line_discount=new_discount,line_total=new_total,discount_type=new_discount_type,
+      discount_value=new_discount_value,updated_at=now()
+    where id=current_item.id;
+  end loop;
+
+  select coalesce(sum(line_subtotal),0),coalesce(sum(line_total),0)
+  into revised_subtotal,revised_line_total
+  from public.sales_order_items where order_id=sale.id;
+  revised_total:=round(
+    revised_line_total-sale.discount_amount+sale.shipping_amount+
+    sale.service_amount+sale.tax_amount,2
+  );
+  if revised_total<0 then raise exception 'Sale total cannot be negative'; end if;
+  if revised_total<sale.paid_amount then
+    raise exception 'Sale total cannot be lower than the amount already paid';
+  end if;
+
+  update public.sales_orders set subtotal=revised_subtotal,total_amount=revised_total,
+    payment_status=case
+      when paid_amount=0 then 'unpaid'
+      when paid_amount<revised_total then 'partially_paid'
+      when paid_amount=revised_total then 'paid'
+      else 'overpaid' end,
+    updated_by=actor_profile_id,updated_at=now()
+  where id=sale.id;
+  -- Preserve the last valid finalized invoice. The replacement invoice and its
+  -- supersession happen together inside finalize_sale_invoice. Until then,
+  -- block physical release because the saved commercial edit is not final.
+  update public.sales_stock_out_requests
+  set invoice_revision_pending=true,updated_at=now(),version=version+1
+  where sales_order_id=sale.id and status<>'cancelled';
+  perform public.derive_sales_order_status(sale.id);
+end $$;
+
+revoke all on function public.update_sale_lines(uuid,uuid,text,jsonb)
+  from public,anon,authenticated;
+grant execute on function public.update_sale_lines(uuid,uuid,text,jsonb)
+  to service_role;
+
+-- Keep upstream allocation aligned with Stock Out eligibility. An ineligible
+-- physical unit must never be assigned and deferred to a later release error.
+create or replace function public.allocate_order_serials(
+  actor_profile_id uuid,
+  requested_order_item_id uuid,
+  requested_serial_ids uuid[],
+  requested_method text default 'manual'
+) returns integer
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  item public.sales_order_items%rowtype;
+  sale public.sales_orders%rowtype;
+  serial_id uuid;
+  serial public.serial_numbers%rowtype;
+  remaining integer;
+  added integer:=0;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'orders.allocate');
+  select * into item from public.sales_order_items
+  where id=requested_order_item_id for update;
+  if item.id is null then raise exception 'Order item not found'; end if;
+  select * into sale from public.sales_orders where id=item.order_id for update;
+  if not item.serial_tracking_required_snapshot then
+    raise exception 'Item does not require serial allocation';
+  end if;
+  if sale.status in('draft','cancelled','shipped','delivered') then
+    raise exception 'Order is not eligible for allocation';
+  end if;
+  remaining:=(item.quantity-item.allocated_quantity)::integer;
+  if coalesce(array_length(requested_serial_ids,1),0)=0
+    or array_length(requested_serial_ids,1)>remaining
+  then raise exception 'Select no more than the remaining serial quantity'; end if;
+
+  foreach serial_id in array requested_serial_ids
+  loop
+    select * into serial from public.serial_numbers where id=serial_id for update;
+    if serial.id is null
+      or serial.product_id<>item.product_id
+      or serial.variation_id is distinct from item.variation_id
+      or serial.warehouse_id<>item.fulfillment_warehouse_id
+      or serial.status<>'available'
+      or lower(coalesce(serial.condition,'')) in(
+        'damaged','unavailable','lost','disposed','quarantined'
+      )
+    then raise exception 'Serial is not eligible for this order item'; end if;
+    insert into public.order_serial_allocations(
+      order_id,order_item_id,serial_number_id,warehouse_id,
+      allocation_method,allocated_by
+    ) values(
+      item.order_id,item.id,serial.id,serial.warehouse_id,
+      requested_method,actor_profile_id
+    );
+    update public.serial_numbers set status='allocated',updated_at=now()
+    where id=serial.id;
+    added:=added+1;
+  end loop;
+  update public.sales_order_items
+  set allocated_quantity=allocated_quantity+added,updated_at=now()
+  where id=item.id;
+  perform public.derive_sales_order_status(item.order_id);
+  return added;
+end $$;
+
+create or replace function public.auto_allocate_order_serials(
+  actor_profile_id uuid,
+  requested_order_item_id uuid
+) returns integer
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  item public.sales_order_items%rowtype;
+  ids uuid[];
+  needed integer;
+begin
+  select * into item from public.sales_order_items
+  where id=requested_order_item_id;
+  if item.id is null then raise exception 'Order item not found'; end if;
+  needed:=(item.quantity-item.allocated_quantity)::integer;
+  if needed<=0 then return 0; end if;
+  select array_agg(id order by coalesce(received_at,created_at),created_at)
+  into ids
+  from (
+    select id,received_at,created_at
+    from public.serial_numbers
+    where product_id=item.product_id
+      and variation_id is not distinct from item.variation_id
+      and warehouse_id=item.fulfillment_warehouse_id
+      and status='available'
+      and lower(coalesce(condition,'')) not in(
+        'damaged','unavailable','lost','disposed','quarantined'
+      )
+    order by coalesce(received_at,created_at),created_at
+    limit needed
+    for update skip locked
+  ) eligible;
+  if coalesce(array_length(ids,1),0)<>needed then
+    raise exception 'Not enough eligible serials';
+  end if;
+  return public.allocate_order_serials(
+    actor_profile_id,requested_order_item_id,ids,'auto'
+  );
+end $$;
+
+drop function if exists public.finalize_sale_invoice(uuid,uuid,uuid);
 create or replace function public.finalize_sale_invoice(
   actor_profile_id uuid,
   requested_order_id uuid,
-  requested_operation_id uuid
+  requested_operation_id uuid,
+  requested_request_version bigint
 ) returns uuid
 language plpgsql
 security definer
@@ -533,8 +829,11 @@ declare
   sale_item public.sales_order_items%rowtype;
   balance public.inventory_balances%rowtype;
   reservation public.inventory_reservations%rowtype;
+  allocation public.order_serial_allocations%rowtype;
+  allocation_serial public.serial_numbers%rowtype;
   request_row public.sales_stock_out_requests%rowtype;
   request_item public.sales_stock_out_request_items%rowtype;
+  removed_request_item public.sales_stock_out_request_items%rowtype;
   existing_document_id uuid;
   existing_document_order_id uuid;
   document_id uuid:=gen_random_uuid();
@@ -550,6 +849,9 @@ declare
   current_reservation numeric;
   reservation_delta numeric;
   active_reservation_count integer;
+  excess_allocations integer;
+  cancelled_allocations integer;
+  previous_serial_result_status text;
   preassigned_serial_ids uuid[];
   request_status text;
 begin
@@ -595,6 +897,13 @@ begin
   where request.sales_order_id=sale.id
   for update;
   stock_out_request_id:=request_row.id;
+  if request_row.id is null then
+    if requested_request_version<>0 then
+      raise exception 'This Sales Invoice was updated in another tab. Refresh before finalizing.';
+    end if;
+  elsif requested_request_version is distinct from request_row.version then
+    raise exception 'This Sales Invoice or Stock Out request was updated in another tab. Refresh before finalizing.';
+  end if;
 
   if not exists(select 1 from public.sales_order_items where order_id=sale.id) then
     raise exception 'A finalized invoice must contain at least one product';
@@ -606,6 +915,10 @@ begin
   ) then
     raise exception 'All finalized invoice products must use the sale warehouse';
   end if;
+
+  select coalesce(max(revision_number),0)+1 into next_revision
+  from public.sale_documents
+  where order_id=sale.id and document_type='invoice';
 
   -- Lock, validate, and reconcile every reservation before creating a document.
   for sale_item in
@@ -629,6 +942,70 @@ begin
     end if;
 
     desired_reservation:=sale_item.quantity-item_released_quantity;
+
+    -- Reconcile prepared serial assignments in this same finalization
+    -- transaction. Saving the commercial edit never changes physical state.
+    if sale_item.serial_tracking_required_snapshot then
+      select greatest(count(*)-desired_reservation,0)::integer
+      into excess_allocations
+      from public.order_serial_allocations assigned
+      where assigned.order_item_id=sale_item.id
+        and assigned.status in('active','packed');
+      cancelled_allocations:=0;
+      for allocation in
+        select assigned.*
+        from public.order_serial_allocations assigned
+        where assigned.order_item_id=sale_item.id
+          and assigned.status in('active','packed')
+          and not exists(
+            select 1 from public.shipment_serials prepared
+            where prepared.allocation_id=assigned.id
+          )
+        order by assigned.allocated_at desc,assigned.id desc
+        for update
+      loop
+        exit when cancelled_allocations>=excess_allocations;
+        select * into allocation_serial from public.serial_numbers
+        where id=allocation.serial_number_id for update;
+        previous_serial_result_status:=case lower(coalesce(allocation_serial.condition,''))
+          when 'damaged' then 'damaged'
+          when 'unavailable' then 'unavailable'
+          when 'quarantined' then 'quarantined'
+          when 'lost' then 'lost'
+          when 'disposed' then 'disposed'
+          else case
+            when allocation_serial.status in('reserved','allocated','packed') then 'available'
+            else allocation_serial.status
+          end
+        end;
+        update public.order_serial_allocations
+        set status='cancelled',
+          release_reason='Removed from finalized Sales Invoice revision '||next_revision,
+          released_by=actor_profile_id,released_at=now()
+        where id=allocation.id;
+        update public.serial_numbers
+        set status=previous_serial_result_status,updated_at=now()
+        where id=allocation.serial_number_id;
+        insert into public.serial_number_history(
+          serial_number_id,event_type,previous_status,new_status,
+          previous_warehouse_id,new_warehouse_id,reason,actor_id
+        ) values(
+          allocation.serial_number_id,'invoice_revision_unassigned',
+          allocation_serial.status,previous_serial_result_status,
+          sale_item.fulfillment_warehouse_id,sale_item.fulfillment_warehouse_id,
+          'Removed from finalized Sales Invoice revision '||next_revision,actor_profile_id
+        );
+        cancelled_allocations:=cancelled_allocations+1;
+      end loop;
+      if cancelled_allocations<excess_allocations then
+        raise exception 'Rebuild the prepared shipment before reducing this serialized invoice quantity';
+      end if;
+    end if;
+    update public.sales_order_items
+    set allocated_quantity=least(allocated_quantity,sale_item.quantity),
+      packed_quantity=least(packed_quantity,sale_item.quantity),updated_at=now()
+    where id=sale_item.id;
+
     select * into balance
     from public.inventory_balances
     where warehouse_id=sale_item.fulfillment_warehouse_id
@@ -684,9 +1061,50 @@ begin
     end if;
   end loop;
 
-  select coalesce(max(revision_number),0)+1 into next_revision
-  from public.sale_documents
-  where order_id=sale.id and document_type='invoice';
+  -- If another approved editor removed a not-yet-released sale line, preserve
+  -- that line in the immutable revision history at quantity zero and release
+  -- only its reservation. A physically released line can never be removed.
+  for removed_request_item in
+    select stock_item.*
+    from public.sales_stock_out_request_items stock_item
+    where stock_item.request_id=stock_out_request_id
+      and not exists(
+        select 1 from public.sales_order_items current_line
+        where current_line.order_id=sale.id
+          and current_line.id=stock_item.sales_order_item_id
+      )
+    order by stock_item.id
+    for update
+  loop
+    if removed_request_item.released_quantity>0 then
+      raise exception 'Invoice product % cannot be removed because % unit(s) were already physically released',
+        removed_request_item.product_name_snapshot,removed_request_item.released_quantity;
+    end if;
+    select * into balance from public.inventory_balances
+    where warehouse_id=removed_request_item.warehouse_id
+      and product_id=removed_request_item.product_id
+      and variation_id is not distinct from removed_request_item.variation_id
+      and location_id is null
+    for update;
+    select * into reservation from public.inventory_reservations
+    where order_item_id=removed_request_item.sales_order_item_id and status='active'
+    for update;
+    if reservation.id is not null then
+      if balance.id is null or balance.reserved<reservation.quantity then
+        raise exception 'Removed invoice product reservation is inconsistent';
+      end if;
+      update public.inventory_balances
+      set reserved=reserved-reservation.quantity,updated_at=now()
+      where id=balance.id;
+      update public.inventory_reservations
+      set status='released',released_at=now(),updated_at=now()
+      where id=reservation.id;
+    end if;
+    update public.sales_stock_out_request_items
+    set required_quantity=0,packed_quantity_snapshot=0,
+      latest_revision_number=next_revision,updated_at=now()
+    where id=removed_request_item.id;
+  end loop;
   invoice_number:='SEN-INV-'||to_char(clock_timestamp(),'YYYYMMDD')||'-'||public.secure_random_digits(6);
   select jsonb_build_object(
     'order',to_jsonb(sale),
@@ -696,12 +1114,12 @@ begin
     'serials',(select coalesce(jsonb_agg(jsonb_build_object(
       'id',serial.id,'sen_serial',serial.sen_serial,
       'manufacturer_serial',serial.manufacturer_serial,'product_id',serial.product_id,
-      'order_item_id',allocation.order_item_id
-    ) order by allocation.allocated_at),'[]'::jsonb)
-      from public.order_serial_allocations allocation
-      join public.serial_numbers serial on serial.id=allocation.serial_number_id
-      where allocation.order_id=sale.id
-        and allocation.status not in('released','cancelled')),
+      'order_item_id',snapshot_allocation.order_item_id
+    ) order by snapshot_allocation.allocated_at),'[]'::jsonb)
+      from public.order_serial_allocations snapshot_allocation
+      join public.serial_numbers serial on serial.id=snapshot_allocation.serial_number_id
+      where snapshot_allocation.order_id=sale.id
+        and snapshot_allocation.status not in('released','cancelled')),
     'generated_at',now(),'revision_number',next_revision
   ) into document_snapshot;
 
@@ -777,11 +1195,11 @@ begin
       latest_revision_number=excluded.latest_revision_number,updated_at=now()
     returning * into request_item;
 
-    select coalesce(array_agg(allocation.serial_number_id order by allocation.allocated_at),'{}'::uuid[])
+    select coalesce(array_agg(revision_allocation.serial_number_id order by revision_allocation.allocated_at),'{}'::uuid[])
     into preassigned_serial_ids
-    from public.order_serial_allocations allocation
-    where allocation.order_item_id=sale_item.id
-      and allocation.status not in('released','cancelled');
+    from public.order_serial_allocations revision_allocation
+    where revision_allocation.order_item_id=sale_item.id
+      and revision_allocation.status not in('released','cancelled');
 
     insert into public.sales_stock_out_request_revision_items(
       revision_id,request_item_id,sales_order_item_id,product_id,variation_id,
@@ -790,6 +1208,24 @@ begin
       request_revision_id,request_item.id,sale_item.id,sale_item.product_id,
       sale_item.variation_id,sale_item.fulfillment_warehouse_id,sale_item.quantity,
       request_item.released_quantity,preassigned_serial_ids
+    );
+  end loop;
+
+  for removed_request_item in
+    select stock_item.*
+    from public.sales_stock_out_request_items stock_item
+    where stock_item.request_id=stock_out_request_id
+      and stock_item.latest_revision_number=next_revision
+      and stock_item.required_quantity=0
+    order by stock_item.id
+  loop
+    insert into public.sales_stock_out_request_revision_items(
+      revision_id,request_item_id,sales_order_item_id,product_id,variation_id,
+      warehouse_id,required_quantity,released_quantity,preassigned_serial_ids
+    ) values(
+      request_revision_id,removed_request_item.id,removed_request_item.sales_order_item_id,
+      removed_request_item.product_id,removed_request_item.variation_id,
+      removed_request_item.warehouse_id,0,0,'{}'::uuid[]
     );
   end loop;
 
@@ -814,6 +1250,34 @@ end $$;
 
 revoke all on function public.mark_stock_out_invoice_revision_pending()
   from public,anon,authenticated;
+revoke all on function public.finalize_sale_invoice(uuid,uuid,uuid,bigint)
+  from public,anon,authenticated;
+grant execute on function public.finalize_sale_invoice(uuid,uuid,uuid,bigint)
+  to service_role;
+
+-- Backward-compatible entry point for an already-open client from before this
+-- additive migration. New clients send the displayed request version above.
+create or replace function public.finalize_sale_invoice(
+  actor_profile_id uuid,
+  requested_order_id uuid,
+  requested_operation_id uuid
+) returns uuid
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  request_version bigint;
+begin
+  select coalesce(request.version,0) into request_version
+  from public.sales_stock_out_requests request
+  where request.sales_order_id=requested_order_id;
+  request_version:=coalesce(request_version,0);
+  return public.finalize_sale_invoice(
+    actor_profile_id,requested_order_id,requested_operation_id,request_version
+  );
+end $$;
+
 revoke all on function public.finalize_sale_invoice(uuid,uuid,uuid)
   from public,anon,authenticated;
 grant execute on function public.finalize_sale_invoice(uuid,uuid,uuid)
@@ -847,6 +1311,7 @@ declare
   selected_serial_ids uuid[];
   selected_serial_id uuid;
   selected_serial_count integer;
+  preassigned_serial_count integer;
   payload_item_count integer;
   release_id uuid:=gen_random_uuid();
   release_item_id uuid;
@@ -1056,7 +1521,15 @@ begin
         then
           raise exception 'SEN Serial % is damaged, unavailable, quarantined, or otherwise ineligible',coalesce(serial.sen_serial,serial.id::text);
         end if;
-        if exists(select 1 from public.sales_stock_out_release_serials released where released.serial_number_id=serial.id) then
+        if exists(
+          select 1
+          from public.sales_stock_out_release_serials released
+          where released.serial_number_id=serial.id
+            and not exists(
+              select 1 from public.rma_return_receipt_serials returned
+              where returned.original_release_serial_id=released.id
+            )
+        ) then
           raise exception 'SEN Serial % has already been physically released',coalesce(serial.sen_serial,serial.id::text);
         end if;
         if exists(
@@ -1068,6 +1541,20 @@ begin
           raise exception 'SEN Serial % is assigned to another transaction',coalesce(serial.sen_serial,serial.id::text);
         end if;
       end loop;
+
+      select count(*) into preassigned_serial_count
+      from public.order_serial_allocations assigned
+      where assigned.order_item_id=request_item.sales_order_item_id
+        and assigned.status in('active','packed');
+      if preassigned_serial_count>0 and (
+        select count(*)
+        from public.order_serial_allocations assigned
+        where assigned.order_item_id=request_item.sales_order_item_id
+          and assigned.status in('active','packed')
+          and assigned.serial_number_id=any(selected_serial_ids)
+      )<>selected_serial_count then
+        raise exception 'Use only SEN Serials assigned to this finalized invoice. Use Change/Replace Serial for substitutions.';
+      end if;
     elsif coalesce(array_length(selected_serial_ids,1),0)>0 then
       raise exception 'SEN Serial Numbers cannot be attached to a non-serialized product';
     end if;
@@ -1206,6 +1693,7 @@ declare
   existing_change_id uuid;
   change_id uuid:=gen_random_uuid();
   replacement_status text;
+  previous_result_status text;
 begin
   if requested_operation_id is null then raise exception 'A valid serial replacement operation ID is required'; end if;
   if requested_previous_serial_id=requested_replacement_serial_id then raise exception 'Choose a different replacement SEN Serial'; end if;
@@ -1242,7 +1730,14 @@ begin
   select * into previous_serial from public.serial_numbers where id=requested_previous_serial_id;
   select * into replacement_serial from public.serial_numbers where id=requested_replacement_serial_id;
   if previous_serial.id is null or replacement_serial.id is null then raise exception 'SEN Serial not found'; end if;
-  if exists(select 1 from public.sales_stock_out_release_serials where serial_number_id=previous_serial.id) then
+  if exists(
+    select 1 from public.sales_stock_out_release_serials released
+    where released.serial_number_id=previous_serial.id
+      and not exists(
+        select 1 from public.rma_return_receipt_serials returned
+        where returned.original_release_serial_id=released.id
+      )
+  ) then
     raise exception 'The assigned SEN Serial has already been physically released and cannot be replaced';
   end if;
   select * into allocation from public.order_serial_allocations
@@ -1258,7 +1753,14 @@ begin
   if replacement_serial.status not in('available','reserved','allocated','packed')
     or lower(coalesce(replacement_serial.condition,'')) in('damaged','unavailable','quarantined','lost','disposed')
   then raise exception 'Replacement SEN Serial is damaged, unavailable, quarantined, or otherwise ineligible'; end if;
-  if exists(select 1 from public.sales_stock_out_release_serials where serial_number_id=replacement_serial.id)
+  if exists(
+    select 1 from public.sales_stock_out_release_serials released
+    where released.serial_number_id=replacement_serial.id
+      and not exists(
+        select 1 from public.rma_return_receipt_serials returned
+        where returned.original_release_serial_id=released.id
+      )
+  )
     or exists(
       select 1 from public.order_serial_allocations conflict
       where conflict.serial_number_id=replacement_serial.id
@@ -1267,16 +1769,35 @@ begin
   then raise exception 'Replacement SEN Serial is already assigned or physically released'; end if;
 
   replacement_status:=case when allocation.status='packed' then 'packed' else 'allocated' end;
+  previous_result_status:=case lower(coalesce(previous_serial.condition,''))
+    when 'damaged' then 'damaged'
+    when 'unavailable' then 'unavailable'
+    when 'quarantined' then 'quarantined'
+    when 'lost' then 'lost'
+    when 'disposed' then 'disposed'
+    else case
+      when previous_serial.status in('reserved','allocated','packed') then 'available'
+      else previous_serial.status
+    end
+  end;
   update public.order_serial_allocations
   set serial_number_id=replacement_serial.id,allocation_method='replacement'
   where id=allocation.id;
-  update public.serial_numbers set status='available',updated_at=now() where id=previous_serial.id;
+  update public.shipment_serials shipment_serial
+  set serial_number_id=replacement_serial.id
+  from public.shipment_items shipment_item
+  join public.shipments shipment on shipment.id=shipment_item.shipment_id
+  where shipment_serial.shipment_item_id=shipment_item.id
+    and shipment_serial.allocation_id=allocation.id
+    and shipment_serial.serial_number_id=previous_serial.id
+    and shipment.status in('draft','confirmed','packing','ready');
+  update public.serial_numbers set status=previous_result_status,updated_at=now() where id=previous_serial.id;
   update public.serial_numbers set status=replacement_status,updated_at=now() where id=replacement_serial.id;
   insert into public.serial_number_history(
     serial_number_id,event_type,previous_status,new_status,previous_warehouse_id,
     new_warehouse_id,reason,actor_id
   ) values
-    (previous_serial.id,'stock_out_serial_replaced',previous_serial.status,'available',
+    (previous_serial.id,'stock_out_serial_replaced',previous_serial.status,previous_result_status,
       request.warehouse_id,request.warehouse_id,left(requested_reason,1000),actor_profile_id),
     (replacement_serial.id,'stock_out_serial_selected',replacement_serial.status,replacement_status,
       request.warehouse_id,request.warehouse_id,left(requested_reason,1000),actor_profile_id);
@@ -1308,11 +1829,13 @@ set search_path=''
 as $$
 declare
   shipment public.shipments%rowtype;
+  sale public.sales_orders%rowtype;
   shipment_item public.shipment_items%rowtype;
   sale_item public.sales_order_items%rowtype;
   allocation public.order_serial_allocations%rowtype;
   serial_count integer;
   released_total numeric;
+  returned_total numeric;
   status_id uuid;
 begin
   perform public.assert_actor_permission(actor_profile_id,'shipments.confirm_dispatch');
@@ -1320,6 +1843,12 @@ begin
   where id=requested_shipment_id for update;
   if shipment.id is null or shipment.status not in('confirmed','ready') then
     raise exception 'Shipment is not ready for dispatch';
+  end if;
+  select * into sale from public.sales_orders
+  where id=shipment.order_id for update;
+  if sale.id is null then raise exception 'Shipment sale was not found'; end if;
+  if sale.status='cancelled' then
+    raise exception 'A cancelled Sales Invoice cannot be dispatched';
   end if;
 
   for shipment_item in
@@ -1340,7 +1869,16 @@ begin
     join public.sales_stock_out_releases release
       on release.id=release_item.release_id and release.status='confirmed'
     where request_item.sales_order_item_id=sale_item.id;
-    if released_total<sale_item.shipped_quantity+shipment_item.quantity then
+    select coalesce(sum(receipt.quantity_received),0)
+    into returned_total
+    from public.rma_return_receipts receipt
+    join public.sales_stock_out_release_items returned_release_item
+      on returned_release_item.id=receipt.stock_out_release_item_id
+    join public.sales_stock_out_request_items returned_request_item
+      on returned_request_item.id=returned_release_item.request_item_id
+    where receipt.status='confirmed'
+      and returned_request_item.sales_order_item_id=sale_item.id;
+    if released_total-returned_total<sale_item.shipped_quantity+shipment_item.quantity then
       raise exception 'This product has not yet been released from inventory. Complete Stock Out before shipment dispatch.';
     end if;
 
@@ -1433,6 +1971,8 @@ declare
   request public.sales_stock_out_requests%rowtype;
   reservation public.inventory_reservations%rowtype;
   allocation public.order_serial_allocations%rowtype;
+  cancelled_serial public.serial_numbers%rowtype;
+  cancelled_serial_result_status text;
   released_total numeric:=0;
   returned_total numeric:=0;
 begin
@@ -1484,10 +2024,30 @@ begin
     where order_id=sale.id and status in('active','packed')
     order by id for update
   loop
+    select * into cancelled_serial from public.serial_numbers
+    where id=allocation.serial_number_id for update;
+    cancelled_serial_result_status:=case lower(coalesce(cancelled_serial.condition,''))
+      when 'damaged' then 'damaged'
+      when 'unavailable' then 'unavailable'
+      when 'quarantined' then 'quarantined'
+      when 'lost' then 'lost'
+      when 'disposed' then 'disposed'
+      else case
+        when cancelled_serial.status in('allocated','packed','reserved') then 'available'
+        else cancelled_serial.status
+      end
+    end;
     update public.serial_numbers
-    set status='available',updated_at=now()
-    where id=allocation.serial_number_id
-      and status in('allocated','packed','reserved');
+    set status=cancelled_serial_result_status,updated_at=now()
+    where id=allocation.serial_number_id;
+    insert into public.serial_number_history(
+      serial_number_id,event_type,previous_status,new_status,
+      previous_warehouse_id,new_warehouse_id,reason,actor_id
+    ) values(
+      cancelled_serial.id,'sale_cancelled_serial_released',cancelled_serial.status,
+      cancelled_serial_result_status,cancelled_serial.warehouse_id,
+      cancelled_serial.warehouse_id,left(requested_reason,500),actor_profile_id
+    );
     update public.order_serial_allocations
     set status='cancelled',released_by=actor_profile_id,released_at=now(),
       release_reason=left(requested_reason,500)

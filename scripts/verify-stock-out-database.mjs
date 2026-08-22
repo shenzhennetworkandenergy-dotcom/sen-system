@@ -34,7 +34,7 @@ await client.connect();
 try {
   const capabilities = await one(`
     select
-      to_regprocedure('public.finalize_sale_invoice(uuid,uuid,uuid)') is not null as finalize,
+      to_regprocedure('public.finalize_sale_invoice(uuid,uuid,uuid,bigint)') is not null as finalize,
       to_regprocedure('public.confirm_sales_stock_out(uuid,uuid,uuid,jsonb)') is not null as stock_out,
       to_regprocedure('public.confirm_physical_return_receipt(uuid,uuid,uuid,uuid,numeric,uuid[])') is not null as physical_return
   `);
@@ -111,15 +111,20 @@ try {
   ]);
 
   const finalizationToken = id();
-  const firstDocument = (await one("select public.finalize_sale_invoice($1,$2,$3) id", [
-    fixture.admin, fixture.order, finalizationToken,
+  const firstDocument = (await one("select public.finalize_sale_invoice($1,$2,$3,$4) id", [
+    fixture.admin, fixture.order, finalizationToken, 0,
   ])).id;
-  const retriedDocument = (await one("select public.finalize_sale_invoice($1,$2,$3) id", [
-    fixture.admin, fixture.order, finalizationToken,
+  const retriedDocument = (await one("select public.finalize_sale_invoice($1,$2,$3,$4) id", [
+    fixture.admin, fixture.order, finalizationToken, 0,
   ])).id;
   assert.equal(retriedDocument, firstDocument, "Invoice finalization token must be idempotent.");
-  const secondDocument = (await one("select public.finalize_sale_invoice($1,$2,$3) id", [
-    fixture.admin, fixture.order, id(),
+  await expectDatabaseError(() => query(
+    "select public.finalize_sale_invoice($1,$2,$3,$4)",
+    [fixture.admin, fixture.order, id(), 0],
+  ), /another tab|refresh/i);
+  const firstRequest = await one("select * from public.sales_stock_out_requests where sales_order_id=$1", [fixture.order]);
+  const secondDocument = (await one("select public.finalize_sale_invoice($1,$2,$3,$4) id", [
+    fixture.admin, fixture.order, id(), Number(firstRequest.version),
   ])).id;
   assert.notEqual(secondDocument, firstDocument, "A new finalization creates an immutable invoice revision.");
   const request = await one("select * from public.sales_stock_out_requests where sales_order_id=$1", [fixture.order]);
@@ -154,10 +159,57 @@ try {
     [fixture.employee, request.id, id(), JSON.stringify(firstPayload)],
   ), /already been updated|refresh/i);
 
+  const revisionPayload = (quantity) => JSON.stringify([{
+    id: fixture.orderItem,
+    quantity,
+    unit_price: 100,
+    discount_type: "fixed",
+    discount_value: 0,
+  }]);
+  await query("select public.update_sale_lines($1,$2,$3,$4::jsonb)", [
+    fixture.admin, fixture.order, "Increase after partial physical release", revisionPayload(4),
+  ]);
+  assert.equal(
+    Number((await one("select count(*) count from public.sale_documents where order_id=$1 and document_type='invoice' and status='generated'", [fixture.order])).count),
+    1,
+    "Saving an edit must preserve the last successfully finalized invoice until replacement finalization commits.",
+  );
+  assert.equal(
+    Number((await one("select reserved from public.inventory_balances where id=$1", [fixture.balance])).reserved),
+    1,
+    "Saving an unfinalized invoice revision must not change reservation or public availability.",
+  );
+  let revisionRequest = await one("select * from public.sales_stock_out_requests where id=$1", [request.id]);
+  await query("select public.finalize_sale_invoice($1,$2,$3,$4)", [
+    fixture.admin, fixture.order, id(), Number(revisionRequest.version),
+  ]);
+  balance = await one("select reserved from public.inventory_balances where id=$1", [fixture.balance]);
+  revisionRequest = await one("select * from public.sales_stock_out_requests where id=$1", [request.id]);
+  assert.equal(Number(balance.reserved), 2, "A revision increase reserves only the two unreleased units.");
+  assert.equal(Number(revisionRequest.remaining_quantity), 2);
+
+  await query("select public.update_sale_lines($1,$2,$3,$4::jsonb)", [
+    fixture.admin, fixture.order, "Reduce after partial physical release", revisionPayload(3),
+  ]);
+  assert.equal(
+    Number((await one("select reserved from public.inventory_balances where id=$1", [fixture.balance])).reserved),
+    2,
+    "Reservation remains on the last finalized revision until the new revision commits.",
+  );
+  revisionRequest = await one("select * from public.sales_stock_out_requests where id=$1", [request.id]);
+  await query("select public.finalize_sale_invoice($1,$2,$3,$4)", [
+    fixture.admin, fixture.order, id(), Number(revisionRequest.version),
+  ]);
+  balance = await one("select reserved from public.inventory_balances where id=$1", [fixture.balance]);
+  updatedRequest = await one("select * from public.sales_stock_out_requests where id=$1", [request.id]);
+  assert.equal(Number(balance.reserved), 1, "A revision reduction preserves released units and one remaining reservation.");
+  assert.equal(Number(updatedRequest.remaining_quantity), 1);
+
   await query("savepoint invalid_revision");
   await query("update public.sales_order_items set quantity=1,packed_quantity=1 where id=$1", [fixture.orderItem]);
   await expectDatabaseError(() => query(
-    "select public.finalize_sale_invoice($1,$2,$3)", [fixture.admin, fixture.order, id()],
+    "select public.finalize_sale_invoice($1,$2,$3,$4)",
+    [fixture.admin, fixture.order, id(), Number(updatedRequest.version)],
   ), /lower than|already physically released/i);
   await query("rollback to savepoint invalid_revision");
   await query("release savepoint invalid_revision");
@@ -261,7 +313,7 @@ try {
   ) values($1,$2,$3,2,'active',$4,$5,$6,$7)`, [
     reservation2, fixture.product, fixture.warehouse, `TEST-CANCEL-${stamp}`, fixture.admin, order2, item2,
   ]);
-  await query("select public.finalize_sale_invoice($1,$2,$3)", [fixture.admin, order2, id()]);
+  await query("select public.finalize_sale_invoice($1,$2,$3,$4)", [fixture.admin, order2, id(), 0]);
   const physicalBeforePreReleaseCancel = Number((await one("select on_hand from public.inventory_balances where id=$1", [fixture.balance])).on_hand);
   await query("select public.cancel_sales_order($1,$2,$3)", [fixture.admin, order2, "Cancelled before physical release"]);
   balance = await one("select on_hand,reserved from public.inventory_balances where id=$1", [fixture.balance]);
@@ -272,6 +324,7 @@ try {
   // Serialized confirmation proves exact-unit linkage and permanent uniqueness.
   const serialProduct = id(), serialBalance = id(), serialOrder = id(), serialItem = id(), serialReservation = id();
   const serialIds = [id(), id()];
+  const replacementSerialId = id();
   await query(`insert into public.products(
     id,name,slug,sku,status,business_category_id,serial_tracking_required,
     public_catalogue_visible,created_by,updated_by
@@ -280,7 +333,7 @@ try {
     `RB-SER-${stamp}`, category.id, fixture.admin,
   ]);
   await query(`insert into public.inventory_balances(id,warehouse_id,product_id,on_hand,reserved)
-    values($1,$2,$3,2,2)`, [serialBalance, fixture.warehouse, serialProduct]);
+    values($1,$2,$3,3,2)`, [serialBalance, fixture.warehouse, serialProduct]);
   await query(`insert into public.sales_orders(
     id,order_number,customer_profile_id,shipping_address_snapshot,fulfillment_warehouse_id,
     status,subtotal,total_amount,confirmed_at,created_by,updated_by
@@ -314,17 +367,181 @@ try {
       serialOrder, serialItem, serialIds[index], fixture.warehouse, fixture.admin,
     ]);
   }
-  await query("select public.finalize_sale_invoice($1,$2,$3)", [fixture.admin, serialOrder, id()]);
+  await query(`insert into public.serial_numbers(
+    id,manufacturer_serial,sen_serial,barcode_value,product_id,warehouse_id,status,condition
+  ) values($1,$2,$3,$3,$4,$5,'available','new')`, [
+    replacementSerialId, `RB-MFG-${stamp}-replacement`, `RB-SEN-${stamp}-replacement`,
+    serialProduct, fixture.warehouse,
+  ]);
+  await query("select public.finalize_sale_invoice($1,$2,$3,$4)", [fixture.admin, serialOrder, id(), 0]);
   const serialRequest = await one("select * from public.sales_stock_out_requests where sales_order_id=$1", [serialOrder]);
   const serialRequestItem = await one("select * from public.sales_stock_out_request_items where request_id=$1", [serialRequest.id]);
+  await expectDatabaseError(() => query(
+    "select public.confirm_sales_stock_out($1,$2,$3,$4::jsonb)", [
+      fixture.employee, serialRequest.id, id(), JSON.stringify({
+        request_version: Number(serialRequest.version),
+        items: [{ request_item_id: serialRequestItem.id, quantity: 2, serial_ids: [serialIds[0], replacementSerialId] }],
+      }),
+    ],
+  ), /assigned to this finalized invoice|replace serial/i);
+
+  const allocations = (await query(`select id,serial_number_id from public.order_serial_allocations
+    where order_item_id=$1 order by allocated_at,id`, [serialItem])).rows;
+  const replacedAllocation = allocations.find((row) => row.serial_number_id === serialIds[1]);
+  assert.ok(replacedAllocation, "The preassigned replacement allocation must exist.");
+  const preparedShipmentId = id(), preparedShipmentItemId = id();
+  await query(`insert into public.shipments(
+    id,shipment_number,order_id,status,transport_mode,origin_snapshot,destination_snapshot,
+    created_by,updated_by,confirmed_at
+  ) values($1,$2,$3,'ready','road','{}','{}',$4,$4,now())`, [
+    preparedShipmentId, `TEST-SERIAL-SHP-${stamp}`, serialOrder, fixture.admin,
+  ]);
+  await query("insert into public.shipment_items(id,shipment_id,order_item_id,quantity) values($1,$2,$3,1)", [
+    preparedShipmentItemId, preparedShipmentId, serialItem,
+  ]);
+  await query("insert into public.shipment_serials(shipment_item_id,allocation_id,serial_number_id) values($1,$2,$3)", [
+    preparedShipmentItemId, replacedAllocation.id, serialIds[1],
+  ]);
+  await query("update public.serial_numbers set status='damaged',condition='damaged' where id=$1", [serialIds[1]]);
+  await query("select public.replace_stock_out_serial($1,$2,$3,$4,$5,$6)", [
+    fixture.employee, serialRequestItem.id, serialIds[1], replacementSerialId,
+    "Physical unit replacement verification", id(),
+  ]);
+  assert.equal(
+    (await one("select serial_number_id from public.shipment_serials where allocation_id=$1", [replacedAllocation.id])).serial_number_id,
+    replacementSerialId,
+    "Prepared shipment must follow an audited serial replacement.",
+  );
+  assert.equal(
+    (await one("select status from public.serial_numbers where id=$1", [serialIds[1]])).status,
+    "damaged",
+    "Replacing an ineligible physical unit must never make the previous SEN Serial available.",
+  );
   await query("select public.confirm_sales_stock_out($1,$2,$3,$4::jsonb)", [
     fixture.employee, serialRequest.id, id(), JSON.stringify({
       request_version: Number(serialRequest.version),
-      items: [{ request_item_id: serialRequestItem.id, quantity: 2, serial_ids: serialIds }],
+      items: [{ request_item_id: serialRequestItem.id, quantity: 2, serial_ids: [serialIds[0], replacementSerialId] }],
     }),
   ]);
-  assert.equal(Number((await one("select count(*) count from public.sales_stock_out_release_serials where serial_number_id=any($1::uuid[])", [serialIds])).count), 2);
-  assert.equal(Number((await one("select count(*) count from public.serial_numbers where id=any($1::uuid[]) and status='warehouse_released'", [serialIds])).count), 2);
+  const releasedSerialIds = [serialIds[0], replacementSerialId];
+  assert.equal(Number((await one("select count(*) count from public.sales_stock_out_release_serials where serial_number_id=any($1::uuid[])", [releasedSerialIds])).count), 2);
+  assert.equal(Number((await one("select count(*) count from public.serial_numbers where id=any($1::uuid[]) and status='warehouse_released'", [releasedSerialIds])).count), 2);
+
+  // A physically returned serial can be cleared by the existing RMA/service
+  // workflow and safely participate in a later, separately audited sale.
+  const serialReleaseItem = await one(`select release_item.id
+    from public.sales_stock_out_release_items release_item
+    join public.sales_stock_out_releases release on release.id=release_item.release_id
+    where release.request_id=$1`, [serialRequest.id]);
+  const serialClaimId = id();
+  const serialCoverageId = id();
+  await query(`insert into public.warranty_coverages(
+    id,sales_order_id,sales_order_item_id,customer_profile_id,product_id,
+    serial_number_id,covered_quantity,warranty_duration_months,starts_at,ends_at,status
+  ) values($1,$2,$3,$4,$5,$6,1,12,current_date,current_date+365,'active')`, [
+    serialCoverageId, serialOrder, serialItem, fixture.customer, serialProduct, serialIds[0],
+  ]);
+  await query(`insert into public.rma_claims(
+    id,rma_number,customer_profile_id,warranty_coverage_id,sales_order_id,
+    sales_order_item_id,product_id,serial_number_id,claim_type,quantity,description,status
+  ) values($1,$2,$3,$4,$5,$6,$7,$8,'return',1,$9,'return_requested')`, [
+    serialClaimId, `TEST-RMA-SERIAL-${stamp}`, fixture.customer, serialCoverageId,
+    serialOrder, serialItem, serialProduct, serialIds[0],
+    "Rollback serialized return verification.",
+  ]);
+  await query(
+    "select public.confirm_physical_return_receipt($1,$2,$3,$4,$5,$6::uuid[])",
+    [fixture.employee, serialClaimId, serialReleaseItem.id, id(), 1, [serialIds[0]]],
+  );
+  await query(`update public.inventory_balances
+    set unavailable=unavailable-1,reserved=reserved+1 where id=$1`, [serialBalance]);
+  await query(`update public.serial_numbers
+    set status='packed',service_status='normal',active_rma_claim_id=null where id=$1`, [serialIds[0]]);
+
+  const reuseOrder = id(), reuseItem = id(), reuseReservation = id();
+  await query(`insert into public.sales_orders(
+    id,order_number,customer_profile_id,shipping_address_snapshot,fulfillment_warehouse_id,
+    status,subtotal,total_amount,confirmed_at,created_by,updated_by
+  ) values($1,$2,$3,'{}',$4,'confirmed',100,100,now(),$5,$5)`, [
+    reuseOrder, `TEST-SERIAL-REUSE-${stamp}`, fixture.customer, fixture.warehouse, fixture.admin,
+  ]);
+  await query(`insert into public.sales_order_items(
+    id,order_id,product_id,fulfillment_warehouse_id,quantity,allocated_quantity,packed_quantity,
+    unit_price,line_subtotal,line_total,currency,serial_tracking_required_snapshot,
+    product_name_snapshot,sku_snapshot
+  ) values($1,$2,$3,$4,1,1,1,100,100,100,'BDT',true,$5,$6)`, [
+    reuseItem, reuseOrder, serialProduct, fixture.warehouse,
+    "Rollback Serialized Product", `RB-SER-${stamp}`,
+  ]);
+  await query(`insert into public.inventory_reservations(
+    id,product_id,warehouse_id,quantity,status,reference,created_by,order_id,order_item_id
+  ) values($1,$2,$3,1,'active',$4,$5,$6,$7)`, [
+    reuseReservation, serialProduct, fixture.warehouse, `TEST-SERIAL-REUSE-${stamp}`,
+    fixture.admin, reuseOrder, reuseItem,
+  ]);
+  await query(`insert into public.order_serial_allocations(
+    order_id,order_item_id,serial_number_id,warehouse_id,status,allocation_method,allocated_by,packed_at
+  ) values($1,$2,$3,$4,'packed','scan',$5,now())`, [
+    reuseOrder, reuseItem, serialIds[0], fixture.warehouse, fixture.admin,
+  ]);
+  await query("select public.finalize_sale_invoice($1,$2,$3,$4)", [fixture.admin, reuseOrder, id(), 0]);
+  const reuseRequest = await one("select * from public.sales_stock_out_requests where sales_order_id=$1", [reuseOrder]);
+  const reuseRequestItem = await one("select * from public.sales_stock_out_request_items where request_id=$1", [reuseRequest.id]);
+  await query("select public.confirm_sales_stock_out($1,$2,$3,$4::jsonb)", [
+    fixture.employee, reuseRequest.id, id(), JSON.stringify({
+      request_version: Number(reuseRequest.version),
+      items: [{ request_item_id: reuseRequestItem.id, quantity: 1, serial_ids: [serialIds[0]] }],
+    }),
+  ]);
+  assert.equal(
+    Number((await one("select count(*) count from public.sales_stock_out_release_serials where serial_number_id=$1", [serialIds[0]])).count),
+    2,
+    "The returned SEN Serial must retain both immutable physical release lifecycles.",
+  );
+
+  // Upstream allocation rejects ineligible physical units and cancellation
+  // must never resurrect an unavailable allocated unit as saleable.
+  const unavailableSerialId = id(), unavailableOrder = id(), unavailableItem = id();
+  await query(`insert into public.serial_numbers(
+    id,manufacturer_serial,sen_serial,barcode_value,product_id,warehouse_id,status,condition
+  ) values($1,$2,$3,$3,$4,$5,'available','unavailable')`, [
+    unavailableSerialId, `RB-MFG-${stamp}-unavailable`, `RB-SEN-${stamp}-unavailable`,
+    serialProduct, fixture.warehouse,
+  ]);
+  await query(`insert into public.sales_orders(
+    id,order_number,customer_profile_id,shipping_address_snapshot,fulfillment_warehouse_id,
+    status,subtotal,total_amount,confirmed_at,created_by,updated_by
+  ) values($1,$2,$3,'{}',$4,'confirmed',100,100,now(),$5,$5)`, [
+    unavailableOrder, `TEST-UNAVAILABLE-${stamp}`, fixture.customer, fixture.warehouse, fixture.admin,
+  ]);
+  await query(`insert into public.sales_order_items(
+    id,order_id,product_id,fulfillment_warehouse_id,quantity,
+    unit_price,line_subtotal,line_total,currency,serial_tracking_required_snapshot,
+    product_name_snapshot,sku_snapshot
+  ) values($1,$2,$3,$4,1,100,100,100,'BDT',true,$5,$6)`, [
+    unavailableItem, unavailableOrder, serialProduct, fixture.warehouse,
+    "Rollback Serialized Product", `RB-SER-${stamp}`,
+  ]);
+  await expectDatabaseError(
+    () => query("select public.allocate_order_serials($1,$2,$3::uuid[],$4)", [
+      fixture.admin, unavailableItem, [unavailableSerialId], "manual",
+    ]),
+    /not eligible/i,
+  );
+  await query(`insert into public.order_serial_allocations(
+    order_id,order_item_id,serial_number_id,warehouse_id,status,allocation_method,allocated_by
+  ) values($1,$2,$3,$4,'active','manual',$5)`, [
+    unavailableOrder, unavailableItem, unavailableSerialId, fixture.warehouse, fixture.admin,
+  ]);
+  await query("update public.serial_numbers set status='allocated' where id=$1", [unavailableSerialId]);
+  await query("select public.cancel_sales_order($1,$2,$3)", [
+    fixture.admin, unavailableOrder, "Cancel ineligible serial verification",
+  ]);
+  assert.equal(
+    (await one("select status from public.serial_numbers where id=$1", [unavailableSerialId])).status,
+    "unavailable",
+    "Cancelling a sale must preserve an unavailable SEN Serial state.",
+  );
 
   await query("rollback");
   console.log("Stock Out database verification passed: invoice, badges, physical release, shipment, cancellation, return, and serial ledgers rolled back cleanly.");

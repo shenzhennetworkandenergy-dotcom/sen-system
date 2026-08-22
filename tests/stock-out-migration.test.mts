@@ -62,6 +62,10 @@ test("migration enforces one request per sale and idempotent invoice, release, r
   );
   assert.match(
     migration,
+    /sales_stock_out_release_serials[\s\S]{0,900}rma_return_receipt_serials/i,
+  );
+  assert.doesNotMatch(
+    migration,
     /sales_stock_out_release_serials_serial_unique[\s\S]{0,180}unique\s*\(serial_number_id\)/i,
   );
 });

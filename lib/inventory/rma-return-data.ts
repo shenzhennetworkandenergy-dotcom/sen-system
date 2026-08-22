@@ -35,6 +35,196 @@ export type AuthorizedPhysicalReturnClaim = {
   items: PhysicalReturnReleaseItem[];
 };
 
+export type AuthorizedPhysicalReturnLink = {
+  id: string;
+  rmaNumber: string;
+  status: string;
+  quantityRemaining: number;
+  orderNumber?: string;
+  warehouseName?: string;
+};
+
+export async function getAuthorizedPhysicalReturnQueue(
+  profileId: string,
+): Promise<AuthorizedPhysicalReturnLink[]> {
+  const db = createSupabaseAdminClient();
+  const [profileResult, permissions, assignmentResult] = await Promise.all([
+    db.from("profiles").select("id,role,status").eq("id", profileId).maybeSingle(),
+    getEffectivePermissions(profileId),
+    db.from("profile_warehouse_assignments")
+      .select("warehouse_id")
+      .eq("profile_id", profileId)
+      .eq("is_active", true)
+      .is("ended_at", null),
+  ]);
+  if (profileResult.error || assignmentResult.error) {
+    throw new Error("Unable to validate physical return queue access.");
+  }
+  if (
+    profileResult.data?.role !== "employee" ||
+    profileResult.data.status !== "active" ||
+    !permissions.has("rma.receive")
+  ) return [];
+
+  const assignedIds = [...new Set((assignmentResult.data ?? []).map((row) => row.warehouse_id))];
+  if (!assignedIds.length) return [];
+  const warehousesResult = await db.from("warehouses")
+    .select("id,name,code")
+    .in("id", assignedIds)
+    .eq("is_active", true);
+  if (warehousesResult.error) throw new Error("Unable to load active return warehouses.");
+  const warehouseById = new Map((warehousesResult.data ?? []).map((row) => [row.id, row]));
+  const warehouseIds = [...warehouseById.keys()];
+  if (!warehouseIds.length) return [];
+
+  const claimsResult = await db.from("rma_claims")
+    .select("id,rma_number,status,quantity,sales_order_id,sales_order_item_id,created_at")
+    .in("status", ["return_requested", "product_received"])
+    .order("created_at");
+  if (claimsResult.error) throw new Error("Unable to load pending physical return claims.");
+  const claims = claimsResult.data ?? [];
+  if (!claims.length) return [];
+
+  const requestItemsResult = await db.from("sales_stock_out_request_items")
+    .select("id,sales_order_item_id")
+    .in("sales_order_item_id", claims.map((claim) => claim.sales_order_item_id));
+  if (requestItemsResult.error) throw new Error("Unable to load return Stock Out items.");
+  const requestItems = requestItemsResult.data ?? [];
+  if (!requestItems.length) return [];
+  const saleItemByRequestItem = new Map(
+    requestItems.map((item) => [item.id, item.sales_order_item_id]),
+  );
+
+  const releaseItemsResult = await db.from("sales_stock_out_release_items")
+    .select("id,request_item_id,warehouse_id,quantity_released")
+    .in("request_item_id", requestItems.map((item) => item.id))
+    .in("warehouse_id", warehouseIds);
+  if (releaseItemsResult.error) throw new Error("Unable to load authorized physical releases.");
+  const releaseItems = releaseItemsResult.data ?? [];
+  if (!releaseItems.length) return [];
+
+  const [receiptsResult, ordersResult] = await Promise.all([
+    db.from("rma_return_receipts")
+      .select("rma_claim_id,warehouse_id,quantity_received")
+      .in("rma_claim_id", claims.map((claim) => claim.id))
+      .in("warehouse_id", warehouseIds)
+      .eq("status", "confirmed"),
+    db.from("sales_orders")
+      .select("id,order_number")
+      .in("id", [...new Set(claims.map((claim) => claim.sales_order_id))]),
+  ]);
+  if (receiptsResult.error || ordersResult.error) {
+    throw new Error("Unable to load physical return queue history.");
+  }
+  const orderNumberById = new Map((ordersResult.data ?? []).map((order) => [order.id, order.order_number]));
+
+  return claims.flatMap((claim) => {
+    const claimReleases = releaseItems.filter(
+      (release) => saleItemByRequestItem.get(release.request_item_id) === claim.sales_order_item_id,
+    );
+    if (!claimReleases.length) return [];
+    const released = claimReleases.reduce(
+      (sum, release) => sum + Number(release.quantity_released),
+      0,
+    );
+    const returned = (receiptsResult.data ?? [])
+      .filter((receipt) => receipt.rma_claim_id === claim.id)
+      .reduce((sum, receipt) => sum + Number(receipt.quantity_received), 0);
+    const quantityRemaining = Math.max(0, Math.min(
+      Number(claim.quantity) - returned,
+      released - returned,
+    ));
+    if (quantityRemaining <= 0) return [];
+    const warehouse = warehouseById.get(claimReleases[0].warehouse_id);
+    return [{
+      id: claim.id,
+      rmaNumber: claim.rma_number,
+      status: claim.status,
+      quantityRemaining,
+      orderNumber: orderNumberById.get(claim.sales_order_id) ?? "Sales order",
+      warehouseName: warehouse ? `${warehouse.name} (${warehouse.code})` : "Authorized warehouse",
+    }];
+  });
+}
+
+export async function getAuthorizedPhysicalReturnLinks(
+  profileId: string,
+  salesOrderId: string,
+  warehouseId: string,
+): Promise<AuthorizedPhysicalReturnLink[]> {
+  const db = createSupabaseAdminClient();
+  const [profileResult, permissions, assignmentResult, warehouseResult] = await Promise.all([
+    db.from("profiles").select("id,role,status").eq("id", profileId).maybeSingle(),
+    getEffectivePermissions(profileId),
+    db.from("profile_warehouse_assignments")
+      .select("warehouse_id")
+      .eq("profile_id", profileId)
+      .eq("warehouse_id", warehouseId)
+      .eq("is_active", true)
+      .is("ended_at", null)
+      .maybeSingle(),
+    db.from("warehouses").select("id,is_active").eq("id", warehouseId).maybeSingle(),
+  ]);
+  if (profileResult.error || assignmentResult.error || warehouseResult.error) {
+    throw new Error("Unable to load authorized physical return work.");
+  }
+  if (
+    profileResult.data?.role !== "employee" ||
+    profileResult.data.status !== "active" ||
+    !permissions.has("rma.receive") ||
+    !assignmentResult.data ||
+    !warehouseResult.data?.is_active
+  ) return [];
+
+  const claimsResult = await db.from("rma_claims")
+    .select("id,rma_number,status,quantity,sales_order_item_id")
+    .eq("sales_order_id", salesOrderId)
+    .in("status", ["return_requested", "product_received"])
+    .order("created_at");
+  if (claimsResult.error) throw new Error("Unable to load return claims.");
+  const claims = claimsResult.data ?? [];
+  if (!claims.length) return [];
+
+  const requestItemsResult = await db.from("sales_stock_out_request_items")
+    .select("id,sales_order_item_id")
+    .in("sales_order_item_id", claims.map((claim) => claim.sales_order_item_id));
+  if (requestItemsResult.error) throw new Error("Unable to load return release requests.");
+  const requestItems = requestItemsResult.data ?? [];
+  if (!requestItems.length) return [];
+  const releaseItemsResult = await db.from("sales_stock_out_release_items")
+    .select("id,request_item_id")
+    .in("request_item_id", requestItems.map((item) => item.id))
+    .eq("warehouse_id", warehouseId);
+  if (releaseItemsResult.error) throw new Error("Unable to load returnable releases.");
+  const releaseItems = releaseItemsResult.data ?? [];
+  if (!releaseItems.length) return [];
+
+  const receiptResult = await db.from("rma_return_receipts")
+    .select("rma_claim_id,quantity_received")
+    .in("rma_claim_id", claims.map((claim) => claim.id))
+    .eq("warehouse_id", warehouseId)
+    .eq("status", "confirmed");
+  if (receiptResult.error) throw new Error("Unable to load physical return receipts.");
+  const releasedOrderItems = new Set(
+    requestItems
+      .filter((item) => releaseItems.some((release) => release.request_item_id === item.id))
+      .map((item) => item.sales_order_item_id),
+  );
+  return claims.flatMap((claim) => {
+    if (!releasedOrderItems.has(claim.sales_order_item_id)) return [];
+    const returned = (receiptResult.data ?? [])
+      .filter((receipt) => receipt.rma_claim_id === claim.id)
+      .reduce((sum, receipt) => sum + Number(receipt.quantity_received), 0);
+    const quantityRemaining = Math.max(0, Number(claim.quantity) - returned);
+    return quantityRemaining > 0 ? [{
+      id: claim.id,
+      rmaNumber: claim.rma_number,
+      status: claim.status,
+      quantityRemaining,
+    }] : [];
+  });
+}
+
 export async function getAuthorizedPhysicalReturnClaim(
   profileId: string,
   claimId: string,

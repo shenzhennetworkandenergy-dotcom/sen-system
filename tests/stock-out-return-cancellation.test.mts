@@ -6,6 +6,17 @@ const migration = await readFile(
   "supabase/migrations/202608220001_employee_stock_out_product_release.sql",
   "utf8",
 );
+
+test("a physically returned serial may enter a later valid sale lifecycle", () => {
+  assert.doesNotMatch(
+    migration,
+    /constraint\s+sales_stock_out_release_serials_serial_unique\s+unique\s*\(serial_number_id\)/i,
+  );
+  assert.match(
+    migration,
+    /sales_stock_out_release_serials[\s\S]{0,700}rma_return_receipt_serials/i,
+  );
+});
 const page = await readFile(
   "app/employee/rma/[claimId]/receive/page.tsx",
   "utf8",
@@ -18,6 +29,9 @@ const form = await readFile(
   "components/inventory/PhysicalReturnReceiptForm.tsx",
   "utf8",
 ).catch(() => "");
+const salePage = await readFile("app/admin/sales/[saleId]/page.tsx", "utf8");
+const rmaData = await readFile("lib/inventory/rma-return-data.ts", "utf8");
+const employeePage = await readFile("app/employee/page.tsx", "utf8");
 
 function lastFunction(name: string) {
   const start = migration.toLowerCase().lastIndexOf(`create or replace function public.${name}`);
@@ -76,4 +90,23 @@ test("the narrow employee receipt page enforces rma.receive and uses one physica
   assert.match(form, /serial_id/);
   assert.match(actions, /confirm_physical_return_receipt/);
   assert.match(actions, /revalidatePath\("\/admin\/inventory\/daily-closing"\)/);
+});
+
+test("an authorized warehouse employee can reach return receipt from the existing Sales surface", () => {
+  assert.match(rmaData, /getAuthorizedPhysicalReturnLinks/);
+  assert.match(rmaData, /rma\.receive/);
+  assert.match(rmaData, /profile_warehouse_assignments/);
+  assert.match(rmaData, /rma_return_receipts/);
+  assert.match(salePage, /getAuthorizedPhysicalReturnLinks/);
+  assert.match(salePage, /\/employee\/rma\/\$\{claim\.id\}\/receive/);
+});
+
+test("rma-only warehouse employees can discover physical returns from their existing dashboard", () => {
+  assert.match(rmaData, /export async function getAuthorizedPhysicalReturnQueue/);
+  assert.match(rmaData, /getEffectivePermissions\(profileId\)/);
+  assert.match(rmaData, /permissions\.has\("rma\.receive"\)/);
+  assert.match(rmaData, /profile_warehouse_assignments/);
+  assert.match(employeePage, /getAuthorizedPhysicalReturnQueue\(profile\.id\)/);
+  assert.match(employeePage, /Physical customer returns/);
+  assert.match(employeePage, /\/employee\/rma\/\$\{claim\.id\}\/receive/);
 });

@@ -333,21 +333,38 @@ export async function searchEligibleStockOutSerials(
   );
   if (!candidates.length) return [];
   const serialIds = candidates.map((serial) => serial.id);
-  const [allocationResult, releasedResult, revisionResult] = await Promise.all([
+  const [allocationResult, releasedResult] = await Promise.all([
     db.from("order_serial_allocations").select("serial_number_id,order_item_id,status").in("serial_number_id", serialIds).in("status", ["active", "packed", "warehouse_released"]),
-    db.from("sales_stock_out_release_serials").select("serial_number_id").in("serial_number_id", serialIds),
-    db.from("sales_stock_out_request_revisions").select("id").eq("request_id", request.id).eq("revision_number", request.current_revision_number).maybeSingle(),
+    db.from("sales_stock_out_release_serials").select("id,serial_number_id").in("serial_number_id", serialIds),
   ]);
-  if (allocationResult.error || releasedResult.error || revisionResult.error) {
+  if (allocationResult.error || releasedResult.error) {
     throw new Error("Unable to validate SEN Serial eligibility.");
   }
-  const releasedIds = new Set((releasedResult.data ?? []).map((row) => row.serial_number_id));
+  const historicalReleases = releasedResult.data ?? [];
+  const returnedResult = historicalReleases.length
+    ? await db
+        .from("rma_return_receipt_serials")
+        .select("original_release_serial_id")
+        .in("original_release_serial_id", historicalReleases.map((row) => row.id))
+    : { data: [], error: null };
+  if (returnedResult.error) throw new Error("Unable to validate returned SEN Serials.");
+  const returnedReleaseIds = new Set(
+    (returnedResult.data ?? []).map((row) => row.original_release_serial_id),
+  );
+  const releasedIds = new Set(
+    historicalReleases
+      .filter((row) => !returnedReleaseIds.has(row.id))
+      .map((row) => row.serial_number_id),
+  );
   const allocations = allocationResult.data ?? [];
-  const revisionItemResult = revisionResult.data
-    ? await db.from("sales_stock_out_request_revision_items").select("preassigned_serial_ids").eq("revision_id", revisionResult.data.id).eq("request_item_id", requestItem.id).maybeSingle()
-    : { data: null, error: null };
-  if (revisionItemResult.error) throw new Error("Unable to load assigned SEN Serials.");
-  const preassigned = new Set(revisionItemResult.data?.preassigned_serial_ids ?? []);
+  const preassigned = new Set(
+    allocations
+      .filter((allocation) =>
+        allocation.order_item_id === requestItem.sales_order_item_id &&
+        ["active", "packed"].includes(allocation.status)
+      )
+      .map((allocation) => allocation.serial_number_id),
+  );
 
   return candidates
     .filter((serial) => {

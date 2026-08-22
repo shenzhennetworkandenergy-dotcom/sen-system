@@ -3,21 +3,21 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { getPermissionCatalogue, getPermissionMatrix } from "@/lib/auth/permissions";
 import { requireProfile } from "@/lib/auth/session";
 import { routes } from "@/lib/constants/routes";
-import { visibleEmployeeNavigation } from "@/lib/navigation/dashboard";
+import { getAuthorizedPhysicalReturnQueue } from "@/lib/inventory/rma-return-data";
+import { employeeModuleRouteMap } from "@/lib/navigation/dashboard";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export default async function EmployeePage() {
   const { profile } = await requireProfile(["employee"]);
-  const [matrix, modules] = await Promise.all([
+  const [matrix, modules, physicalReturnClaims] = await Promise.all([
     getPermissionMatrix(profile.id),
     getPermissionCatalogue(),
+    getAuthorizedPhysicalReturnQueue(profile.id),
   ]);
   const permittedModules = modules.filter((module) =>
     module.permissions.some((permission) => matrix.effectiveKeys.includes(permission.key)),
   );
-  const visibleRoutes = new Map(
-    visibleEmployeeNavigation(matrix.effectiveKeys).map((item) => [item.key, item.route]),
-  );
+  const visibleRoutes = employeeModuleRouteMap(matrix.effectiveKeys);
   const canViewActivity = matrix.effectiveKeys.includes("activity.view_own");
   const { data: activity } = canViewActivity
     ? await createSupabaseAdminClient()
@@ -54,6 +54,33 @@ export default async function EmployeePage() {
         <p className="mt-2 text-blue-900">Review attendance and leave, submit correction requests, and follow administrator decisions.</p>
         <a href={routes.employeeHr} className="mt-4 inline-block rounded-lg bg-blue-700 px-4 py-2 font-semibold text-white">Open My HR</a>
       </section>
+
+      {physicalReturnClaims.length ? (
+        <section className="mt-6 rounded-xl border bg-[var(--surface)] p-6">
+          <h2 className="text-xl font-semibold">Physical customer returns</h2>
+          <p className="mt-1 text-sm text-[var(--muted-text)]">
+            Confirm only products that have physically arrived at one of your authorized warehouses.
+          </p>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {physicalReturnClaims.map((claim) => (
+              <a
+                key={claim.id}
+                href={`/employee/rma/${claim.id}/receive`}
+                className="rounded-lg border p-4 transition hover:border-blue-400 hover:bg-blue-50"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <strong>{claim.rmaNumber}</strong>
+                  <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-900">
+                    {claim.quantityRemaining} to receive
+                  </span>
+                </div>
+                <p className="mt-2 text-sm">{claim.orderNumber}</p>
+                <p className="text-sm text-[var(--muted-text)]">{claim.warehouseName}</p>
+              </a>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="mt-6 rounded-xl border bg-[var(--surface)] p-6">
         <h2 className="text-xl font-semibold">Permitted modules</h2>

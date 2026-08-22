@@ -60,7 +60,7 @@ test("queue includes pending and partial requests but excludes completed and can
 test("detail provides current revision, packing readiness, preselected serials, and audit history", () => {
   assert.match(dataSource, /sales_stock_out_request_revisions/);
   assert.match(dataSource, /sales_stock_out_request_revision_items/);
-  assert.match(dataSource, /preassigned_serial_ids/);
+  assert.match(dataSource, /currentSerialIdsByOrderItem/);
   assert.match(dataSource, /packed_quantity/);
   assert.match(dataSource, /sales_stock_out_releases/);
   assert.match(dataSource, /sales_stock_out_serial_changes/);

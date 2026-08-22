@@ -40,6 +40,8 @@ test("release validates packed, reserved, physical, and exact serial quantities"
   assert.match(migration, /serial\.product_id[\s\S]{0,180}request_item\.product_id/i);
   assert.match(migration, /serial\.warehouse_id[\s\S]{0,180}request\.warehouse_id/i);
   assert.match(migration, /damaged[\s\S]{0,120}unavailable[\s\S]{0,120}quarantined/i);
+  assert.match(migration, /preassigned_serial_count[\s\S]{0,500}assigned to this finalized invoice/i);
+  assert.match(migration, /not exists[\s\S]{0,300}rma_return_receipt_serials/i);
 });
 
 test("one confirmed release writes physical balance, reservation, movement, immutable ledger, and audit together", () => {
@@ -67,6 +69,12 @@ test("explicit serial replacement is warehouse/product scoped and audited", () =
   assert.match(migration, /previous_serial_number_id/);
   assert.match(migration, /replacement_serial_number_id/);
   assert.match(migration, /already been physically released/i);
+  assert.match(migration, /update\s+public\.shipment_serials[\s\S]{0,180}serial_number_id=replacement_serial\.id/i);
+  assert.match(migration, /previous_result_status[\s\S]{0,360}quarantined/i);
+  assert.doesNotMatch(
+    migration.slice(migration.toLowerCase().lastIndexOf("create or replace function public.replace_stock_out_serial")),
+    /previous_serial\.id[\s\S]{0,100}status='available'/i,
+  );
   assert.match(actions, /select\("request_id"\)/);
   assert.match(
     actions,
@@ -87,4 +95,20 @@ test("release form uses one operation token, action state, serial search, and re
   assert.match(actions, /revalidatePath\("\/employee\/inventory\/stock-out"\)/);
   assert.match(detail, /<StockOutReleaseForm/);
   assert.match(detail, /key=\{`\$\{detail\.request\.id\}:\$\{detail\.request\.version\}`\}/);
+  assert.match(form, /disabled=\{serial\.preselected\}/);
+});
+
+test("upstream allocation and cancellation preserve unavailable serial safety", () => {
+  assert.match(
+    migration,
+    /create or replace function public\.allocate_order_serials[\s\S]*lower\(coalesce\(serial\.condition,''\)\) in\([\s\S]{0,120}'damaged','unavailable','lost','disposed','quarantined'/i,
+  );
+  assert.match(
+    migration,
+    /create or replace function public\.auto_allocate_order_serials[\s\S]*lower\(coalesce\(condition,''\)\) not in\([\s\S]{0,120}'damaged','unavailable','lost','disposed','quarantined'/i,
+  );
+  assert.match(
+    migration,
+    /create or replace function public\.cancel_sales_order[\s\S]*cancelled_serial_result_status[\s\S]*when 'unavailable' then 'unavailable'/i,
+  );
 });

@@ -124,6 +124,7 @@ function SerialSelector({
               <input
                 type="checkbox"
                 checked={selected.includes(serial.id)}
+                disabled={serial.preselected}
                 onChange={(event) => onSelected(
                   event.target.checked
                     ? [...new Set([...selected, serial.id])]
@@ -224,10 +225,19 @@ export function StockOutReleaseForm({
                   max={Math.min(item.remainingQuantity, item.packedRemainingQuantity)}
                   step={1}
                   value={quantities[item.requestItemId] ?? 0}
-                  onChange={(event) => setQuantities((current) => ({
-                    ...current,
-                    [item.requestItemId]: Number(event.target.value),
-                  }))}
+                  onChange={(event) => {
+                    const quantity = Math.max(0, Math.trunc(Number(event.target.value) || 0));
+                    setQuantities((current) => ({
+                      ...current,
+                      [item.requestItemId]: quantity,
+                    }));
+                    setSelectedSerials((current) => ({
+                      ...current,
+                      [item.requestItemId]: item.preassignedSerials.length
+                        ? item.preassignedSerials.slice(0, quantity).map((serial) => serial.id)
+                        : (current[item.requestItemId] ?? []).slice(0, quantity),
+                    }));
+                  }}
                 />
                 <span className="text-xs">{item.remainingQuantity} remaining · {item.packedRemainingQuantity} packed and unreleased</span>
               </label>

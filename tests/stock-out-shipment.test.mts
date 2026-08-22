@@ -24,6 +24,9 @@ test("dispatch is capped by committed Stock Out release quantity", () => {
   assert.match(dispatchSql, /quantity_released/);
   assert.match(dispatchSql, /shipped_quantity/);
   assert.match(dispatchSql, /not yet been released from inventory/i);
+  assert.match(dispatchSql, /rma_return_receipts/);
+  assert.match(dispatchSql, /released_total-returned_total/i);
+  assert.match(dispatchSql, /sale\.status='cancelled'/i);
 });
 
 test("serialized dispatch accepts only exact warehouse-released serial allocations", () => {
