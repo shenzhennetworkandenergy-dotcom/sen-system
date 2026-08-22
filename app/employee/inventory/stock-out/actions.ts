@@ -96,7 +96,13 @@ export async function replaceStockOutSerialAction(
     };
   }
 
-  const result = await createSupabaseAdminClient().rpc("replace_stock_out_serial", {
+  const db = createSupabaseAdminClient();
+  const requestItemResult = await db
+    .from("sales_stock_out_request_items")
+    .select("request_id")
+    .eq("id", requestItemId)
+    .maybeSingle();
+  const result = await db.rpc("replace_stock_out_serial", {
     actor_profile_id: profile.id,
     requested_request_item_id: requestItemId,
     requested_previous_serial_id: previousSerialId,
@@ -115,5 +121,8 @@ export async function replaceStockOutSerialAction(
   }
 
   revalidatePath("/employee/inventory/stock-out");
+  if (requestItemResult.data?.request_id) {
+    revalidatePath(`/employee/inventory/stock-out/${requestItemResult.data.request_id}`);
+  }
   return { ok: true, message: "SEN Serial replacement recorded in the audit history." };
 }

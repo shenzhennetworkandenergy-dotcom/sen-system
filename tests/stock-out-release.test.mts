@@ -67,6 +67,11 @@ test("explicit serial replacement is warehouse/product scoped and audited", () =
   assert.match(migration, /previous_serial_number_id/);
   assert.match(migration, /replacement_serial_number_id/);
   assert.match(migration, /already been physically released/i);
+  assert.match(actions, /select\("request_id"\)/);
+  assert.match(
+    actions,
+    /revalidatePath\(`\/employee\/inventory\/stock-out\/\$\{requestItemResult\.data\.request_id\}`\)/,
+  );
 });
 
 test("release form uses one operation token, action state, serial search, and replacement reason", () => {

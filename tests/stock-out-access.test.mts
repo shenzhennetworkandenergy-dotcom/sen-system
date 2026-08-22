@@ -68,6 +68,17 @@ test("detail provides current revision, packing readiness, preselected serials, 
   assert.match(detailSource, /Release history/i);
 });
 
+test("detail preselects the current active serial allocation after an audited replacement", () => {
+  assert.match(dataSource, /currentAllocationResult/);
+  assert.match(dataSource, /order_serial_allocations/);
+  assert.match(dataSource, /\.in\("status",\s*\["active",\s*"packed"\]\)/);
+  assert.match(dataSource, /currentSerialIdsByOrderItem/);
+  assert.doesNotMatch(
+    dataSource,
+    /preassignedSerials:\s*\(revisionItem\?\.preassigned_serial_ids\s*\?\?\s*\[\]\)/,
+  );
+});
+
 test("serial search is permission scoped and returns only exact eligible warehouse units", () => {
   assert.match(serialRoute, /profile\.role\s*!==\s*"employee"/);
   assert.match(serialRoute, /inventory\.release_sales_stock/);

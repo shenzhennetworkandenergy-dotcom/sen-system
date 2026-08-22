@@ -217,28 +217,44 @@ export async function getAuthorizedStockOutRequest(
   }
   const revisionItems = revisionItemsResult.data ?? [];
   const releaseItems = releaseItemsResult.data ?? [];
-  const preassignedIds = [...new Set(revisionItems.flatMap((item) => item.preassigned_serial_ids ?? []))];
-  const [preassignedResult, releaseSerialsResult] = await Promise.all([
-    preassignedIds.length
-      ? db.from("serial_numbers").select("id,sen_serial,manufacturer_serial,status,condition,warehouse_id").in("id", preassignedIds)
+  const currentAllocationResult = items.length
+    ? await db
+        .from("order_serial_allocations")
+        .select("order_item_id,serial_number_id,status")
+        .in("order_item_id", items.map((item) => item.sales_order_item_id))
+        .in("status", ["active", "packed"])
+    : { data: [], error: null };
+  if (currentAllocationResult.error) {
+    throw new Error("Unable to load current SEN Serial assignments.");
+  }
+  const currentSerialIdsByOrderItem = new Map<string, string[]>();
+  for (const allocation of currentAllocationResult.data ?? []) {
+    const currentIds = currentSerialIdsByOrderItem.get(allocation.order_item_id) ?? [];
+    currentIds.push(allocation.serial_number_id);
+    currentSerialIdsByOrderItem.set(allocation.order_item_id, currentIds);
+  }
+  const currentSerialIds = [
+    ...new Set((currentAllocationResult.data ?? []).map((allocation) => allocation.serial_number_id)),
+  ];
+  const [currentSerialResult, releaseSerialsResult] = await Promise.all([
+    currentSerialIds.length
+      ? db.from("serial_numbers").select("id,sen_serial,manufacturer_serial,status,condition,warehouse_id").in("id", currentSerialIds)
       : Promise.resolve({ data: [], error: null }),
     releaseItems.length
       ? db.from("sales_stock_out_release_serials").select("*").in("release_item_id", releaseItems.map((item) => item.id))
       : Promise.resolve({ data: [], error: null }),
   ]);
-  if (preassignedResult.error || releaseSerialsResult.error) {
+  if (currentSerialResult.error || releaseSerialsResult.error) {
     throw new Error("Unable to load Stock Out serial history.");
   }
   const currentOrderItems = keyed(orderItemsResult.data ?? []);
-  const revisionByRequestItem = new Map(revisionItems.map((item) => [item.request_item_id, item]));
-  const serialsById = keyed(preassignedResult.data ?? []);
+  const serialsById = keyed(currentSerialResult.data ?? []);
   const detailedItems = items.map((item) => {
-    const revisionItem = revisionByRequestItem.get(item.id);
     const currentOrderItem = currentOrderItems.get(item.sales_order_item_id);
     return {
       ...item,
       packedQuantity: Number(currentOrderItem?.packed_quantity ?? item.packed_quantity_snapshot ?? 0),
-      preassignedSerials: (revisionItem?.preassigned_serial_ids ?? [])
+      preassignedSerials: (currentSerialIdsByOrderItem.get(item.sales_order_item_id) ?? [])
         .map((id: string) => serialsById.get(id))
         .filter(Boolean),
     };
