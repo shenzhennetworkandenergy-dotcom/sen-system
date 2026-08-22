@@ -215,7 +215,6 @@ export async function getAuthorizedStockOutRequest(
   if (orderItemsResult.error || revisionItemsResult.error || releaseItemsResult.error || serialChangesResult.error) {
     throw new Error("Unable to load Stock Out item history.");
   }
-  const revisionItems = revisionItemsResult.data ?? [];
   const releaseItems = releaseItemsResult.data ?? [];
   const currentAllocationResult = items.length
     ? await db

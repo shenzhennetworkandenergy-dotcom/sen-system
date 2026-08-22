@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { connection } from "next/server";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
@@ -60,7 +61,7 @@ export default async function EmployeeStockOutRequestPage({
       subtitle={`${order?.order_number ?? "Sales Invoice"} · ${warehouse?.name ?? "Authorized warehouse"}`}
       employeePermissions={permissions}
     >
-      <a href="/employee/inventory/stock-out" className="mb-3 inline-block font-semibold text-[var(--primary)]">← Back to Stock Out queue</a>
+      <Link href="/employee/inventory/stock-out" className="mb-3 inline-block font-semibold text-[var(--primary)]">← Back to Stock Out queue</Link>
       <section className="grid gap-3 rounded-xl border bg-[var(--surface)] p-4 sm:grid-cols-2 lg:grid-cols-5">
         <div><span className="text-xs text-[var(--muted-text)]">Status</span><b className="block">{label(detail.request.status)}</b></div>
         <div><span className="text-xs text-[var(--muted-text)]">Revision</span><b className="block">{invoice?.revision_number ?? detail.request.current_revision_number}</b></div>
