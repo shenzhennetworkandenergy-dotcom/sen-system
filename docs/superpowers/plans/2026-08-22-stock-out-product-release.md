@@ -107,7 +107,7 @@ git commit -m "test: define stock out domain contracts"
 - Extends movement type with `stock_out`, serial/allocation status with `warehouse_released`, and `sale_documents` with `finalization_idempotency_key`
 - Adds sensitive permission `inventory.release_sales_stock`
 
-- [ ] **Step 1: Write a failing migration-contract test**
+- [x] **Step 1: Write a failing migration-contract test**
 
 The test loads the migration and asserts the complete additive object set, uniqueness (`sales_order_id`, finalization token, release token, return token, release serial), required check constraints, RLS enablement/policies, service-role-only mutation RPC grants, no permission-template grant, and absence of `drop table`, `truncate`, and business-data deletion.
 
@@ -117,21 +117,21 @@ assert.match(sql, /inventory\.release_sales_stock/);
 assert.doesNotMatch(sql, /\b(drop table|truncate|delete from public\.(?:inventory|sales|serial|shipment))/i);
 ```
 
-- [ ] **Step 2: Run the migration test and verify RED**
+- [x] **Step 2: Run the migration test and verify RED**
 
 Run: `node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/stock-out-migration.test.mts`
 
 Expected: FAIL because the migration does not exist.
 
-- [ ] **Step 3: Add the migration tables, constraints, indexes, RLS, permission, and status extensions**
+- [x] **Step 3: Add the migration tables, constraints, indexes, RLS, permission, and status extensions**
 
 Use `create table if not exists`, named foreign keys, nonnegative quantity checks, `required_quantity >= released_quantity`, generated/stored or checked remaining quantities, unique one-request-per-order, unique request-item-per-order-item, unique document revision snapshot, unique idempotency keys, and unique successfully released serial ownership. Add read policies scoped through permission plus active warehouse assignment; direct mutations remain unavailable except through service-role RPCs.
 
-- [ ] **Step 4: Integrate the migration into native schema generation and seed**
+- [x] **Step 4: Integrate the migration into native schema generation and seed**
 
 Read the new migration in `scripts/build-native-schema.mjs` and append it after the raw public schema before final grants. Add the permission row to `database/native/seed.sql` with the existing Inventory module UUID and no template assignment. Run `npm run native:schema`.
 
-- [ ] **Step 5: Run migration/native tests and verify GREEN**
+- [x] **Step 5: Run migration/native tests and verify GREEN**
 
 Run:
 
@@ -141,7 +141,7 @@ node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE
 
 Expected: migration and generated native schema contracts pass.
 
-- [ ] **Step 6: Commit the additive schema**
+- [x] **Step 6: Commit the additive schema**
 
 ```text
 git add supabase/migrations/202608220001_employee_stock_out_product_release.sql tests/stock-out-migration.test.mts scripts/build-native-schema.mjs database/native/seed.sql database/native/schema.sql
