@@ -60,7 +60,7 @@ alter table public.order_serial_allocations
 alter table public.order_serial_allocations
   add constraint order_serial_allocations_status_check check (
     status=any(array[
-      'active','released','packed','warehouse_released','shipped','delivered','cancelled'
+      'active','released','packed','warehouse_released','shipped','delivered','returned','cancelled'
     ]::text[])
   );
 
@@ -1419,4 +1419,322 @@ end $$;
 revoke all on function public.dispatch_order_shipment(uuid,uuid)
   from public,anon,authenticated;
 grant execute on function public.dispatch_order_shipment(uuid,uuid)
+  to service_role;
+
+-- Cancellation reverses reservations only. A prior physical release must have
+-- an equal confirmed physical return before the commercial record can close.
+create or replace function public.cancel_sales_order(actor_profile_id uuid,requested_order_id uuid,requested_reason text) returns void
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  sale public.sales_orders%rowtype;
+  request public.sales_stock_out_requests%rowtype;
+  reservation public.inventory_reservations%rowtype;
+  allocation public.order_serial_allocations%rowtype;
+  released_total numeric:=0;
+  returned_total numeric:=0;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'orders.cancel');
+  select * into sale from public.sales_orders
+  where id=requested_order_id for update;
+  if sale.id is null then raise exception 'Sale not found'; end if;
+  if sale.status='cancelled' then raise exception 'This sale is already cancelled'; end if;
+
+  select * into request from public.sales_stock_out_requests
+  where sales_order_id=sale.id for update;
+  if request.id is not null then
+    perform id from public.sales_stock_out_releases
+    where request_id=request.id order by id for update;
+    select coalesce(sum(quantity_released),0) into released_total
+    from public.sales_stock_out_releases
+    where request_id=request.id and status='confirmed';
+    perform id from public.rma_return_receipts
+    where stock_out_request_id=request.id order by id for update;
+    select coalesce(sum(quantity_received),0) into returned_total
+    from public.rma_return_receipts
+    where stock_out_request_id=request.id and status='confirmed';
+    if released_total>returned_total then
+      raise exception 'This Sales Invoice has physically released products. Complete a proper physical return through RMA before cancellation.';
+    end if;
+  elsif sale.status in('shipped','partially_shipped','delivered') then
+    raise exception 'Dispatched sales cannot be cancelled without a proper physical return';
+  end if;
+
+  for reservation in
+    select * from public.inventory_reservations
+    where order_id=sale.id and status='active'
+    order by id for update
+  loop
+    update public.inventory_balances
+    set reserved=greatest(reserved-reservation.quantity,0),updated_at=now()
+    where warehouse_id=reservation.warehouse_id
+      and product_id=reservation.product_id
+      and variation_id is not distinct from reservation.variation_id
+      and location_id is null;
+    if not found then raise exception 'Reserved inventory balance was not found'; end if;
+    update public.inventory_reservations
+    set status='cancelled',released_at=now(),updated_at=now()
+    where id=reservation.id;
+  end loop;
+
+  for allocation in
+    select * from public.order_serial_allocations
+    where order_id=sale.id and status in('active','packed')
+    order by id for update
+  loop
+    update public.serial_numbers
+    set status='available',updated_at=now()
+    where id=allocation.serial_number_id
+      and status in('allocated','packed','reserved');
+    update public.order_serial_allocations
+    set status='cancelled',released_by=actor_profile_id,released_at=now(),
+      release_reason=left(requested_reason,500)
+    where id=allocation.id;
+  end loop;
+
+  if request.id is not null then
+    update public.sales_stock_out_requests
+    set status='cancelled',cancelled_at=now(),cancelled_by=actor_profile_id,
+      cancellation_reason=left(requested_reason,1000),updated_at=now(),version=version+1
+    where id=request.id;
+  end if;
+  update public.sales_orders
+  set status='cancelled',cancelled_at=now(),updated_by=actor_profile_id,updated_at=now()
+  where id=sale.id;
+  insert into public.order_status_events(
+    order_id,old_status,new_status,actor_profile_id,note
+  ) values(sale.id,sale.status,'cancelled',actor_profile_id,left(requested_reason,1000));
+end $$;
+
+create or replace function public.confirm_physical_return_receipt(
+  actor_profile_id uuid,
+  requested_claim_id uuid,
+  requested_release_item_id uuid,
+  requested_operation_id uuid,
+  requested_quantity numeric,
+  requested_serial_ids uuid[]
+) returns uuid
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  actor public.profiles%rowtype;
+  claim public.rma_claims%rowtype;
+  release_item public.sales_stock_out_release_items%rowtype;
+  release public.sales_stock_out_releases%rowtype;
+  request_item public.sales_stock_out_request_items%rowtype;
+  request public.sales_stock_out_requests%rowtype;
+  balance public.inventory_balances%rowtype;
+  serial public.serial_numbers%rowtype;
+  original_release_serial public.sales_stock_out_release_serials%rowtype;
+  existing_receipt public.rma_return_receipts%rowtype;
+  receipt_id uuid:=gen_random_uuid();
+  movement_id uuid:=gen_random_uuid();
+  movement_item_id uuid;
+  already_returned numeric:=0;
+  claim_already_returned numeric:=0;
+  returnable numeric;
+  serialized_count integer;
+  serial_id uuid;
+  claim_received_total numeric;
+  next_claim_status text;
+begin
+  if requested_operation_id is null then raise exception 'A valid physical return operation ID is required'; end if;
+  if requested_quantity<=0 or requested_quantity<>trunc(requested_quantity) then
+    raise exception 'Physical return quantity must be a positive whole number';
+  end if;
+  perform public.assert_actor_permission(actor_profile_id,'rma.receive');
+  select * into actor from public.profiles where id=actor_profile_id;
+  if actor.id is null or actor.role<>'employee' or actor.status<>'active' then
+    raise exception 'An active employee account is required to receive a physical return';
+  end if;
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(requested_operation_id::text,0));
+  select * into existing_receipt from public.rma_return_receipts
+  where operation_id=requested_operation_id;
+  if existing_receipt.id is not null then
+    if existing_receipt.rma_claim_id<>requested_claim_id
+      or existing_receipt.stock_out_release_item_id<>requested_release_item_id
+    then raise exception 'This physical return operation belongs to another receipt'; end if;
+    return existing_receipt.id;
+  end if;
+
+  select * into claim from public.rma_claims
+  where id=requested_claim_id for update;
+  if claim.id is null then raise exception 'RMA claim not found'; end if;
+  if claim.status not in('return_requested','product_received') then
+    raise exception 'The RMA claim is not ready for physical return receipt';
+  end if;
+  select * into release_item from public.sales_stock_out_release_items
+  where id=requested_release_item_id for update;
+  if release_item.id is null then raise exception 'Original Stock Out release item not found'; end if;
+  select * into release from public.sales_stock_out_releases
+  where id=release_item.release_id and status='confirmed' for update;
+  select * into request_item from public.sales_stock_out_request_items
+  where id=release_item.request_item_id for update;
+  select * into request from public.sales_stock_out_requests
+  where id=request_item.request_id for update;
+  if release.id is null or request_item.id is null or request.id is null
+    or release.sales_order_id<>claim.sales_order_id
+    or request_item.sales_order_item_id<>claim.sales_order_item_id
+    or release_item.product_id<>claim.product_id
+    or release_item.variation_id is distinct from claim.variation_id
+  then raise exception 'RMA claim does not match the original physical Stock Out release'; end if;
+  if not exists(
+    select 1 from public.profile_warehouse_assignments assignment
+    join public.warehouses warehouse on warehouse.id=assignment.warehouse_id
+    where assignment.profile_id=actor_profile_id
+      and assignment.warehouse_id=release_item.warehouse_id
+      and assignment.is_active and assignment.ended_at is null and warehouse.is_active
+  ) then raise exception 'The employee is not actively assigned to this return warehouse'; end if;
+
+  perform id from public.rma_return_receipts
+  where stock_out_release_item_id=release_item.id order by id for update;
+  select coalesce(sum(quantity_received),0) into already_returned
+  from public.rma_return_receipts
+  where stock_out_release_item_id=release_item.id and status='confirmed';
+  select coalesce(sum(quantity_received),0) into claim_already_returned
+  from public.rma_return_receipts
+  where rma_claim_id=claim.id and status='confirmed';
+  returnable:=least(
+    release_item.quantity_released-already_returned,
+    claim.quantity-claim_already_returned
+  );
+  if requested_quantity>returnable then
+    raise exception 'Return quantity exceeds the % unit(s) still returnable for this original release',greatest(returnable,0);
+  end if;
+
+  select count(*) into serialized_count
+  from public.sales_stock_out_release_serials
+  where release_item_id=release_item.id;
+  if serialized_count>0 then
+    if coalesce(array_length(requested_serial_ids,1),0)<>requested_quantity::integer
+      or (select count(distinct id) from unnest(requested_serial_ids) id)<>requested_quantity::integer
+    then raise exception 'Exactly one original SEN Serial is required for every physically returned unit'; end if;
+    perform id from public.serial_numbers
+    where id=any(requested_serial_ids) order by id for update;
+    if (
+      select count(*) from public.sales_stock_out_release_serials original
+      where original.release_item_id=release_item.id
+        and original.serial_number_id=any(requested_serial_ids)
+        and not exists(
+          select 1 from public.rma_return_receipt_serials received
+          where received.original_release_serial_id=original.id
+        )
+    )<>requested_quantity::integer then
+      raise exception 'Every returned SEN Serial must be an unreturned serial from the original Stock Out';
+    end if;
+    if claim.serial_number_id is not null and not claim.serial_number_id=any(requested_serial_ids) then
+      raise exception 'The returned SEN Serial does not match this RMA claim';
+    end if;
+  elsif coalesce(array_length(requested_serial_ids,1),0)>0 then
+    raise exception 'This non-serialized return cannot contain SEN Serial Numbers';
+  end if;
+
+  select * into balance from public.inventory_balances
+  where warehouse_id=release_item.warehouse_id
+    and product_id=release_item.product_id
+    and variation_id is not distinct from release_item.variation_id
+    and location_id is null for update;
+  if balance.id is null then raise exception 'Return warehouse inventory balance not found'; end if;
+
+  insert into public.inventory_movements(
+    movement_type,id,reference,status,destination_warehouse_id,notes,
+    initiated_by,confirmed_at
+  ) values(
+    'customer_return',movement_id,
+    'RET-MV-'||upper(substr(replace(movement_id::text,'-',''),1,12)),
+    'confirmed',release_item.warehouse_id,
+    'Physical customer return for RMA '||claim.rma_number,actor_profile_id,now()
+  );
+  update public.inventory_balances
+  set on_hand=on_hand+requested_quantity,
+    unavailable=unavailable+requested_quantity,
+    updated_at=now()
+  where id=balance.id;
+  insert into public.inventory_movement_items(
+    quantity_delta,movement_id,product_id,variation_id,warehouse_id,balance_after
+  ) values(
+    requested_quantity,movement_id,release_item.product_id,release_item.variation_id,
+    release_item.warehouse_id,balance.on_hand+requested_quantity
+  ) returning id into movement_item_id;
+  insert into public.rma_return_receipts(
+    id,rma_claim_id,stock_out_request_id,stock_out_release_id,
+    stock_out_release_item_id,sales_order_id,warehouse_id,operation_id,
+    movement_id,quantity_received,received_by,received_by_name,received_at
+  ) values(
+    receipt_id,claim.id,request.id,release.id,release_item.id,release.sales_order_id,
+    release_item.warehouse_id,requested_operation_id,movement_id,requested_quantity,
+    actor_profile_id,coalesce(nullif(actor.full_name,''),actor.email,'Employee'),now()
+  );
+
+  if serialized_count>0 then
+    foreach serial_id in array requested_serial_ids
+    loop
+      select * into original_release_serial
+      from public.sales_stock_out_release_serials
+      where release_item_id=release_item.id and serial_number_id=serial_id for update;
+      select * into serial from public.serial_numbers where id=serial_id for update;
+      insert into public.rma_return_receipt_serials(
+        return_receipt_id,original_release_serial_id,serial_number_id,
+        previous_status,new_status
+      ) values(receipt_id,original_release_serial.id,serial.id,serial.status,'returned');
+      update public.serial_numbers
+      set warehouse_id=release_item.warehouse_id,status='returned',
+        service_status='received_for_service',active_rma_claim_id=claim.id,
+        last_movement_id=movement_id,updated_at=now()
+      where id=serial.id;
+      update public.order_serial_allocations
+      set status='returned',release_reason='Physically returned through RMA '||claim.rma_number
+      where id=original_release_serial.allocation_id;
+      insert into public.serial_number_history(
+        serial_number_id,event_type,previous_status,new_status,
+        previous_warehouse_id,new_warehouse_id,movement_id,reason,actor_id
+      ) values(
+        serial.id,'customer_return',serial.status,'returned',serial.warehouse_id,
+        release_item.warehouse_id,movement_id,'Physical return receipt '||claim.rma_number,
+        actor_profile_id
+      );
+    end loop;
+  end if;
+
+  claim_received_total:=claim_already_returned+requested_quantity;
+  next_claim_status:=case when claim_received_total>=claim.quantity then 'product_received' else claim.status end;
+  update public.rma_claims
+  set status=next_claim_status,
+    received_at=case when next_claim_status='product_received' then coalesce(received_at,now()) else received_at end,
+    updated_at=now()
+  where id=claim.id;
+  insert into public.rma_events(
+    rma_claim_id,actor_profile_id,event_type,previous_status,new_status,note,metadata
+  ) values(
+    claim.id,actor_profile_id,'physical_return_received',claim.status,next_claim_status,
+    'Physical Return Receipt confirmed at the warehouse.',
+    jsonb_build_object('receipt_id',receipt_id,'movement_id',movement_id,
+      'release_item_id',release_item.id,'quantity',requested_quantity,
+      'warehouse_id',release_item.warehouse_id)
+  );
+  insert into public.audit_logs(
+    actor_id,actor_role,target_profile_id,action,module,entity_type,
+    entity_id,description,new_values
+  ) values(
+    actor_profile_id,actor.role,claim.customer_profile_id,
+    'rma.physical_return_received','rma','rma_return_receipt',receipt_id::text,
+    'A customer return was physically received into the warehouse.',
+    jsonb_build_object('rma_claim_id',claim.id,'sales_order_id',release.sales_order_id,
+      'stock_out_release_id',release.id,'movement_id',movement_id,
+      'warehouse_id',release_item.warehouse_id,'quantity',requested_quantity)
+  );
+  return receipt_id;
+end $$;
+
+revoke all on function public.cancel_sales_order(uuid,uuid,text)
+  from public,anon,authenticated;
+revoke all on function public.confirm_physical_return_receipt(uuid,uuid,uuid,uuid,numeric,uuid[])
+  from public,anon,authenticated;
+grant execute on function public.cancel_sales_order(uuid,uuid,text)
+  to service_role;
+grant execute on function public.confirm_physical_return_receipt(uuid,uuid,uuid,uuid,numeric,uuid[])
   to service_role;
