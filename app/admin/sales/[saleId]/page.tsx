@@ -1,5 +1,6 @@
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
+import { randomUUID } from "node:crypto";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { SaleLineEditor } from "@/components/sales/SaleLineEditor";
@@ -53,7 +54,9 @@ export default async function SaleDetail({
     shipments,
     events,
     audit,
+    stockOutRequest,
   } = data;
+  const invoiceOperationId = randomUUID();
   const customer = order.customer as {
     full_name: string | null;
     email: string;
@@ -290,6 +293,7 @@ export default async function SaleDetail({
             <h2 className="font-bold">Documents</h2>
             <div className="mt-3 flex flex-wrap gap-2">
               <form action={generateSaleDocumentAction.bind(null, saleId, "invoice")}>
+                <input type="hidden" name="operation_id" value={invoiceOperationId} />
                 <button className="rounded-lg bg-[var(--primary)] px-4 py-2 font-semibold text-[var(--primary-foreground)]">
                   {hasSupersededInvoice ? "Generate Revised Invoice" : "Generate Invoice"}
                 </button>
@@ -306,6 +310,12 @@ export default async function SaleDetail({
                   {document.document_number} · Revision {document.revision_number ?? 1} · {label(document.status)} · Print / PDF
                 </a>
               ))}
+              {stockOutRequest ? (
+                <span className="rounded-lg border border-cyan-200 bg-cyan-50 px-4 py-2 text-sm font-semibold text-cyan-950">
+                  Stock Out: {label(stockOutRequest.status)} · {stockOutRequest.remaining_quantity} remaining
+                  {stockOutRequest.invoice_revision_pending ? " · revision pending" : ""}
+                </span>
+              ) : null}
             </div>
           </article>
         </div>

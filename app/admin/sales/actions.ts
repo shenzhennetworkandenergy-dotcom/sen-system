@@ -9,7 +9,7 @@ import { moneyFromForm, parseMoney, parseWholeNumber } from "@/lib/validation/nu
 import { normalizeSaleLineEdit } from "@/lib/sales/line-editing";
 
 const target = (id: string, kind: "success" | "error", message: string) => `/admin/sales/${id}?${kind}=${encodeURIComponent(message)}`;
-const safe = (message: string | undefined, fallback: string) => message && /sale|payment|amount|method|stock|draft|serial|document|permission|eligible/i.test(message) ? message : fallback;
+const safe = (message: string | undefined, fallback: string) => message && /sale|invoice|revision|release|payment|amount|method|stock|draft|serial|document|permission|eligible/i.test(message) ? message : fallback;
 
 export async function updateSaleLinesAction(saleId: string, form: FormData) {
   const { profile } = await requirePermission("sales.edit");
@@ -141,13 +141,38 @@ export async function recordPaymentAction(saleId: string, form: FormData) {
   revalidatePath("/admin/sales"); revalidatePath(`/admin/sales/${saleId}`); redirect(target(saleId, "success", "Payment recorded."));
 }
 
-export async function generateSaleDocumentAction(saleId: string, type: "invoice" | "delivery_challan") {
+export async function generateSaleDocumentAction(saleId: string, type: "invoice" | "delivery_challan", form: FormData) {
   const permission = type === "invoice" ? "sales.create_invoice" : "sales.create_delivery_challan";
   const { profile } = await requirePermission(permission), db = createSupabaseAdminClient();
-  const result = await db.rpc("generate_sale_document", { actor_profile_id: profile.id, requested_order_id: saleId, requested_type: type });
+  let result;
+  if (type === "invoice") {
+    let operationId: string;
+    try {
+      operationId = uuid(form.get("operation_id"), "Invoice finalization operation");
+    } catch (error) {
+      redirect(target(saleId, "error", error instanceof Error ? error.message : "Invoice operation is invalid."));
+    }
+    result = await db.rpc("finalize_sale_invoice", {
+      actor_profile_id: profile.id,
+      requested_order_id: saleId,
+      requested_operation_id: operationId,
+    });
+  } else {
+    result = await db.rpc("generate_sale_document", {
+      actor_profile_id: profile.id,
+      requested_order_id: saleId,
+      requested_type: type,
+    });
+  }
   if (result.error || !result.data) redirect(target(saleId, "error", safe(result.error?.message, "Unable to generate document.")));
   await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: `sale.${type}_generated`, module: "sales", entityType: "sales_order", entityId: saleId, description: `${type === "invoice" ? "Invoice" : "Delivery challan"} generated.` });
-  revalidatePath(`/admin/sales/${saleId}`); redirect(`/admin/sales/${saleId}/documents/${result.data}`);
+  revalidatePath("/admin/sales");
+  revalidatePath(`/admin/sales/${saleId}`);
+  if (type === "invoice") {
+    revalidatePath("/employee/inventory/stock-out");
+    revalidatePath("/api/employee/inventory/work-counts");
+  }
+  redirect(`/admin/sales/${saleId}/documents/${result.data}`);
 }
 
 export async function createBasicCustomerAction(form: FormData) {

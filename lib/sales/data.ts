@@ -52,7 +52,7 @@ export async function getSale(saleId: string) {
   const order = await db.from("sales_orders").select("*,customer:profiles!sales_orders_customer_profile_id_fkey(id,full_name,email,phone,company_name),employee:profiles!sales_orders_created_by_fkey(id,full_name,email),warehouses(id,code,name)").eq("id", saleId).maybeSingle();
   assertResult("Unable to load sale.", order.error);
   if (!order.data) return null;
-  const [items, reservations, allocations, payments, adjustments, documents, shipments, events, audit] = await Promise.all([
+  const [items, reservations, allocations, payments, adjustments, documents, shipments, events, audit, stockOutRequest] = await Promise.all([
     db.from("sales_order_items").select("*").eq("order_id", saleId).order("created_at"),
     db.from("inventory_reservations").select("*").eq("order_id", saleId).order("created_at"),
     db.from("order_serial_allocations").select("*,serial_numbers(id,sen_serial,manufacturer_serial,status,condition)").eq("order_id", saleId).order("allocated_at"),
@@ -62,9 +62,10 @@ export async function getSale(saleId: string) {
     db.from("shipments").select("*").eq("order_id", saleId).order("created_at", { ascending: false }),
     db.from("order_status_events").select("*").eq("order_id", saleId).order("created_at", { ascending: false }),
     db.from("audit_logs").select("*").eq("entity_id", saleId).order("created_at", { ascending: false }).limit(100),
+    db.from("sales_stock_out_requests").select("id,request_number,status,required_quantity,released_quantity,remaining_quantity,invoice_revision_pending,current_revision_number").eq("sales_order_id", saleId).maybeSingle(),
   ]);
-  for (const [name, result] of Object.entries({ items, reservations, allocations, payments, adjustments, documents, shipments, events, audit })) assertResult(`Unable to load sale ${name}.`, result.error);
-  return { order: order.data, items: items.data ?? [], reservations: reservations.data ?? [], allocations: allocations.data ?? [], payments: payments.data ?? [], adjustments: adjustments.data ?? [], documents: documents.data ?? [], shipments: shipments.data ?? [], events: events.data ?? [], audit: audit.data ?? [] };
+  for (const [name, result] of Object.entries({ items, reservations, allocations, payments, adjustments, documents, shipments, events, audit, stockOutRequest })) assertResult(`Unable to load sale ${name}.`, result.error);
+  return { order: order.data, items: items.data ?? [], reservations: reservations.data ?? [], allocations: allocations.data ?? [], payments: payments.data ?? [], adjustments: adjustments.data ?? [], documents: documents.data ?? [], shipments: shipments.data ?? [], events: events.data ?? [], audit: audit.data ?? [], stockOutRequest: stockOutRequest.data ?? null };
 }
 
 export async function getCustomerSalesHistory(profileId: string) {

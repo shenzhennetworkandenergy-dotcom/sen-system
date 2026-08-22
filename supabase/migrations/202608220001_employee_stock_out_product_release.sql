@@ -487,3 +487,327 @@ revoke all on function public.can_access_stock_out_warehouse(uuid) from public,a
 revoke all on function public.can_receive_rma_at_warehouse(uuid) from public,anon;
 grant execute on function public.can_access_stock_out_warehouse(uuid) to authenticated,service_role;
 grant execute on function public.can_receive_rma_at_warehouse(uuid) to authenticated,service_role;
+
+create or replace function public.mark_stock_out_invoice_revision_pending()
+returns trigger
+language plpgsql
+security definer
+set search_path=''
+as $$
+begin
+  if old.document_type='invoice'
+    and old.status='generated'
+    and new.status='superseded'
+  then
+    update public.sales_stock_out_requests
+    set invoice_revision_pending=true,updated_at=now(),version=version+1
+    where sales_order_id=old.order_id and status<>'cancelled';
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists sale_documents_mark_stock_out_revision_pending
+  on public.sale_documents;
+create trigger sale_documents_mark_stock_out_revision_pending
+after update of status on public.sale_documents
+for each row execute function public.mark_stock_out_invoice_revision_pending();
+
+create or replace function public.finalize_sale_invoice(
+  actor_profile_id uuid,
+  requested_order_id uuid,
+  requested_operation_id uuid
+) returns uuid
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  sale public.sales_orders%rowtype;
+  sale_item public.sales_order_items%rowtype;
+  balance public.inventory_balances%rowtype;
+  reservation public.inventory_reservations%rowtype;
+  request_row public.sales_stock_out_requests%rowtype;
+  request_item public.sales_stock_out_request_items%rowtype;
+  existing_document_id uuid;
+  existing_document_order_id uuid;
+  document_id uuid:=gen_random_uuid();
+  request_id uuid;
+  request_revision_id uuid:=gen_random_uuid();
+  invoice_number text;
+  document_snapshot jsonb;
+  next_revision integer;
+  required_quantity numeric:=0;
+  released_quantity numeric:=0;
+  item_released_quantity numeric;
+  desired_reservation numeric;
+  current_reservation numeric;
+  reservation_delta numeric;
+  active_reservation_count integer;
+  preassigned_serial_ids uuid[];
+  request_status text;
+begin
+  if requested_operation_id is null then
+    raise exception 'A valid invoice finalization operation ID is required';
+  end if;
+  perform public.assert_actor_permission(actor_profile_id,'sales.create_invoice');
+
+  select document.id,document.order_id
+  into existing_document_id,existing_document_order_id
+  from public.sale_documents document
+  where document.finalization_idempotency_key=requested_operation_id;
+  if existing_document_id is not null then
+    if existing_document_order_id<>requested_order_id then
+      raise exception 'The invoice finalization operation ID belongs to another sale';
+    end if;
+    return existing_document_id;
+  end if;
+
+  select * into sale
+  from public.sales_orders
+  where id=requested_order_id
+  for update;
+  if sale.id is null then raise exception 'Sale not found'; end if;
+  if sale.confirmed_at is null or sale.status in('draft','cancelled') then
+    raise exception 'Sale is not eligible for invoice finalization';
+  end if;
+
+  -- Recheck after the order lock so concurrent retries return the first commit.
+  select document.id,document.order_id
+  into existing_document_id,existing_document_order_id
+  from public.sale_documents document
+  where document.finalization_idempotency_key=requested_operation_id;
+  if existing_document_id is not null then
+    if existing_document_order_id<>requested_order_id then
+      raise exception 'The invoice finalization operation ID belongs to another sale';
+    end if;
+    return existing_document_id;
+  end if;
+
+  select * into request_row
+  from public.sales_stock_out_requests request
+  where request.sales_order_id=sale.id
+  for update;
+  request_id:=request_row.id;
+
+  if not exists(select 1 from public.sales_order_items where order_id=sale.id) then
+    raise exception 'A finalized invoice must contain at least one product';
+  end if;
+  if exists(
+    select 1 from public.sales_order_items item
+    where item.order_id=sale.id
+      and item.fulfillment_warehouse_id is distinct from sale.fulfillment_warehouse_id
+  ) then
+    raise exception 'All finalized invoice products must use the sale warehouse';
+  end if;
+
+  -- Lock, validate, and reconcile every reservation before creating a document.
+  for sale_item in
+    select * from public.sales_order_items
+    where order_id=sale.id
+    order by created_at,id
+    for update
+  loop
+    select * into request_item
+    from public.sales_stock_out_request_items item
+    where item.request_id=request_id
+      and item.sales_order_item_id=sale_item.id
+    for update;
+    item_released_quantity:=coalesce(request_item.released_quantity,0);
+    required_quantity:=required_quantity+sale_item.quantity;
+    released_quantity:=released_quantity+item_released_quantity;
+
+    if sale_item.quantity<request_item.released_quantity then
+      raise exception 'Invoice quantity cannot be lower than % unit(s) already physically released for %',
+        request_item.released_quantity,sale_item.product_name_snapshot;
+    end if;
+
+    desired_reservation:=sale_item.quantity-item_released_quantity;
+    select * into balance
+    from public.inventory_balances
+    where warehouse_id=sale_item.fulfillment_warehouse_id
+      and product_id=sale_item.product_id
+      and variation_id is not distinct from sale_item.variation_id
+      and location_id is null
+    for update;
+    if balance.id is null then raise exception 'Inventory balance not found for %',sale_item.product_name_snapshot; end if;
+
+    perform id from public.inventory_reservations
+    where order_item_id=sale_item.id and status='active'
+    for update;
+    select count(*),coalesce(sum(quantity),0)
+    into active_reservation_count,current_reservation
+    from public.inventory_reservations
+    where order_item_id=sale_item.id and status='active';
+    if active_reservation_count>1 then
+      raise exception 'Multiple active reservations exist for one sale product';
+    end if;
+
+    reservation_delta:=desired_reservation-current_reservation;
+    if reservation_delta>0 and balance.available<reservation_delta then
+      raise exception 'Insufficient eligible available stock to finalize %',sale_item.product_name_snapshot;
+    end if;
+    if reservation_delta<>0 then
+      update public.inventory_balances
+      set reserved=reserved+reservation_delta,updated_at=now()
+      where id=balance.id;
+    end if;
+
+    select * into reservation
+    from public.inventory_reservations
+    where order_item_id=sale_item.id and status='active'
+    limit 1;
+    if desired_reservation=0 and reservation.id is not null then
+      update public.inventory_reservations
+      set status=case when item_released_quantity>0 then 'consumed' else 'released' end,
+        released_at=case when item_released_quantity=0 then now() else released_at end,
+        updated_at=now()
+      where id=reservation.id;
+    elsif desired_reservation>0 and reservation.id is not null then
+      update public.inventory_reservations
+      set quantity=desired_reservation,updated_at=now()
+      where id=reservation.id;
+    elsif desired_reservation>0 then
+      insert into public.inventory_reservations(
+        product_id,variation_id,warehouse_id,quantity,status,reference,
+        created_by,order_id,order_item_id
+      ) values(
+        sale_item.product_id,sale_item.variation_id,sale_item.fulfillment_warehouse_id,
+        desired_reservation,'active',sale.order_number,actor_profile_id,sale.id,sale_item.id
+      );
+    end if;
+  end loop;
+
+  select coalesce(max(revision_number),0)+1 into next_revision
+  from public.sale_documents
+  where order_id=sale.id and document_type='invoice';
+  invoice_number:='SEN-INV-'||to_char(clock_timestamp(),'YYYYMMDD')||'-'||public.secure_random_digits(6);
+  select jsonb_build_object(
+    'order',to_jsonb(sale),
+    'customer',(select to_jsonb(profile)-'password' from public.profiles profile where profile.id=sale.customer_profile_id),
+    'items',(select coalesce(jsonb_agg(to_jsonb(item) order by item.created_at),'[]'::jsonb)
+      from public.sales_order_items item where item.order_id=sale.id),
+    'serials',(select coalesce(jsonb_agg(jsonb_build_object(
+      'id',serial.id,'sen_serial',serial.sen_serial,
+      'manufacturer_serial',serial.manufacturer_serial,'product_id',serial.product_id,
+      'order_item_id',allocation.order_item_id
+    ) order by allocation.allocated_at),'[]'::jsonb)
+      from public.order_serial_allocations allocation
+      join public.serial_numbers serial on serial.id=allocation.serial_number_id
+      where allocation.order_id=sale.id
+        and allocation.status not in('released','cancelled')),
+    'generated_at',now(),'revision_number',next_revision
+  ) into document_snapshot;
+
+  update public.sale_documents
+  set status='superseded',superseded_at=now(),superseded_by=actor_profile_id,
+    superseded_reason='Replaced by finalized revision '||next_revision
+  where order_id=sale.id and document_type='invoice' and status='generated';
+
+  insert into public.sale_documents(
+    id,order_id,document_number,document_type,status,snapshot,generated_by,
+    revision_number,finalization_idempotency_key
+  ) values(
+    document_id,sale.id,invoice_number,'invoice','generated',document_snapshot,
+    actor_profile_id,next_revision,requested_operation_id
+  );
+
+  request_status:=case
+    when released_quantity=0 then 'pending_release'
+    when released_quantity>=required_quantity then 'fully_released'
+    else 'partially_released' end;
+  if request_id is null then request_id:=gen_random_uuid(); end if;
+  insert into public.sales_stock_out_requests(
+    id,request_number,sales_order_id,current_invoice_document_id,warehouse_id,
+    customer_profile_id,status,current_revision_number,required_quantity,
+    released_quantity,invoice_revision_pending,created_by,finalized_at
+  ) values(
+    request_id,'STO-'||to_char(clock_timestamp(),'YYYYMMDD')||'-'||public.secure_random_digits(6),
+    sale.id,document_id,sale.fulfillment_warehouse_id,sale.customer_profile_id,
+    request_status,next_revision,required_quantity,released_quantity,false,
+    actor_profile_id,now()
+  ) on conflict(sales_order_id) do update set
+    current_invoice_document_id=excluded.current_invoice_document_id,
+    warehouse_id=excluded.warehouse_id,
+    customer_profile_id=excluded.customer_profile_id,
+    status=excluded.status,
+    current_revision_number=excluded.current_revision_number,
+    required_quantity=excluded.required_quantity,
+    released_quantity=excluded.released_quantity,
+    invoice_revision_pending=false,
+    finalized_at=now(),updated_at=now(),version=public.sales_stock_out_requests.version+1
+  returning id into request_id;
+
+  insert into public.sales_stock_out_request_revisions(
+    id,request_id,sale_document_id,revision_number,operation_id,
+    invoice_number_snapshot,invoice_snapshot,required_quantity,
+    released_quantity_at_revision,created_by
+  ) values(
+    request_revision_id,request_id,document_id,next_revision,requested_operation_id,
+    invoice_number,document_snapshot,required_quantity,released_quantity,actor_profile_id
+  );
+
+  for sale_item in
+    select * from public.sales_order_items
+    where order_id=sale.id
+    order by created_at,id
+  loop
+    insert into public.sales_stock_out_request_items(
+      request_id,sales_order_item_id,line_key,product_id,variation_id,warehouse_id,
+      product_name_snapshot,sku_snapshot,serial_tracking_required,required_quantity,
+      released_quantity,packed_quantity_snapshot,latest_revision_number
+    ) values(
+      request_id,sale_item.id,sale_item.id::text,sale_item.product_id,sale_item.variation_id,
+      sale_item.fulfillment_warehouse_id,sale_item.product_name_snapshot,sale_item.sku_snapshot,
+      sale_item.serial_tracking_required_snapshot,sale_item.quantity,0,
+      sale_item.packed_quantity,next_revision
+    ) on conflict(request_id,sales_order_item_id) do update set
+      product_id=excluded.product_id,variation_id=excluded.variation_id,
+      warehouse_id=excluded.warehouse_id,product_name_snapshot=excluded.product_name_snapshot,
+      sku_snapshot=excluded.sku_snapshot,
+      serial_tracking_required=excluded.serial_tracking_required,
+      required_quantity=excluded.required_quantity,
+      packed_quantity_snapshot=excluded.packed_quantity_snapshot,
+      latest_revision_number=excluded.latest_revision_number,updated_at=now()
+    returning * into request_item;
+
+    select coalesce(array_agg(allocation.serial_number_id order by allocation.allocated_at),'{}'::uuid[])
+    into preassigned_serial_ids
+    from public.order_serial_allocations allocation
+    where allocation.order_item_id=sale_item.id
+      and allocation.status not in('released','cancelled');
+
+    insert into public.sales_stock_out_request_revision_items(
+      revision_id,request_item_id,sales_order_item_id,product_id,variation_id,
+      warehouse_id,required_quantity,released_quantity,preassigned_serial_ids
+    ) values(
+      request_revision_id,request_item.id,sale_item.id,sale_item.product_id,
+      sale_item.variation_id,sale_item.fulfillment_warehouse_id,sale_item.quantity,
+      request_item.released_quantity,preassigned_serial_ids
+    );
+  end loop;
+
+  -- The trigger temporarily marks the old revision pending; this transaction has
+  -- now installed its matching immutable request revision.
+  update public.sales_stock_out_requests
+  set invoice_revision_pending=false,updated_at=now()
+  where id=request_id;
+
+  insert into public.audit_logs(
+    actor_id,actor_role,action,module,entity_type,entity_id,description,new_values
+  ) values(
+    actor_profile_id,(select role from public.profiles where id=actor_profile_id),
+    'sale.invoice_finalized','sales','sales_stock_out_request',request_id::text,
+    'Sales Invoice finalized and Stock Out request synchronized.',
+    jsonb_build_object('order_id',sale.id,'document_id',document_id,
+      'revision_number',next_revision,'required_quantity',required_quantity,
+      'released_quantity',released_quantity)
+  );
+  return document_id;
+end $$;
+
+revoke all on function public.mark_stock_out_invoice_revision_pending()
+  from public,anon,authenticated;
+revoke all on function public.finalize_sale_invoice(uuid,uuid,uuid)
+  from public,anon,authenticated;
+grant execute on function public.finalize_sale_invoice(uuid,uuid,uuid)
+  to service_role;

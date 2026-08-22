@@ -162,27 +162,27 @@ git commit -m "feat: add stock out request and release ledger schema"
 - Keeps RPC: `generate_sale_document(...)` unchanged for delivery challans
 - Action: `generateSaleDocumentAction(saleId, type, formData)` reads `operation_id`
 
-- [ ] **Step 1: Write failing finalization behavior tests**
+- [x] **Step 1: Write failing finalization behavior tests**
 
 Test operation-token validation, invoice form token presence, delivery challan preservation, the revision floor helper, and a database integration scenario that asserts two calls with the same token return the same document/request/revision while a new token creates a new invoice revision but keeps the same request.
 
-- [ ] **Step 2: Run the finalization test and verify RED**
+- [x] **Step 2: Run the finalization test and verify RED**
 
 Expected failures: missing RPC/action token and no request synchronization.
 
-- [ ] **Step 3: Implement `finalize_sale_invoice`**
+- [x] **Step 3: Implement `finalize_sale_invoice`**
 
 The function must authorize `sales.create_invoice`, lock the confirmed sale/items/balances/reservations/request, return an existing document for a committed token, reject draft/cancelled sales, reject quantity below released, reconcile each active reservation to `required - released`, fail increases beyond eligible availability, supersede the previous invoice, create the document revision, upsert the single request and its items, insert immutable revision snapshots, calculate request status, and return the document ID in one transaction.
 
-- [ ] **Step 4: Wire the invoice form/action**
+- [x] **Step 4: Wire the invoice form/action**
 
 Use a hidden `operation_id` generated server-side for each rendered form. Invoice generation calls `finalize_sale_invoice`; delivery challans still call `generate_sale_document`. Revalidate Sales, Stock Out queue, and badge routes only after success, then redirect to the document.
 
-- [ ] **Step 5: Verify GREEN and regression**
+- [x] **Step 5: Verify GREEN and regression**
 
 Run the finalization test plus existing sale-line and sales visibility tests.
 
-- [ ] **Step 6: Commit invoice finalization**
+- [x] **Step 6: Commit invoice finalization**
 
 ```text
 git add supabase/migrations/202608220001_employee_stock_out_product_release.sql app/admin/sales/actions.ts app/admin/sales/[saleId]/page.tsx lib/sales/data.ts tests/stock-out-finalization.test.mts
