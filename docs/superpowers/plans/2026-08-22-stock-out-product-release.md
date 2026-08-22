@@ -249,25 +249,25 @@ git commit -m "feat: add scoped inventory work badges"
 - `getAuthorizedStockOutRequest(profileId, requestId): Promise<StockOutRequestDetail | null>`
 - Serial route query: `requestItemId`, `q`; response contains only eligible exact-product/variation/warehouse serials.
 
-- [ ] **Step 1: Write failing access/view-model tests**
+- [x] **Step 1: Write failing access/view-model tests**
 
 Assert active permission plus any active assigned warehouse, no cross-warehouse rows, request cards show invoice/customer/required/released/remaining, partial remains present, completed/cancelled excluded, and serial filtering excludes damaged/unavailable/quarantined/released/conflicting units.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
-- [ ] **Step 3: Implement server-only data module and queue page**
+- [x] **Step 3: Implement server-only data module and queue page**
 
 Use `requirePermission("inventory.release_sales_stock")` on the route and enforce assigned warehouse again in each trusted query. Follow the Receive page card structure and exact Bangla/English label. Do not expose Admin/global data.
 
-- [ ] **Step 4: Implement detail and serial-search route**
+- [x] **Step 4: Implement detail and serial-search route**
 
 Return current revision, request items, packing readiness, assigned/preselected serials, release history, and serial-change history. Direct route/API access returns not-found/forbidden outside warehouse scope.
 
-- [ ] **Step 5: Verify GREEN and build-time typing**
+- [x] **Step 5: Verify GREEN and build-time typing**
 
 Run the access tests and `npx tsc --noEmit`.
 
-- [ ] **Step 6: Commit queue/detail reads**
+- [x] **Step 6: Commit queue/detail reads**
 
 ```text
 git add lib/inventory/stock-out-data.ts app/employee/inventory/stock-out app/api/employee/inventory/stock-out/serials/route.ts tests/stock-out-access.test.mts
