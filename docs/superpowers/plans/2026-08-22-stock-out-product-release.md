@@ -37,7 +37,7 @@
 - Produces: `isEligibleStockOutSerial(serial, expected): boolean`
 - Produces: `isRevisionQuantityValid(required, released): boolean`
 
-- [ ] **Step 1: Write the failing domain tests**
+- [x] **Step 1: Write the failing domain tests**
 
 ```ts
 test("derives pending partial and full request status from required and released quantities", () => {
@@ -58,13 +58,13 @@ test("accepts only an eligible exact-product warehouse serial", () => {
 });
 ```
 
-- [ ] **Step 2: Run the domain test and verify RED**
+- [x] **Step 2: Run the domain test and verify RED**
 
 Run: `node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/stock-out-domain.test.mts`
 
 Expected: FAIL because `lib/inventory/stock-out.ts` does not exist.
 
-- [ ] **Step 3: Implement the pure contracts**
+- [x] **Step 3: Implement the pure contracts**
 
 ```ts
 export type StockOutRequestStatus = "pending_release" | "partially_released" | "fully_released" | "cancelled";
@@ -82,11 +82,11 @@ export function deriveStockOutStatus(items: Array<{ required: number; released: 
 
 Implement the quantity and serial predicates with literal allow/deny rules from the approved specification; do not query the database from this file.
 
-- [ ] **Step 4: Run the domain test and verify GREEN**
+- [x] **Step 4: Run the domain test and verify GREEN**
 
 Run the Step 2 command. Expected: all Stock Out domain tests pass.
 
-- [ ] **Step 5: Commit the domain contract**
+- [x] **Step 5: Commit the domain contract**
 
 ```text
 git add lib/inventory/stock-out.ts tests/stock-out-domain.test.mts
