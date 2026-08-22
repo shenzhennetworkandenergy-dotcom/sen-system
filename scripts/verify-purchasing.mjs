@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { access, readFile } from "node:fs/promises";
 import { createClient } from "@supabase/supabase-js";
+import { PostgrestClient } from "@supabase/postgrest-js";
 
 const root=new URL("../",import.meta.url);
 const migration=await readFile(new URL("supabase/migrations/202607240001_purchasing_module.sql",root),"utf8");
@@ -29,11 +30,14 @@ assert.match(receiptActionSource,/quantity:\s*parseWholeNumber\(item\.quantity,/
 const envText=await readFile(new URL(".env.local",root),"utf8").catch(()=>"");
 const fileEnv=Object.fromEntries(envText.split(/\r?\n/).map((line)=>line.trim()).filter((line)=>line&&!line.startsWith("#")&&line.includes("=")).map((line)=>{const index=line.indexOf("=");return [line.slice(0,index),line.slice(index+1).replace(/^['"]|['"]$/g,"")];}));
 const env={...fileEnv,...process.env};
-const url=env.NEXT_PUBLIC_SUPABASE_URL;
+const nativeMode=env.SEN_BACKEND==="native";
+const url=nativeMode?(env.SEN_POSTGREST_URL||"http://127.0.0.1:3002"):env.NEXT_PUBLIC_SUPABASE_URL;
 const key=env.SUPABASE_SECRET_KEY||env.SUPABASE_SERVICE_ROLE_KEY;
-assert.ok(url&&key,"Local Supabase URL and server key are required.");
+assert.ok(url&&(nativeMode||key),nativeMode?"Local PostgREST URL is required.":"Local Supabase URL and server key are required.");
 assert.ok(/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(url),"Purchasing integration verification refuses to mutate a non-local database.");
-const db=createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
+const db=nativeMode
+  ? new PostgrestClient(url.replace(/\/$/,""),{schema:"public"})
+  : createClient(url,key,{auth:{persistSession:false,autoRefreshToken:false}});
 for(const table of ["suppliers","purchase_orders","purchase_order_items","purchase_receipts"]){const probe=await db.from(table).select("id").limit(1);assert.equal(probe.error,null,`${table} is not available in local Supabase: ${probe.error?.message}`);}
 async function cleanupOrder(id){
   const receipts=(await db.from("purchase_receipts").select("id,inventory_movement_id").eq("purchase_order_id",id)).data??[];
