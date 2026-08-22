@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) throw new Error("DATABASE_URL is required for the Stock Out database verification.");
+const databaseUrl = process.env.STOCK_OUT_DATABASE_URL ?? process.env.DATABASE_URL;
+if (!databaseUrl) {
+  throw new Error("STOCK_OUT_DATABASE_URL or DATABASE_URL is required for the Stock Out database verification.");
+}
 
 const client = new pg.Client({ connectionString: databaseUrl });
 const query = (text, values = []) => client.query(text, values);
