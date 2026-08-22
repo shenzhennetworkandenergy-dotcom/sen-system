@@ -1298,3 +1298,125 @@ grant execute on function public.confirm_sales_stock_out(uuid,uuid,uuid,jsonb)
   to service_role;
 grant execute on function public.replace_stock_out_serial(uuid,uuid,uuid,uuid,text,uuid)
   to service_role;
+
+-- Shipment dispatch is logistics-only. The physical quantity and reservation
+-- were already consumed by confirm_sales_stock_out and must never move twice.
+create or replace function public.dispatch_order_shipment(actor_profile_id uuid,requested_shipment_id uuid) returns void
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  shipment public.shipments%rowtype;
+  shipment_item public.shipment_items%rowtype;
+  sale_item public.sales_order_items%rowtype;
+  allocation public.order_serial_allocations%rowtype;
+  serial_count integer;
+  released_total numeric;
+  status_id uuid;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'shipments.confirm_dispatch');
+  select * into shipment from public.shipments
+  where id=requested_shipment_id for update;
+  if shipment.id is null or shipment.status not in('confirmed','ready') then
+    raise exception 'Shipment is not ready for dispatch';
+  end if;
+
+  for shipment_item in
+    select * from public.shipment_items
+    where shipment_id=shipment.id order by id for update
+  loop
+    select * into sale_item from public.sales_order_items
+    where id=shipment_item.order_item_id and order_id=shipment.order_id
+    for update;
+    if sale_item.id is null or sale_item.shipped_quantity+shipment_item.quantity>sale_item.quantity then
+      raise exception 'Shipment exceeds remaining order quantity';
+    end if;
+    select coalesce(sum(release_item.quantity_released),0)
+    into released_total
+    from public.sales_stock_out_release_items release_item
+    join public.sales_stock_out_request_items request_item
+      on request_item.id=release_item.request_item_id
+    join public.sales_stock_out_releases release
+      on release.id=release_item.release_id and release.status='confirmed'
+    where request_item.sales_order_item_id=sale_item.id;
+    if released_total<sale_item.shipped_quantity+shipment_item.quantity then
+      raise exception 'This product has not yet been released from inventory. Complete Stock Out before shipment dispatch.';
+    end if;
+
+    if sale_item.serial_tracking_required_snapshot then
+      select count(*) into serial_count
+      from public.shipment_serials shipment_serial
+      join public.order_serial_allocations serial_allocation
+        on serial_allocation.id=shipment_serial.allocation_id
+      join public.sales_stock_out_release_serials released_serial
+        on released_serial.serial_number_id=shipment_serial.serial_number_id
+      join public.sales_stock_out_release_items released_item
+        on released_item.id=released_serial.release_item_id
+      join public.sales_stock_out_request_items requested_item
+        on requested_item.id=released_item.request_item_id
+      where shipment_serial.shipment_item_id=shipment_item.id
+        and serial_allocation.status='warehouse_released'
+        and requested_item.sales_order_item_id=sale_item.id;
+      if serial_count<>shipment_item.quantity::integer then
+        raise exception 'This product has not yet been released from inventory. Complete Stock Out before shipment dispatch.';
+      end if;
+      for allocation in
+        select serial_allocation.*
+        from public.shipment_serials shipment_serial
+        join public.order_serial_allocations serial_allocation
+          on serial_allocation.id=shipment_serial.allocation_id
+        where shipment_serial.shipment_item_id=shipment_item.id
+          and serial_allocation.status='warehouse_released'
+        order by serial_allocation.id
+        for update of serial_allocation
+      loop
+        update public.order_serial_allocations
+        set status='shipped',shipped_at=now()
+        where id=allocation.id and status='warehouse_released';
+        if not found then
+          raise exception 'A released SEN Serial was already processed. Refresh the shipment.';
+        end if;
+        update public.serial_numbers
+        set status='shipped',updated_at=now()
+        where id=allocation.serial_number_id and status='warehouse_released';
+        if not found then
+          raise exception 'A released SEN Serial is no longer eligible for dispatch';
+        end if;
+      end loop;
+    end if;
+
+    update public.sales_order_items
+    set shipped_quantity=shipped_quantity+shipment_item.quantity,updated_at=now()
+    where id=sale_item.id;
+  end loop;
+
+  select id into status_id from public.tracking_status_definitions
+  where key=case
+    when shipment.transport_mode='air' then 'departed_china_by_air'
+    when shipment.transport_mode='sea' then 'departed_china_by_sea'
+    else 'in_transit_to_customer'
+  end and is_active limit 1;
+  update public.shipments set status='dispatched',actual_departure_at=now(),
+    dispatched_at=now(),latest_tracking_status_id=status_id,
+    latest_location_snapshot=origin_snapshot,updated_by=actor_profile_id,updated_at=now()
+  where id=shipment.id;
+  if status_id is not null then
+    insert into public.shipment_tracking_events(
+      shipment_id,order_id,tracking_status_id,actor_profile_id,location_snapshot,
+      latitude,longitude,location_source,transport_mode_snapshot,
+      customer_visible_title,customer_visible_message,event_visibility,occurred_at
+    ) values(
+      shipment.id,shipment.order_id,status_id,actor_profile_id,shipment.origin_snapshot,
+      (shipment.origin_snapshot->>'latitude')::numeric,
+      (shipment.origin_snapshot->>'longitude')::numeric,'system',shipment.transport_mode,
+      'Shipment dispatched','Your shipment has departed the origin location.','both',now()
+    );
+  end if;
+  perform public.derive_sales_order_status(shipment.order_id);
+end $$;
+
+revoke all on function public.dispatch_order_shipment(uuid,uuid)
+  from public,anon,authenticated;
+grant execute on function public.dispatch_order_shipment(uuid,uuid)
+  to service_role;

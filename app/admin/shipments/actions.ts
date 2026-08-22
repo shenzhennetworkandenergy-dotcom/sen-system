@@ -37,7 +37,7 @@ async function shipmentRpc(permission: string, action: string, shipmentId: strin
   if (error) redirect(target(shipmentId, "error", safe(error.message))); await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action, module: "shipments", entityType: "shipment", entityId: shipmentId, description: message }); revalidatePath(`/admin/shipments/${shipmentId}`); redirect(target(shipmentId, "success", message));
 }
 export async function confirmShipmentAction(id: string) { return shipmentRpc("shipments.edit", "shipment.confirmed", id, "confirm_order_shipment", "Shipment confirmed."); }
-export async function dispatchShipmentAction(id: string) { return shipmentRpc("shipments.confirm_dispatch", "shipment.dispatched", id, "dispatch_order_shipment", "Shipment dispatched and inventory updated."); }
+export async function dispatchShipmentAction(id: string) { return shipmentRpc("shipments.confirm_dispatch", "shipment.dispatched", id, "dispatch_order_shipment", "Shipment dispatched."); }
 
 export async function addTrackingEventAction(shipmentId: string, form: FormData) {
   const { profile } = await requirePermission("shipments.update_status"); const db = createSupabaseAdminClient(); const location = { label: String(form.get("location_label") ?? "").slice(0, 160), latitude: Number(form.get("latitude") || 0) || null, longitude: Number(form.get("longitude") || 0) || null };
