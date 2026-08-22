@@ -7,6 +7,7 @@ import { getDashboardWorkCounts } from "@/lib/dashboard/work-counts";
 import { getCurrentProfile } from "@/lib/auth/session";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
+import { getEmployeeInventoryWorkCounts } from "@/lib/inventory/employee-inventory-work-counts";
 
 type DashboardShellProps = {
   title: string;
@@ -17,11 +18,19 @@ type DashboardShellProps = {
 };
 
 export async function DashboardShell({ title, subtitle, children, admin = false, employeePermissions }: DashboardShellProps) {
-  const navigation = admin ? adminNavigation : employeePermissions ? visibleEmployeeNavigation(employeePermissions) : [];
-  const [{ profile }, workCounts] = await Promise.all([
-    getCurrentProfile(),
-    admin ? getDashboardWorkCounts() : Promise.resolve({}),
-  ]);
+  const permissionSet = new Set(employeePermissions ?? []);
+  const navigation = admin ? adminNavigation : visibleEmployeeNavigation(permissionSet);
+  const { profile } = await getCurrentProfile();
+  let workCounts: Record<string, number> = {};
+  try {
+    workCounts = admin
+      ? await getDashboardWorkCounts()
+      : profile?.role === "employee" && profile.status === "active"
+        ? await getEmployeeInventoryWorkCounts(profile.id, permissionSet)
+        : {};
+  } catch (error) {
+    console.error("Dashboard work counts unavailable", error);
+  }
   let avatarUrl: string | null = null;
   if (profile?.avatar_path) {
     const signed = await createSupabaseAdminClient().storage
@@ -50,7 +59,7 @@ export async function DashboardShell({ title, subtitle, children, admin = false,
       </div>
     </header>
     <div className={`mx-auto grid max-w-[100rem] gap-3 px-3 py-3 sm:px-5 sm:py-4 ${navigation.length ? "lg:grid-cols-[15rem_minmax(0,1fr)]" : ""}`}>
-      {navigation.length ? <DashboardNavigation items={navigation} workCounts={workCounts}/> : null}
+      {navigation.length ? <DashboardNavigation items={navigation} workCounts={workCounts} workCountsEndpoint={admin ? undefined : "/api/employee/inventory/work-counts"}/> : null}
       <main className="sen-dashboard-content min-w-0">
         <div className="sen-dashboard-title mb-3 flex flex-col gap-0.5 rounded-xl border px-4 py-3 shadow-sm sm:flex-row sm:items-end sm:justify-between sm:gap-4">
           <div className="min-w-0"><h1 className="text-2xl font-bold tracking-tight sm:text-[1.7rem]">{title}</h1><p className="mt-0.5 max-w-4xl text-sm text-[var(--muted-text)]">{subtitle}</p></div>

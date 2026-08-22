@@ -1,6 +1,6 @@
 import { routes } from "@/lib/constants/routes";
 
-export type DashboardNavigationItem = { key:string; label:string; route:string|null; group:"Administration"|"Commerce and Customers"|"Inventory and Logistics"|"Procurement and Finance"|"Organization"|"Insights and System"|"Workspace"; iconKey:string; requiredPermission:string|null; alternativePermissions?:string[]; implemented:boolean; adminVisible:boolean; employeeVisible:boolean };
+export type DashboardNavigationItem = { key:string; moduleKey?:string; label:string; route:string|null; group:"Administration"|"Commerce and Customers"|"Inventory and Logistics"|"Procurement and Finance"|"Organization"|"Insights and System"|"Workspace"; iconKey:string; requiredPermission:string|null; alternativePermissions?:string[]; implemented:boolean; adminVisible:boolean; employeeVisible:boolean };
 
 export const adminNavigation: DashboardNavigationItem[] = [
   {key:"overview",label:"Overview",route:routes.admin,group:"Administration",iconKey:"dashboard",requiredPermission:null,implemented:true,adminVisible:true,employeeVisible:false},
@@ -18,6 +18,7 @@ export const adminNavigation: DashboardNavigationItem[] = [
   {key:"quotations",label:"Quotations",route:routes.adminQuotations,group:"Commerce and Customers",iconKey:"quotations",requiredPermission:"quotations.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"create-quotation",label:"Create Quotation",route:"/admin/quotations/new",group:"Commerce and Customers",iconKey:"quotations",requiredPermission:"quotations.create",implemented:true,adminVisible:false,employeeVisible:true},
   {key:"inventory",label:"Inventory",route:"/admin/inventory",group:"Inventory and Logistics",iconKey:"inventory",requiredPermission:"inventory.view",implemented:true,adminVisible:true,employeeVisible:true},
+  {key:"inventory-daily-closing",label:"Daily Closing Sheet",route:routes.adminInventoryDailyClosing,group:"Inventory and Logistics",iconKey:"inventory",requiredPermission:"inventory.daily_closing_view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"warehouses",label:"Warehouses",route:"/admin/warehouses",group:"Inventory and Logistics",iconKey:"warehouses",requiredPermission:"warehouses.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"serials",label:"Serial Tracking",route:"/admin/serials",group:"Inventory and Logistics",iconKey:"serials",requiredPermission:"serials.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"work-locations",label:"Work Locations",route:routes.adminWorkLocations,group:"Inventory and Logistics",iconKey:"locations",requiredPermission:"locations.view",implemented:true,adminVisible:true,employeeVisible:true},
@@ -41,7 +42,11 @@ export const employeeNavigation: DashboardNavigationItem[] = [
   {key:"employee-profile",label:"My workplace",route:routes.employeeProfile,group:"Workspace",iconKey:"locations",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
   {key:"employee-activity",label:"My Activity",route:routes.employeeActivity,group:"Workspace",iconKey:"activity",requiredPermission:"activity.view_own",implemented:true,adminVisible:false,employeeVisible:true},
   {key:"employee-hr",label:"My HR",route:routes.employeeHr,group:"Workspace",iconKey:"hr",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
+  {key:"receive-new-stock",moduleKey:"inventory",label:"নতুন পণ্য রিসিভ / Receive Stock",route:routes.employeeInventoryReceive,group:"Inventory and Logistics",iconKey:"inventory",requiredPermission:"inventory.receive_new_stock",implemented:true,adminVisible:false,employeeVisible:true},
+  {key:"stock-out-product-release",moduleKey:"inventory",label:"স্টক থেকে পণ্য রিলিজ / Stock Out",route:routes.employeeInventoryStockOut,group:"Inventory and Logistics",iconKey:"inventory",requiredPermission:"inventory.release_sales_stock",implemented:true,adminVisible:false,employeeVisible:true},
   ...adminNavigation.filter((item)=>item.employeeVisible),
 ];
 
 export function visibleEmployeeNavigation(permissionKeys:Iterable<string>){const permissions=new Set(permissionKeys);return employeeNavigation.filter((item)=>item.implemented&&item.employeeVisible&&(!item.requiredPermission||permissions.has(item.requiredPermission)||item.alternativePermissions?.some((key)=>permissions.has(key))));}
+
+export function employeeModuleRouteMap(permissionKeys:Iterable<string>){const routes=new Map<string,string>();for(const item of visibleEmployeeNavigation(permissionKeys)){const key=item.moduleKey??item.key;if(item.route&&!routes.has(key))routes.set(key,item.route);}return routes;}

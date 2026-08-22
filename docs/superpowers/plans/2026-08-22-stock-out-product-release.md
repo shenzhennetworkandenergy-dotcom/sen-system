@@ -208,27 +208,27 @@ git commit -m "feat: create stock out request when invoice finalizes"
 - API response: `{ counts: Record<string, number> }`
 - `DashboardNavigation` accepts `workCountsEndpoint?: string`
 
-- [ ] **Step 1: Write failing navigation/count tests**
+- [x] **Step 1: Write failing navigation/count tests**
 
 Assert menu order, independent permissions, Inventory dashboard route precedence, receive-order count not unit count, Stock Out pending/partial request count, de-duplication, warehouse scope, and zero/unauthorized omission.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Expected: missing Stock Out navigation and count service.
 
-- [ ] **Step 3: Implement scoped server counts and route**
+- [x] **Step 3: Implement scoped server counts and route**
 
 Query all active employee warehouse assignments. Receive count uses distinct purchase orders with remaining items and existing receive permission. Stock Out count uses distinct pending/partial request IDs and Stock Out permission. Route authenticates an active employee and never returns unauthorized counts.
 
-- [ ] **Step 4: Implement polling UI**
+- [x] **Step 4: Implement polling UI**
 
 Initialize from server counts, fetch the endpoint immediately after visibility returns and every 30 seconds while visible, preserve last successful counts on error, abort on unmount, and hide zero counts. Admin work counts keep existing behavior.
 
-- [ ] **Step 5: Verify GREEN and existing Receive navigation**
+- [x] **Step 5: Verify GREEN and existing Receive navigation**
 
 Run both new tests and `tests/employee-stock-receiving-workflow.test.mts`.
 
-- [ ] **Step 6: Commit navigation and badges**
+- [x] **Step 6: Commit navigation and badges**
 
 ```text
 git add lib/constants/routes.ts lib/navigation/dashboard.ts components/dashboard/Shell.tsx components/dashboard/DashboardNavigation.tsx lib/dashboard/work-counts.ts lib/inventory/employee-inventory-work-counts.ts app/api/employee/inventory/work-counts/route.ts tests/employee-receive-stock-navigation.test.mts tests/employee-inventory-work-counts.test.mts

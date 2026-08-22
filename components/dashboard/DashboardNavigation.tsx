@@ -26,9 +26,40 @@ function NavigationIcon({ name }: { name: string }) {
   return <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4 shrink-0" {...common}>{path}</svg>;
 }
 
-export function DashboardNavigation({items,workCounts={}}:{items:DashboardNavigationItem[];workCounts?:Record<string,number>}){
+type DashboardNavigationProps = {
+  items: DashboardNavigationItem[];
+  workCounts?: Record<string, number>;
+  workCountsEndpoint?: string;
+};
+
+export function DashboardNavigation({items,workCounts={},workCountsEndpoint}:DashboardNavigationProps){
   const [open,setOpen]=useState(false); const pathname=usePathname(); const searchParams=useSearchParams(); const trigger=useRef<HTMLButtonElement>(null);
+  const [liveWorkCounts,setLiveWorkCounts]=useState<Record<string,number>>(workCounts);
   useEffect(()=>{document.body.style.overflow=open?"hidden":""; const close=(event:KeyboardEvent)=>{if(event.key==="Escape"){setOpen(false);trigger.current?.focus();}}; window.addEventListener("keydown",close); return()=>{document.body.style.overflow="";window.removeEventListener("keydown",close);};},[open]);
+  useEffect(()=>{setLiveWorkCounts(workCounts);},[workCounts]);
+  useEffect(()=>{
+    if(!workCountsEndpoint)return;
+    let disposed=false;
+    let request:AbortController|null=null;
+    const refresh=async()=>{
+      if(disposed||request||document.visibilityState!=="visible")return;
+      request=new AbortController();
+      try{
+        const response=await fetch(workCountsEndpoint,{cache:"no-store",signal:request.signal});
+        if(!response.ok)return;
+        const body=await response.json() as {counts?:Record<string,unknown>};
+        const counts=Object.fromEntries(Object.entries(body.counts??{}).filter((entry):entry is [string,number]=>typeof entry[1]==="number"&&Number.isFinite(entry[1])&&entry[1]>0));
+        if(!disposed)setLiveWorkCounts(counts);
+      }catch(error){
+        if(error instanceof Error&&error.name!=="AbortError")console.error("Inventory badge refresh failed",error);
+      }finally{request=null;}
+    };
+    const onVisibilityChange=()=>{if(document.visibilityState==="visible")void refresh();};
+    void refresh();
+    const interval=window.setInterval(()=>{void refresh();},30_000);
+    document.addEventListener("visibilitychange",onVisibilityChange);
+    return()=>{disposed=true;request?.abort();window.clearInterval(interval);document.removeEventListener("visibilitychange",onVisibilityChange);};
+  },[workCountsEndpoint]);
   const groups=[...new Set(items.map((item)=>item.group))];
   const matchesRoute=(route:string)=>{const [path,query=""]=route.split("?");if(pathname!==path)return false;const expected=new URLSearchParams(query);return [...expected].every(([key,value])=>searchParams.get(key)===value);};
   const specificMatch=items.some((item)=>Boolean(item.route?.includes("?")&&matchesRoute(item.route)));
@@ -38,7 +69,7 @@ export function DashboardNavigation({items,workCounts={}}:{items:DashboardNaviga
     {open?<button type="button" aria-label="Close dashboard navigation" onClick={close} className="fixed inset-0 z-40 bg-black/45 lg:hidden"/>:null}
     <aside id="dashboard-navigation" className={`${open?"translate-x-0":"-translate-x-full"} sen-dashboard-sidebar fixed inset-y-0 left-0 z-50 w-[min(18rem,88vw)] overflow-y-auto border-r border-slate-700 bg-[#0b1730] p-3 text-slate-100 shadow-2xl transition-transform lg:sticky lg:top-[4.25rem] lg:z-auto lg:h-[calc(100vh-5.25rem)] lg:w-auto lg:translate-x-0 lg:rounded-xl lg:border`}>
       <div className="mb-2 flex items-center justify-between border-b border-white/10 pb-2 lg:hidden"><strong>Dashboard menu</strong><button type="button" onClick={close} className="min-h-9 rounded border border-white/20 bg-white/5 px-3 text-sm">Close</button></div>
-      <nav aria-label="Dashboard navigation" className="space-y-3">{groups.map((group)=><section key={group}><h2 className="mb-1 px-2 text-[10px] font-bold uppercase tracking-[0.12em] text-cyan-200/70">{group}</h2><div className="space-y-0.5">{items.filter((item)=>item.group===group).map((item)=>{const routeHasQuery=Boolean(item.route?.includes("?"));const active=Boolean(item.route&&matchesRoute(item.route)&&(!specificMatch||routeHasQuery));const count=workCounts[item.key]??0;return item.route&&item.implemented?<a key={item.key} href={item.route} aria-current={active?"page":undefined} className={`group flex min-h-8 items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] font-medium transition-all ${active?"bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md shadow-blue-950/30":count>0?"bg-amber-400/15 text-amber-100 ring-1 ring-amber-300/40 hover:bg-amber-400/25":"text-slate-200 hover:bg-white/10 hover:text-white"}`}><NavigationIcon name={item.iconKey}/><span className="min-w-0 flex-1 truncate">{item.label}</span>{count>0?<span className="grid min-w-5 place-items-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold text-white shadow" aria-label={`${count} items need attention`}>{count}</span>:null}</a>:<span key={item.key} aria-disabled="true" className="flex min-h-8 items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-slate-400"><NavigationIcon name={item.iconKey}/><span className="min-w-0 flex-1 truncate">{item.label}</span><span className="rounded bg-white/10 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-slate-300">Planned</span></span>})}</div></section>)}</nav>
+      <nav aria-label="Dashboard navigation" className="space-y-3">{groups.map((group)=><section key={group}><h2 className="mb-1 px-2 text-[10px] font-bold uppercase tracking-[0.12em] text-cyan-200/70">{group}</h2><div className="space-y-0.5">{items.filter((item)=>item.group===group).map((item)=>{const routeHasQuery=Boolean(item.route?.includes("?"));const active=Boolean(item.route&&matchesRoute(item.route)&&(!specificMatch||routeHasQuery));const count=liveWorkCounts[item.key]??0;return item.route&&item.implemented?<a key={item.key} href={item.route} aria-current={active?"page":undefined} className={`group flex min-h-8 items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] font-medium transition-all ${active?"bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-md shadow-blue-950/30":count>0?"bg-amber-400/15 text-amber-100 ring-1 ring-amber-300/40 hover:bg-amber-400/25":"text-slate-200 hover:bg-white/10 hover:text-white"}`}><NavigationIcon name={item.iconKey}/><span className="min-w-0 flex-1 truncate">{item.label}</span>{count>0?<span className="grid min-w-5 place-items-center rounded-full bg-red-500 px-1.5 py-0.5 text-[10px] font-bold text-white shadow" aria-label={`${count} items need attention`}>{count}</span>:null}</a>:<span key={item.key} aria-disabled="true" className="flex min-h-8 items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] text-slate-400"><NavigationIcon name={item.iconKey}/><span className="min-w-0 flex-1 truncate">{item.label}</span><span className="rounded bg-white/10 px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wide text-slate-300">Planned</span></span>})}</div></section>)}</nav>
     </aside>
   </>;
 }
