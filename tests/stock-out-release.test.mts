@@ -86,4 +86,5 @@ test("release form uses one operation token, action state, serial search, and re
   assert.match(actions, /replace_stock_out_serial/);
   assert.match(actions, /revalidatePath\("\/employee\/inventory\/stock-out"\)/);
   assert.match(detail, /<StockOutReleaseForm/);
+  assert.match(detail, /key=\{`\$\{detail\.request\.id\}:\$\{detail\.request\.version\}`\}/);
 });

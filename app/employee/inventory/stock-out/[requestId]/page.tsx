@@ -111,6 +111,7 @@ export default async function EmployeeStockOutRequestPage({
 
       {!detail.request.invoice_revision_pending && ["pending_release", "partially_released"].includes(detail.request.status) && releasableItems.length ? (
         <StockOutReleaseForm
+          key={`${detail.request.id}:${detail.request.version}`}
           requestId={detail.request.id}
           requestVersion={Number(detail.request.version)}
           operationId={randomUUID()}

@@ -17117,6 +17117,240 @@ ALTER TABLE public.work_locations ENABLE ROW LEVEL SECURITY;
 
 \unrestrict 8xw5WTNkNeDsEs7imcTvQK6SStc1ZEzi7dTUJzAhE1MPOAJkK3Dtdkgbnbu8Mby
 
+begin;
+
+-- Extend the existing carrier master without changing historical shipment text.
+alter table public.purchase_carriers
+  add column if not exists phone_number text,
+  add column if not exists address text,
+  add column if not exists description text,
+  add column if not exists updated_by uuid references public.profiles(id) on delete set null;
+
+alter table public.purchase_inbound_shipments
+  add column if not exists carrier_id uuid;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname='purchase_inbound_shipments_carrier_id_fkey'
+  ) then
+    alter table public.purchase_inbound_shipments
+      add constraint purchase_inbound_shipments_carrier_id_fkey
+      foreign key (carrier_id) references public.purchase_carriers(id) on delete restrict;
+  end if;
+end $$;
+
+create index if not exists purchase_inbound_shipments_carrier_id_idx
+  on public.purchase_inbound_shipments(carrier_id) where carrier_id is not null;
+
+-- Preserve unmatched legacy names as inactive master records, then link every
+-- historical shipment that can be linked. carrier_name remains as its snapshot.
+insert into public.purchase_carriers(name,status)
+select distinct trim(shipment.carrier_name),'inactive'
+from public.purchase_inbound_shipments shipment
+where nullif(trim(shipment.carrier_name),'') is not null
+  and not exists (
+    select 1 from public.purchase_carriers carrier
+    where lower(trim(carrier.name))=lower(trim(shipment.carrier_name))
+  )
+on conflict do nothing;
+
+update public.purchase_inbound_shipments shipment
+set carrier_id=carrier.id
+from public.purchase_carriers carrier
+where shipment.carrier_id is null
+  and nullif(trim(shipment.carrier_name),'') is not null
+  and lower(trim(carrier.name))=lower(trim(shipment.carrier_name));
+
+-- New application calls use a carrier ID. The established transition remains
+-- available for old history/clients while this wrapper snapshots the carrier name.
+create or replace function public.transition_purchase_inbound_shipment_with_carrier(
+  actor_profile_id uuid,
+  requested_order_id uuid,
+  requested_action text,
+  requested_transport_mode text default null,
+  requested_carrier_id uuid default null,
+  requested_tracking_number text default null,
+  requested_expected_departure_at timestamptz default null,
+  requested_expected_arrival_at timestamptz default null,
+  requested_note text default null
+) returns uuid
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  resolved_carrier_id uuid;
+  resolved_carrier_name text;
+  shipment_id uuid;
+begin
+  if requested_action='prepare' then
+    select id,name into resolved_carrier_id,resolved_carrier_name
+    from public.purchase_carriers
+    where id=requested_carrier_id and status='active';
+
+    if resolved_carrier_id is null then
+      raise exception 'Select an active carrier';
+    end if;
+  end if;
+
+  shipment_id:=public.transition_purchase_inbound_shipment(
+    actor_profile_id,
+    requested_order_id,
+    requested_action,
+    requested_transport_mode,
+    resolved_carrier_name,
+    requested_tracking_number,
+    requested_expected_departure_at,
+    requested_expected_arrival_at,
+    requested_note
+  );
+
+  if requested_action='prepare' then
+    update public.purchase_inbound_shipments
+    set carrier_id=resolved_carrier_id
+    where id=shipment_id;
+  end if;
+
+  return shipment_id;
+end $$;
+
+revoke all on function public.transition_purchase_inbound_shipment_with_carrier(
+  uuid,uuid,text,text,uuid,text,timestamptz,timestamptz,text
+) from public,anon,authenticated;
+grant execute on function public.transition_purchase_inbound_shipment_with_carrier(
+  uuid,uuid,text,text,uuid,text,timestamptz,timestamptz,text
+) to service_role;
+
+commit;
+
+-- Additive daily inventory closing/archive reporting. Existing inventory data is read-only input.
+
+create table if not exists public.inventory_daily_closing_sheets(
+  id uuid primary key default gen_random_uuid(),
+  root_sheet_id uuid references public.inventory_daily_closing_sheets(id) on delete restrict,
+  reference text not null unique,
+  inventory_date date not null,
+  warehouse_id uuid references public.warehouses(id) on delete restrict,
+  include_all_products boolean not null default false,
+  include_serial_details boolean not null default false,
+  status text not null default 'draft' check(status in('draft','finalized','verified')),
+  closing_status text not null default 'pending_review' check(closing_status in('verified','pending_review','discrepancy_found','reconciliation_required')),
+  prepared_by uuid not null references public.profiles(id) on delete restrict,
+  checked_by uuid references public.profiles(id) on delete restrict,
+  prepared_at timestamptz not null default now(),
+  finalized_at timestamptz,
+  verified_at timestamptz,
+  closing_time timestamptz,
+  physical_count numeric(18,4),
+  variance numeric(18,4),
+  remarks text,
+  revision integer not null default 1 check(revision>=1),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.inventory_daily_closing_lines(
+  id uuid primary key default gen_random_uuid(),
+  sheet_id uuid not null references public.inventory_daily_closing_sheets(id) on delete cascade,
+  product_id uuid not null references public.products(id) on delete restrict,
+  variation_id uuid references public.product_variations(id) on delete restrict,
+  product_name text not null,
+  sku text not null,
+  model text,
+  opening_qty numeric(18,4) not null default 0,
+  stock_in numeric(18,4) not null default 0,
+  stock_out numeric(18,4) not null default 0,
+  closing_qty numeric(18,4) not null default 0,
+  system_closing_qty numeric(18,4) not null default 0,
+  unit text not null default 'Pcs',
+  remarks text,
+  reconciliation_needed boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.inventory_daily_closing_movement_details(
+  id uuid primary key default gen_random_uuid(),
+  sheet_id uuid not null references public.inventory_daily_closing_sheets(id) on delete cascade,
+  line_id uuid references public.inventory_daily_closing_lines(id) on delete set null,
+  movement_id uuid references public.inventory_movements(id) on delete set null,
+  movement_item_id uuid references public.inventory_movement_items(id) on delete set null,
+  reference text,
+  movement_type text,
+  quantity_delta numeric(18,4) not null default 0,
+  source_warehouse_id uuid references public.warehouses(id) on delete set null,
+  destination_warehouse_id uuid references public.warehouses(id) on delete set null,
+  warehouse_id uuid references public.warehouses(id) on delete set null,
+  transaction_at timestamptz,
+  product_name text,
+  sku text,
+  serial_number_id uuid references public.serial_numbers(id) on delete set null,
+  sen_serial text,
+  manufacturer_serial text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists inventory_daily_closing_date_idx on public.inventory_daily_closing_sheets(inventory_date desc);
+create index if not exists inventory_daily_closing_warehouse_idx on public.inventory_daily_closing_sheets(warehouse_id,inventory_date desc);
+create index if not exists inventory_daily_closing_status_idx on public.inventory_daily_closing_sheets(status,closing_status);
+create index if not exists inventory_daily_closing_lines_sheet_idx on public.inventory_daily_closing_lines(sheet_id,product_name);
+create index if not exists inventory_daily_closing_movements_sheet_idx on public.inventory_daily_closing_movement_details(sheet_id,transaction_at);
+
+alter table public.inventory_daily_closing_sheets enable row level security;
+alter table public.inventory_daily_closing_lines enable row level security;
+alter table public.inventory_daily_closing_movement_details enable row level security;
+
+drop policy if exists "authorized staff read daily closing sheets" on public.inventory_daily_closing_sheets;
+create policy "authorized staff read daily closing sheets" on public.inventory_daily_closing_sheets
+for select to authenticated using(
+  public.is_current_user_admin()
+  or public.current_user_has_permission('inventory.daily_closing_view')
+  or public.current_user_has_permission('inventory.daily_closing_generate')
+  or public.current_user_has_permission('inventory.daily_closing_finalize')
+  or public.current_user_has_permission('inventory.daily_closing_verify')
+  or public.current_user_has_permission('inventory.daily_closing_print')
+  or public.current_user_has_permission('inventory.daily_closing_view_history')
+);
+drop policy if exists "authorized staff read daily closing lines" on public.inventory_daily_closing_lines;
+create policy "authorized staff read daily closing lines" on public.inventory_daily_closing_lines
+for select to authenticated using(
+  public.is_current_user_admin()
+  or public.current_user_has_permission('inventory.daily_closing_view')
+  or public.current_user_has_permission('inventory.daily_closing_generate')
+  or public.current_user_has_permission('inventory.daily_closing_finalize')
+  or public.current_user_has_permission('inventory.daily_closing_verify')
+  or public.current_user_has_permission('inventory.daily_closing_print')
+  or public.current_user_has_permission('inventory.daily_closing_view_history')
+);
+drop policy if exists "authorized staff read daily closing movement details" on public.inventory_daily_closing_movement_details;
+create policy "authorized staff read daily closing movement details" on public.inventory_daily_closing_movement_details
+for select to authenticated using(
+  public.is_current_user_admin()
+  or public.current_user_has_permission('inventory.daily_closing_view')
+  or public.current_user_has_permission('inventory.daily_closing_generate')
+  or public.current_user_has_permission('inventory.daily_closing_finalize')
+  or public.current_user_has_permission('inventory.daily_closing_verify')
+  or public.current_user_has_permission('inventory.daily_closing_print')
+  or public.current_user_has_permission('inventory.daily_closing_view_history')
+);
+
+grant select on public.inventory_daily_closing_sheets,public.inventory_daily_closing_lines,public.inventory_daily_closing_movement_details to authenticated;
+grant all on public.inventory_daily_closing_sheets,public.inventory_daily_closing_lines,public.inventory_daily_closing_movement_details to service_role;
+
+with catalogue(module_key,permission_key,name,description,action,sensitive,position) as (values
+  ('inventory','inventory.daily_closing_view','View daily inventory closing sheets','View daily inventory closing sheets','view',false,70),
+  ('inventory','inventory.daily_closing_generate','Generate daily inventory closing sheets','Generate and save daily inventory closing drafts','generate',false,80),
+  ('inventory','inventory.daily_closing_finalize','Finalize daily inventory closing sheets','Finalize daily inventory closing sheets','finalize',true,90),
+  ('inventory','inventory.daily_closing_print','Print daily inventory closing sheets','Print daily inventory closing sheets','print',false,100),
+  ('inventory','inventory.daily_closing_verify','Verify daily inventory closing sheets','Verify daily inventory closing sheets','verify',true,110),
+  ('inventory','inventory.daily_closing_view_history','View daily inventory closing history','View historical daily inventory closing sheets','view_history',true,120),
+  ('inventory','inventory.daily_closing_export_pdf','Export daily inventory closing sheets','Export daily inventory closing sheets to PDF','export_pdf',true,130)
+)
+insert into public.permissions(module_id,key,name,description,action,is_sensitive,sort_order)
+select m.id,c.permission_key,c.name,c.description,c.action,c.sensitive,c.position
+from catalogue c join public.app_modules m on m.key=c.module_key
+on conflict (key) do update set module_id=excluded.module_id,name=excluded.name,description=excluded.description,action=excluded.action,is_sensitive=excluded.is_sensitive,sort_order=excluded.sort_order;
+
 -- Employee Stock Out / Product Release.
 -- This migration is additive: existing sales, inventory, serial, shipment, and
 -- RMA history remains in place. Physical mutations are added as atomic RPCs in

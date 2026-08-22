@@ -1,13 +1,23 @@
 import { readFile, writeFile } from "node:fs/promises";
 
 const rawUrl = new URL("../database/native/schema-public.raw.sql", import.meta.url);
+const purchaseCarrierMigrationUrl = new URL(
+  "../supabase/migrations/202608190001_purchase_carrier_management.sql",
+  import.meta.url,
+);
+const dailyClosingMigrationUrl = new URL(
+  "../supabase/migrations/202608210002_inventory_daily_closing.sql",
+  import.meta.url,
+);
 const stockOutMigrationUrl = new URL(
   "../supabase/migrations/202608220001_employee_stock_out_product_release.sql",
   import.meta.url,
 );
 const outputUrl = new URL("../database/native/schema.sql", import.meta.url);
-const [raw, stockOutMigration] = await Promise.all([
+const [raw, purchaseCarrierMigration, dailyClosingMigration, stockOutMigration] = await Promise.all([
   readFile(rawUrl, "utf8"),
+  readFile(purchaseCarrierMigrationUrl, "utf8"),
+  readFile(dailyClosingMigrationUrl, "utf8"),
   readFile(stockOutMigrationUrl, "utf8"),
 ]);
 
@@ -36,7 +46,7 @@ const grants = `\n-- Native application service access. Browser users never rece
 
 await writeFile(
   outputUrl,
-  `${bootstrapWithExtensions}${nativeSchema.trim()}\n\n${stockOutMigration.trim()}\n${grants}`,
+  `${bootstrapWithExtensions}${nativeSchema.trim()}\n\n${purchaseCarrierMigration.trim()}\n\n${dailyClosingMigration.trim()}\n\n${stockOutMigration.trim()}\n${grants}`,
   "utf8",
 );
 console.log("Native PostgreSQL schema generated without the Supabase Auth foreign key.");
