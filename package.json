@@ -51,7 +51,8 @@
     "test:crm-inquiry-unread": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/crm-inquiry-unread.test.mts",
     "products:stage-woocommerce": "node scripts/import-woocommerce-products.mjs --stage",
     "products:import-woocommerce": "node scripts/import-woocommerce-products.mjs --import",
-    "products:verify-woocommerce": "node scripts/import-woocommerce-products.mjs --verify"
+    "products:verify-woocommerce": "node scripts/import-woocommerce-products.mjs --verify",
+    "test:stock-out": "node --env-file=.env.local scripts/verify-stock-out-database.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

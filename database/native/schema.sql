@@ -1,7 +1,8 @@
 -- Generated native PostgreSQL 17 baseline for SEN Windows/LAN operation.
 -- Source: verified public schema; Supabase Auth ownership is replaced by local credentials.
 
-create extension if not exists pgcrypto;
+create schema if not exists extensions;
+create extension if not exists pgcrypto with schema extensions;
 
 do $$ begin
   create role anon nologin;
@@ -17656,7 +17657,7 @@ declare
   existing_document_id uuid;
   existing_document_order_id uuid;
   document_id uuid:=gen_random_uuid();
-  request_id uuid;
+  stock_out_request_id uuid;
   request_revision_id uuid:=gen_random_uuid();
   invoice_number text;
   document_snapshot jsonb;
@@ -17712,7 +17713,7 @@ begin
   from public.sales_stock_out_requests request
   where request.sales_order_id=sale.id
   for update;
-  request_id:=request_row.id;
+  stock_out_request_id:=request_row.id;
 
   if not exists(select 1 from public.sales_order_items where order_id=sale.id) then
     raise exception 'A finalized invoice must contain at least one product';
@@ -17734,7 +17735,7 @@ begin
   loop
     select * into request_item
     from public.sales_stock_out_request_items item
-    where item.request_id=request_id
+    where item.request_id=stock_out_request_id
       and item.sales_order_item_id=sale_item.id
     for update;
     item_released_quantity:=coalesce(request_item.released_quantity,0);
@@ -17840,13 +17841,13 @@ begin
     when released_quantity=0 then 'pending_release'
     when released_quantity>=required_quantity then 'fully_released'
     else 'partially_released' end;
-  if request_id is null then request_id:=gen_random_uuid(); end if;
+  if stock_out_request_id is null then stock_out_request_id:=gen_random_uuid(); end if;
   insert into public.sales_stock_out_requests(
     id,request_number,sales_order_id,current_invoice_document_id,warehouse_id,
     customer_profile_id,status,current_revision_number,required_quantity,
     released_quantity,invoice_revision_pending,created_by,finalized_at
   ) values(
-    request_id,'STO-'||to_char(clock_timestamp(),'YYYYMMDD')||'-'||public.secure_random_digits(6),
+    stock_out_request_id,'STO-'||to_char(clock_timestamp(),'YYYYMMDD')||'-'||public.secure_random_digits(6),
     sale.id,document_id,sale.fulfillment_warehouse_id,sale.customer_profile_id,
     request_status,next_revision,required_quantity,released_quantity,false,
     actor_profile_id,now()
@@ -17860,14 +17861,14 @@ begin
     released_quantity=excluded.released_quantity,
     invoice_revision_pending=false,
     finalized_at=now(),updated_at=now(),version=public.sales_stock_out_requests.version+1
-  returning id into request_id;
+  returning id into stock_out_request_id;
 
   insert into public.sales_stock_out_request_revisions(
     id,request_id,sale_document_id,revision_number,operation_id,
     invoice_number_snapshot,invoice_snapshot,required_quantity,
     released_quantity_at_revision,created_by
   ) values(
-    request_revision_id,request_id,document_id,next_revision,requested_operation_id,
+    request_revision_id,stock_out_request_id,document_id,next_revision,requested_operation_id,
     invoice_number,document_snapshot,required_quantity,released_quantity,actor_profile_id
   );
 
@@ -17881,7 +17882,7 @@ begin
       product_name_snapshot,sku_snapshot,serial_tracking_required,required_quantity,
       released_quantity,packed_quantity_snapshot,latest_revision_number
     ) values(
-      request_id,sale_item.id,sale_item.id::text,sale_item.product_id,sale_item.variation_id,
+      stock_out_request_id,sale_item.id,sale_item.id::text,sale_item.product_id,sale_item.variation_id,
       sale_item.fulfillment_warehouse_id,sale_item.product_name_snapshot,sale_item.sku_snapshot,
       sale_item.serial_tracking_required_snapshot,sale_item.quantity,0,
       sale_item.packed_quantity,next_revision
@@ -17915,15 +17916,15 @@ begin
   -- now installed its matching immutable request revision.
   update public.sales_stock_out_requests
   set invoice_revision_pending=false,updated_at=now()
-  where id=request_id;
+  where id=stock_out_request_id;
 
   insert into public.audit_logs(
     actor_id,actor_role,action,module,entity_type,entity_id,description,new_values
   ) values(
     actor_profile_id,(select role from public.profiles where id=actor_profile_id),
-    'sale.invoice_finalized','sales','sales_stock_out_request',request_id::text,
+    'sale.invoice_finalized','sales','sales_stock_out_request',stock_out_request_id::text,
     'Sales Invoice finalized and Stock Out request synchronized.',
-    jsonb_build_object('order_id',sale.id,'document_id',document_id,
+    jsonb_build_object('order_id',sale.id,'document_id',document_id,'request_id',stock_out_request_id,
       'revision_number',next_revision,'required_quantity',required_quantity,
       'released_quantity',released_quantity)
   );
