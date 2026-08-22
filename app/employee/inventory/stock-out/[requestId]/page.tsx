@@ -1,7 +1,10 @@
+import { randomUUID } from "node:crypto";
+
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
+import { StockOutReleaseForm, type StockOutReleaseItem } from "@/components/inventory/StockOutReleaseForm";
 import { requirePermission } from "@/lib/auth/permissions";
 import { getAuthorizedStockOutRequest } from "@/lib/inventory/stock-out-data";
 import { dateTime, label } from "@/lib/orders/types";
@@ -25,6 +28,31 @@ export default async function EmployeeStockOutRequestPage({
   const order = detail.order as { order_number?: string } | null;
   const customer = detail.customer as { full_name?: string; email?: string; company_name?: string } | null;
   const warehouse = detail.warehouse as { name?: string; code?: string } | null;
+  const releasableItems: StockOutReleaseItem[] = detail.items
+    .filter((item) => Number(item.remaining_quantity) > 0)
+    .map((item) => {
+      const eligiblePreassigned = item.preassignedSerials
+        .filter((serial) => ["available", "reserved", "allocated", "packed"].includes(String(serial.status)))
+        .map((serial) => ({
+          id: String(serial.id),
+          sen_serial: serial.sen_serial ? String(serial.sen_serial) : null,
+          manufacturer_serial: serial.manufacturer_serial ? String(serial.manufacturer_serial) : null,
+          status: String(serial.status),
+          preselected: true,
+        }));
+      return {
+        requestItemId: String(item.id),
+        productName: String(item.product_name_snapshot),
+        sku: String(item.sku_snapshot),
+        remainingQuantity: Number(item.remaining_quantity),
+        packedRemainingQuantity: Math.max(0, Number(item.packedQuantity) - Number(item.released_quantity)),
+        serialTrackingRequired: Boolean(item.serial_tracking_required),
+        preassignedSerials: eligiblePreassigned,
+      };
+    });
+  const replacementOperationIds = Object.fromEntries(
+    releasableItems.flatMap((item) => item.preassignedSerials.map((serial) => [serial.id, randomUUID()])),
+  );
 
   return (
     <DashboardShell
@@ -79,6 +107,16 @@ export default async function EmployeeStockOutRequestPage({
           );
         })}
       </section>
+
+      {!detail.request.invoice_revision_pending && ["pending_release", "partially_released"].includes(detail.request.status) && releasableItems.length ? (
+        <StockOutReleaseForm
+          requestId={detail.request.id}
+          requestVersion={Number(detail.request.version)}
+          operationId={randomUUID()}
+          items={releasableItems}
+          replacementOperationIds={replacementOperationIds}
+        />
+      ) : null}
 
       <section className="mt-4 rounded-xl border bg-[var(--surface)] p-4">
         <h2 className="font-bold">Release history</h2>

@@ -64,6 +64,13 @@ alter table public.order_serial_allocations
     ]::text[])
   );
 
+-- A serial that has left the warehouse remains exclusively bound to its sale.
+-- Replacing the original partial unique index is safe and preserves every row.
+drop index if exists public.order_serial_one_active_assignment_idx;
+create unique index order_serial_one_active_assignment_idx
+  on public.order_serial_allocations(serial_number_id)
+  where status in('active','packed','warehouse_released','shipped');
+
 create table if not exists public.sales_stock_out_requests (
   id uuid primary key default gen_random_uuid(),
   request_number text not null,
@@ -810,4 +817,484 @@ revoke all on function public.mark_stock_out_invoice_revision_pending()
 revoke all on function public.finalize_sale_invoice(uuid,uuid,uuid)
   from public,anon,authenticated;
 grant execute on function public.finalize_sale_invoice(uuid,uuid,uuid)
+  to service_role;
+
+create or replace function public.confirm_sales_stock_out(
+  actor_profile_id uuid,
+  requested_request_id uuid,
+  requested_operation_id uuid,
+  requested_items jsonb
+) returns uuid
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  actor public.profiles%rowtype;
+  request public.sales_stock_out_requests%rowtype;
+  request_item public.sales_stock_out_request_items%rowtype;
+  revision public.sales_stock_out_request_revisions%rowtype;
+  sale_item public.sales_order_items%rowtype;
+  balance public.inventory_balances%rowtype;
+  reservation public.inventory_reservations%rowtype;
+  serial public.serial_numbers%rowtype;
+  allocation public.order_serial_allocations%rowtype;
+  existing_release public.sales_stock_out_releases%rowtype;
+  item_entry jsonb;
+  request_version bigint;
+  request_item_id uuid;
+  quantity_to_release numeric;
+  selected_serial_ids uuid[];
+  selected_serial_id uuid;
+  selected_serial_count integer;
+  payload_item_count integer;
+  release_id uuid:=gen_random_uuid();
+  release_item_id uuid;
+  movement_id uuid:=gen_random_uuid();
+  movement_item_id uuid;
+  total_quantity numeric:=0;
+  packed_quantity numeric;
+  previous_physical numeric;
+  previous_reserved numeric;
+  remaining_after numeric;
+  release_status text;
+begin
+  if requested_operation_id is null then
+    raise exception 'A valid Stock Out operation ID is required';
+  end if;
+  perform public.assert_actor_permission(actor_profile_id,'inventory.release_sales_stock');
+  select * into actor from public.profiles where id=actor_profile_id;
+  if actor.id is null or actor.role<>'employee' or actor.status<>'active' then
+    raise exception 'An active employee account is required for Stock Out';
+  end if;
+
+  -- One operation token has one permanent result, even across browser retries.
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(requested_operation_id::text,0)
+  );
+  select * into existing_release
+  from public.sales_stock_out_releases
+  where operation_id=requested_operation_id;
+  if existing_release.id is not null then
+    if existing_release.request_id<>requested_request_id then
+      raise exception 'This Stock Out operation belongs to another request';
+    end if;
+    return existing_release.id;
+  end if;
+
+  select * into request
+  from public.sales_stock_out_requests
+  where id=requested_request_id
+  for update;
+  if request.id is null then raise exception 'Stock Out request not found'; end if;
+  if request.status not in('pending_release','partially_released') then
+    raise exception 'This Stock Out request has already been updated or completed. Please refresh the request.';
+  end if;
+  if request.invoice_revision_pending then
+    raise exception 'The latest Sales Invoice revision must be finalized before Stock Out';
+  end if;
+  if not exists(
+    select 1 from public.profile_warehouse_assignments assignment
+    join public.warehouses warehouse on warehouse.id=assignment.warehouse_id
+    where assignment.profile_id=actor_profile_id
+      and assignment.warehouse_id=request.warehouse_id
+      and assignment.is_active and assignment.ended_at is null
+      and warehouse.is_active
+  ) then
+    raise exception 'The employee is not actively assigned to this warehouse';
+  end if;
+
+  if jsonb_typeof(requested_items)<>'object'
+    or jsonb_typeof(requested_items->'items')<>'array'
+  then
+    raise exception 'Stock Out release details are invalid';
+  end if;
+  begin
+    request_version:=(requested_items->>'request_version')::bigint;
+  exception when others then
+    raise exception 'A valid Stock Out request version is required';
+  end;
+  if request_version is distinct from request.version then
+    raise exception 'This Stock Out request has already been updated. Please refresh the request.';
+  end if;
+
+  select count(*) into payload_item_count
+  from jsonb_array_elements(requested_items->'items');
+  if payload_item_count=0 then raise exception 'At least one product must be released'; end if;
+  if payload_item_count<>(
+    select count(distinct value->>'request_item_id')
+    from jsonb_array_elements(requested_items->'items')
+  ) then
+    raise exception 'A Stock Out product cannot be submitted more than once';
+  end if;
+
+  select * into revision
+  from public.sales_stock_out_request_revisions
+  where request_id=request.id and revision_number=request.current_revision_number
+  for update;
+  if revision.id is null then raise exception 'The current Stock Out revision is unavailable'; end if;
+
+  -- Validate the basic shape before creating any authoritative rows.
+  for item_entry in select value from jsonb_array_elements(requested_items->'items')
+  loop
+    begin
+      request_item_id:=(item_entry->>'request_item_id')::uuid;
+      quantity_to_release:=(item_entry->>'quantity')::numeric;
+    exception when others then
+      raise exception 'A Stock Out product quantity is invalid';
+    end;
+    if quantity_to_release<=0 or quantity_to_release<>trunc(quantity_to_release) then
+      raise exception 'Stock Out quantity must be a positive whole number';
+    end if;
+    total_quantity:=total_quantity+quantity_to_release;
+  end loop;
+
+  insert into public.inventory_movements(
+    movement_type,id,reference,status,source_warehouse_id,notes,
+    initiated_by,confirmed_at
+  ) values(
+    'stock_out',movement_id,
+    'STO-MV-'||upper(substr(replace(movement_id::text,'-',''),1,12)),
+    'confirmed',request.warehouse_id,
+    'Physical release for Sales Invoice '||revision.invoice_number_snapshot,
+    actor_profile_id,now()
+  );
+  insert into public.sales_stock_out_releases(
+    id,request_id,request_revision_id,sales_order_id,sale_document_id,
+    warehouse_id,customer_profile_id,operation_id,movement_id,
+    invoice_number_snapshot,quantity_released,released_by,released_by_name,released_at
+  ) values(
+    release_id,request.id,revision.id,request.sales_order_id,revision.sale_document_id,
+    request.warehouse_id,request.customer_profile_id,requested_operation_id,movement_id,
+    revision.invoice_number_snapshot,total_quantity,actor_profile_id,
+    coalesce(nullif(actor.full_name,''),actor.email,'Employee'),now()
+  );
+
+  for item_entry in select value from jsonb_array_elements(requested_items->'items')
+  loop
+    request_item_id:=(item_entry->>'request_item_id')::uuid;
+    quantity_to_release:=(item_entry->>'quantity')::numeric;
+    selected_serial_ids:=array(
+      select value::uuid
+      from jsonb_array_elements_text(coalesce(item_entry->'serial_ids','[]'::jsonb))
+      order by value
+    );
+
+    select * into request_item
+    from public.sales_stock_out_request_items
+    where id=request_item_id and request_id=request.id
+    for update;
+    if request_item.id is null then raise exception 'Stock Out request product not found'; end if;
+    if quantity_to_release>request_item.remaining_quantity then
+      raise exception 'Release quantity exceeds the remaining quantity for %',request_item.product_name_snapshot;
+    end if;
+
+    select * into sale_item
+    from public.sales_order_items
+    where id=request_item.sales_order_item_id and order_id=request.sales_order_id
+    for update;
+    if sale_item.id is null then raise exception 'The finalized invoice product is unavailable'; end if;
+    packed_quantity:=sale_item.packed_quantity-request_item.released_quantity;
+    if packed_quantity<quantity_to_release then
+      raise exception '% has only % packed unit(s) eligible for release',request_item.product_name_snapshot,greatest(packed_quantity,0);
+    end if;
+
+    select * into balance
+    from public.inventory_balances
+    where warehouse_id=request.warehouse_id
+      and product_id=request_item.product_id
+      and variation_id is not distinct from request_item.variation_id
+      and location_id is null
+    for update;
+    if balance.id is null then raise exception 'Physical inventory balance was not found'; end if;
+    if balance.on_hand<quantity_to_release then
+      raise exception 'Insufficient physical stock for %',request_item.product_name_snapshot;
+    end if;
+    if balance.reserved<quantity_to_release then
+      raise exception 'Insufficient reserved stock for %',request_item.product_name_snapshot;
+    end if;
+
+    select * into reservation
+    from public.inventory_reservations
+    where order_item_id=request_item.sales_order_item_id and status='active'
+    for update;
+    if reservation.id is null or reservation.quantity<quantity_to_release then
+      raise exception 'The active Sales reservation is insufficient for %',request_item.product_name_snapshot;
+    end if;
+
+    if request_item.serial_tracking_required then
+      selected_serial_count:=coalesce(array_length(selected_serial_ids,1),0);
+      if selected_serial_count<>quantity_to_release::integer
+        or selected_serial_count<>(select count(distinct id) from unnest(selected_serial_ids) id)
+      then
+        raise exception 'Exactly % unique eligible SEN Serial Number(s) must be selected',quantity_to_release;
+      end if;
+
+      -- Lock serials in one stable order to avoid cross-employee deadlocks.
+      perform id from public.serial_numbers
+      where id=any(selected_serial_ids)
+      order by id
+      for update;
+      if (select count(*) from public.serial_numbers where id=any(selected_serial_ids))<>selected_serial_count then
+        raise exception 'One or more selected SEN Serial Numbers no longer exist';
+      end if;
+
+      foreach selected_serial_id in array selected_serial_ids
+      loop
+        select * into serial from public.serial_numbers where id=selected_serial_id;
+        if serial.product_id is distinct from request_item.product_id then
+          raise exception 'Selected SEN Serial does not belong to the invoice product';
+        end if;
+        if serial.variation_id is distinct from request_item.variation_id then
+          raise exception 'Selected SEN Serial does not belong to the invoice variation';
+        end if;
+        if serial.warehouse_id is distinct from request.warehouse_id then
+          raise exception 'Selected SEN Serial is not physically in the request warehouse';
+        end if;
+        if serial.status not in('available','reserved','allocated','packed')
+          or lower(coalesce(serial.condition,'')) in('damaged','unavailable','quarantined','lost','disposed')
+        then
+          raise exception 'SEN Serial % is damaged, unavailable, quarantined, or otherwise ineligible',coalesce(serial.sen_serial,serial.id::text);
+        end if;
+        if exists(select 1 from public.sales_stock_out_release_serials released where released.serial_number_id=serial.id) then
+          raise exception 'SEN Serial % has already been physically released',coalesce(serial.sen_serial,serial.id::text);
+        end if;
+        if exists(
+          select 1 from public.order_serial_allocations conflict
+          where conflict.serial_number_id=serial.id
+            and conflict.order_item_id<>request_item.sales_order_item_id
+            and conflict.status in('active','packed','warehouse_released','shipped')
+        ) then
+          raise exception 'SEN Serial % is assigned to another transaction',coalesce(serial.sen_serial,serial.id::text);
+        end if;
+      end loop;
+    elsif coalesce(array_length(selected_serial_ids,1),0)>0 then
+      raise exception 'SEN Serial Numbers cannot be attached to a non-serialized product';
+    end if;
+
+    previous_physical:=balance.on_hand;
+    previous_reserved:=balance.reserved;
+    update public.inventory_balances
+    set on_hand=on_hand-quantity_to_release,
+      reserved=reserved-quantity_to_release,
+      updated_at=now()
+    where id=balance.id;
+
+    if reservation.quantity=quantity_to_release then
+      update public.inventory_reservations
+      set status='consumed',updated_at=now()
+      where id=reservation.id;
+    else
+      update public.inventory_reservations
+      set quantity=quantity-quantity_to_release,updated_at=now()
+      where id=reservation.id;
+    end if;
+
+    insert into public.inventory_movement_items(
+      quantity_delta,movement_id,product_id,variation_id,warehouse_id,balance_after
+    ) values(
+      -quantity_to_release,movement_id,request_item.product_id,
+      request_item.variation_id,request.warehouse_id,previous_physical-quantity_to_release
+    ) returning id into movement_item_id;
+
+    insert into public.sales_stock_out_release_items(
+      release_id,request_item_id,inventory_movement_item_id,product_id,
+      variation_id,warehouse_id,quantity_released,previous_physical_quantity,
+      new_physical_quantity,previous_reserved_quantity,new_reserved_quantity
+    ) values(
+      release_id,request_item.id,movement_item_id,request_item.product_id,
+      request_item.variation_id,request.warehouse_id,quantity_to_release,
+      previous_physical,previous_physical-quantity_to_release,
+      previous_reserved,previous_reserved-quantity_to_release
+    ) returning id into release_item_id;
+
+    if request_item.serial_tracking_required then
+      foreach selected_serial_id in array selected_serial_ids
+      loop
+        select * into serial from public.serial_numbers where id=selected_serial_id for update;
+        select * into allocation
+        from public.order_serial_allocations
+        where serial_number_id=serial.id
+          and order_item_id=request_item.sales_order_item_id
+          and status in('active','packed')
+        for update;
+        if allocation.id is null then
+          insert into public.order_serial_allocations(
+            order_id,order_item_id,serial_number_id,warehouse_id,status,
+            allocation_method,allocated_by,released_by,released_at
+          ) values(
+            request.sales_order_id,request_item.sales_order_item_id,serial.id,
+            request.warehouse_id,'warehouse_released','scan',actor_profile_id,
+            actor_profile_id,now()
+          ) returning * into allocation;
+        else
+          update public.order_serial_allocations
+          set status='warehouse_released',released_by=actor_profile_id,released_at=now()
+          where id=allocation.id;
+        end if;
+
+        update public.serial_numbers
+        set status='warehouse_released',last_movement_id=movement_id,updated_at=now()
+        where id=serial.id;
+        insert into public.serial_number_history(
+          serial_number_id,event_type,previous_status,new_status,
+          previous_warehouse_id,new_warehouse_id,movement_id,reason,actor_id
+        ) values(
+          serial.id,'stock_out',serial.status,'warehouse_released',
+          request.warehouse_id,request.warehouse_id,movement_id,
+          'Released for Sales Invoice '||revision.invoice_number_snapshot,actor_profile_id
+        );
+        insert into public.sales_stock_out_release_serials(
+          release_item_id,serial_number_id,allocation_id,sen_serial_snapshot,
+          manufacturer_serial_snapshot,previous_status,new_status
+        ) values(
+          release_item_id,serial.id,allocation.id,coalesce(serial.sen_serial,serial.id::text),
+          serial.manufacturer_serial,serial.status,'warehouse_released'
+        );
+      end loop;
+    end if;
+
+    update public.sales_stock_out_request_items
+    set released_quantity=released_quantity+quantity_to_release,updated_at=now()
+    where id=request_item.id;
+  end loop;
+
+  remaining_after:=request.required_quantity-(request.released_quantity+total_quantity);
+  release_status:=case
+    when remaining_after=0 then 'fully_released'
+    when request.released_quantity+total_quantity>0 then 'partially_released'
+    else 'pending_release'
+  end;
+  update public.sales_stock_out_requests
+  set released_quantity=released_quantity+total_quantity,
+    status=release_status,version=version+1,updated_at=now()
+  where id=request.id;
+
+  insert into public.audit_logs(
+    actor_id,actor_role,target_profile_id,action,module,entity_type,
+    entity_id,description,new_values
+  ) values(
+    actor_profile_id,actor.role,request.customer_profile_id,
+    'sale.stock_out_confirmed','inventory','sales_stock_out_release',release_id::text,
+    'Sales Invoice products were physically released from the warehouse.',
+    jsonb_build_object('request_id',request.id,'sales_order_id',request.sales_order_id,
+      'warehouse_id',request.warehouse_id,'invoice_number',revision.invoice_number_snapshot,
+      'quantity_released',total_quantity,'request_status',release_status)
+  );
+  return release_id;
+end $$;
+
+create or replace function public.replace_stock_out_serial(
+  actor_profile_id uuid,
+  requested_request_item_id uuid,
+  requested_previous_serial_id uuid,
+  requested_replacement_serial_id uuid,
+  requested_reason text,
+  requested_operation_id uuid
+) returns uuid
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  actor public.profiles%rowtype;
+  request_item public.sales_stock_out_request_items%rowtype;
+  request public.sales_stock_out_requests%rowtype;
+  previous_serial public.serial_numbers%rowtype;
+  replacement_serial public.serial_numbers%rowtype;
+  allocation public.order_serial_allocations%rowtype;
+  existing_change_id uuid;
+  change_id uuid:=gen_random_uuid();
+  replacement_status text;
+begin
+  if requested_operation_id is null then raise exception 'A valid serial replacement operation ID is required'; end if;
+  if requested_previous_serial_id=requested_replacement_serial_id then raise exception 'Choose a different replacement SEN Serial'; end if;
+  if length(btrim(coalesce(requested_reason,'')))<3 then raise exception 'A replacement reason is required'; end if;
+  perform public.assert_actor_permission(actor_profile_id,'inventory.release_sales_stock');
+  select * into actor from public.profiles where id=actor_profile_id;
+  if actor.id is null or actor.role<>'employee' or actor.status<>'active' then
+    raise exception 'An active employee account is required for serial replacement';
+  end if;
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(requested_operation_id::text,0));
+  select id into existing_change_id from public.sales_stock_out_serial_changes where operation_id=requested_operation_id;
+  if existing_change_id is not null then return existing_change_id; end if;
+
+  select * into request_item from public.sales_stock_out_request_items
+  where id=requested_request_item_id for update;
+  if request_item.id is null or not request_item.serial_tracking_required then
+    raise exception 'Serialized Stock Out request product not found';
+  end if;
+  select * into request from public.sales_stock_out_requests
+  where id=request_item.request_id for update;
+  if request.status not in('pending_release','partially_released') or request.invoice_revision_pending then
+    raise exception 'This Stock Out request cannot accept a serial replacement';
+  end if;
+  if not exists(
+    select 1 from public.profile_warehouse_assignments assignment
+    join public.warehouses warehouse on warehouse.id=assignment.warehouse_id
+    where assignment.profile_id=actor_profile_id and assignment.warehouse_id=request.warehouse_id
+      and assignment.is_active and assignment.ended_at is null and warehouse.is_active
+  ) then raise exception 'The employee is not actively assigned to this warehouse'; end if;
+
+  perform id from public.serial_numbers
+  where id in(requested_previous_serial_id,requested_replacement_serial_id)
+  order by id for update;
+  select * into previous_serial from public.serial_numbers where id=requested_previous_serial_id;
+  select * into replacement_serial from public.serial_numbers where id=requested_replacement_serial_id;
+  if previous_serial.id is null or replacement_serial.id is null then raise exception 'SEN Serial not found'; end if;
+  if exists(select 1 from public.sales_stock_out_release_serials where serial_number_id=previous_serial.id) then
+    raise exception 'The assigned SEN Serial has already been physically released and cannot be replaced';
+  end if;
+  select * into allocation from public.order_serial_allocations
+  where serial_number_id=previous_serial.id
+    and order_item_id=request_item.sales_order_item_id
+    and status in('active','packed')
+  for update;
+  if allocation.id is null then raise exception 'The previous SEN Serial is not actively assigned to this invoice'; end if;
+  if replacement_serial.product_id is distinct from request_item.product_id
+    or replacement_serial.variation_id is distinct from request_item.variation_id
+    or replacement_serial.warehouse_id is distinct from request.warehouse_id
+  then raise exception 'Replacement SEN Serial must match the product, variation, and warehouse'; end if;
+  if replacement_serial.status not in('available','reserved','allocated','packed')
+    or lower(coalesce(replacement_serial.condition,'')) in('damaged','unavailable','quarantined','lost','disposed')
+  then raise exception 'Replacement SEN Serial is damaged, unavailable, quarantined, or otherwise ineligible'; end if;
+  if exists(select 1 from public.sales_stock_out_release_serials where serial_number_id=replacement_serial.id)
+    or exists(
+      select 1 from public.order_serial_allocations conflict
+      where conflict.serial_number_id=replacement_serial.id
+        and conflict.status in('active','packed','warehouse_released','shipped')
+    )
+  then raise exception 'Replacement SEN Serial is already assigned or physically released'; end if;
+
+  replacement_status:=case when allocation.status='packed' then 'packed' else 'allocated' end;
+  update public.order_serial_allocations
+  set serial_number_id=replacement_serial.id,allocation_method='replacement'
+  where id=allocation.id;
+  update public.serial_numbers set status='available',updated_at=now() where id=previous_serial.id;
+  update public.serial_numbers set status=replacement_status,updated_at=now() where id=replacement_serial.id;
+  insert into public.serial_number_history(
+    serial_number_id,event_type,previous_status,new_status,previous_warehouse_id,
+    new_warehouse_id,reason,actor_id
+  ) values
+    (previous_serial.id,'stock_out_serial_replaced',previous_serial.status,'available',
+      request.warehouse_id,request.warehouse_id,left(requested_reason,1000),actor_profile_id),
+    (replacement_serial.id,'stock_out_serial_selected',replacement_serial.status,replacement_status,
+      request.warehouse_id,request.warehouse_id,left(requested_reason,1000),actor_profile_id);
+  insert into public.sales_stock_out_serial_changes(
+    id,request_item_id,operation_id,previous_serial_number_id,
+    replacement_serial_number_id,reason,changed_by
+  ) values(
+    change_id,request_item.id,requested_operation_id,previous_serial.id,
+    replacement_serial.id,left(btrim(requested_reason),1000),actor_profile_id
+  );
+  return change_id;
+end $$;
+
+revoke all on function public.confirm_sales_stock_out(uuid,uuid,uuid,jsonb)
+  from public,anon,authenticated;
+revoke all on function public.replace_stock_out_serial(uuid,uuid,uuid,uuid,text,uuid)
+  from public,anon,authenticated;
+grant execute on function public.confirm_sales_stock_out(uuid,uuid,uuid,jsonb)
+  to service_role;
+grant execute on function public.replace_stock_out_serial(uuid,uuid,uuid,uuid,text,uuid)
   to service_role;
