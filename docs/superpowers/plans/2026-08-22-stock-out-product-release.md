@@ -158,7 +158,7 @@ git commit -m "feat: add stock out request and release ledger schema"
 - Create: `tests/stock-out-finalization.test.mts`
 
 **Interfaces:**
-- Produces RPC: `finalize_sale_invoice(actor_profile_id uuid, requested_order_id uuid, requested_operation_id uuid) returns uuid`
+- Produces RPC: `finalize_sale_invoice(actor_profile_id uuid, requested_order_id uuid, requested_operation_id uuid, requested_request_version bigint) returns uuid`, plus the safe three-argument compatibility wrapper
 - Keeps RPC: `generate_sale_document(...)` unchanged for delivery challans
 - Action: `generateSaleDocumentAction(saleId, type, formData)` reads `operation_id`
 
@@ -287,29 +287,29 @@ git commit -m "feat: add employee stock out queue and detail"
 - RPC: `replace_stock_out_serial(actor_profile_id uuid, requested_request_item_id uuid, requested_old_serial_id uuid, requested_new_serial_id uuid, requested_reason text) returns uuid`
 - Action result: `{ ok: boolean; message: string; releaseId?: string }`
 
-- [ ] **Step 1: Write failing release tests**
+- [x] **Step 1: Write failing release tests**
 
 Cover exact quantity/serial count, partial remainder/status, duplicate token, two-employee stale version, same serial concurrency, damaged/unavailable rejection, reservation/on-hand deltas, immutable movement/release linkage, employee audit, and rollback on forced validation failure.
 
-- [ ] **Step 2: Run release tests and verify RED**
+- [x] **Step 2: Run release tests and verify RED**
 
-- [ ] **Step 3: Implement atomic release RPC**
+- [x] **Step 3: Implement atomic release RPC**
 
 Lock in deterministic order; reauthorize profile/permission/warehouse; validate request version, remaining, packed preparation, balance, reservation, and serials; decrement `on_hand` and `reserved`; decrease or consume reservation; insert one confirmed `stock_out` movement and negative movement items; update serial/allocation to `warehouse_released`; insert immutable release rows; update request totals/status; return release ID. An existing successful token returns its release without mutation.
 
-- [ ] **Step 4: Implement explicit serial replacement RPC**
+- [x] **Step 4: Implement explicit serial replacement RPC**
 
 Require old serial belongs to this request/order, new serial is eligible in the same warehouse/product/variation, update allocation references safely before physical release, and insert immutable change audit. Never replace after the old serial has been released.
 
-- [ ] **Step 5: Build the release form/action**
+- [x] **Step 5: Build the release form/action**
 
 Use `useActionState` to display server validation, disable double submissions, generate one operation token per form lifecycle, allow nonserialized release quantity, preselect assigned serials, scan/search/select exact serials, and require explicit replacement reason. Refresh queue/detail/badges after committed success only.
 
-- [ ] **Step 6: Verify GREEN plus Daily Closing**
+- [x] **Step 6: Verify GREEN plus Daily Closing**
 
 Run release tests and the existing Daily Closing aggregation tests with a new `stock_out` movement case.
 
-- [ ] **Step 7: Commit Stock Out mutation**
+- [x] **Step 7: Commit Stock Out mutation**
 
 ```text
 git add supabase/migrations/202608220001_employee_stock_out_product_release.sql app/employee/inventory/stock-out/actions.ts components/inventory/StockOutReleaseForm.tsx tests/stock-out-release.test.mts tests/inventory-daily-closing.test.mts
@@ -328,25 +328,25 @@ git commit -m "feat: confirm physical stock out atomically"
 - Replacement RPC: existing `dispatch_order_shipment(actor_profile_id, requested_shipment_id)` signature remains stable.
 - Dispatch validates release ledger ceiling and `warehouse_released` serial allocations.
 
-- [ ] **Step 1: Write failing shipment tests**
+- [x] **Step 1: Write failing shipment tests**
 
 Assert dispatch before Stock Out fails; partial release permits only released quantity; exact released serials are required; dispatch changes shipped/logistics state; `inventory_balances` and `inventory_reservations` remain unchanged; no second inventory movement is created.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
-- [ ] **Step 3: Replace only dispatch physical-deduction behavior**
+- [x] **Step 3: Replace only dispatch physical-deduction behavior**
 
 Retain carrier/tracking/status-event functionality. Remove balance/reservation mutations. Validate each shipment item against `sum(confirmed release quantity) - shipped_quantity`; validate serialized allocations are `warehouse_released`; update allocation/serial to shipped and shipment/order logistics state.
 
-- [ ] **Step 4: Update safe user message**
+- [x] **Step 4: Update safe user message**
 
 Change “Shipment dispatched and inventory updated.” to “Shipment dispatched.” and surface the approved unreleased-product error.
 
-- [ ] **Step 5: Verify GREEN and shipment regressions**
+- [x] **Step 5: Verify GREEN and shipment regressions**
 
 Run shipment tests plus inventory Phase 2 tests.
 
-- [ ] **Step 6: Commit shipment separation**
+- [x] **Step 6: Commit shipment separation**
 
 ```text
 git add supabase/migrations/202608220001_employee_stock_out_product_release.sql app/admin/shipments/actions.ts tests/stock-out-shipment.test.mts
@@ -366,29 +366,29 @@ git commit -m "fix: dispatch only warehouse released stock"
 - Replacement RPC signature remains: `cancel_sales_order(actor_profile_id, requested_order_id, requested_reason)`
 - New RPC: `confirm_physical_return_receipt(actor_profile_id uuid, requested_claim_id uuid, requested_release_item_id uuid, requested_operation_id uuid, requested_quantity numeric, requested_serial_ids uuid[]) returns uuid`
 
-- [ ] **Step 1: Write failing cancellation/return tests**
+- [x] **Step 1: Write failing cancellation/return tests**
 
 Cover cancellation before release (request cancelled, reservation released, no movement), cancellation after any unreconciled release (blocked), partial/full returns, exact original serial, over-return rejection, duplicate token, on-hand increase once, immutable `customer_return` movement/receipt linkage, and final cancellation releasing only never-released reservation.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
-- [ ] **Step 3: Guard cancellation**
+- [x] **Step 3: Guard cancellation**
 
 Lock request/releases/returns. If released minus returned is positive, raise the approved physical-return requirement. Otherwise cancel pending request, release only remaining reservation, cancel eligible allocations, and create no physical movement.
 
-- [ ] **Step 4: Implement minimal atomic RMA receipt**
+- [x] **Step 4: Implement minimal atomic RMA receipt**
 
 Authorize active `rma.receive` plus active receiving warehouse assignment; lock RMA/release/return/balance/serial rows; validate cumulative quantity and exact original serial; create confirmed `customer_return` movement and positive movement item; increase on-hand; update serial warehouse/status/service state; insert immutable receipt rows and RMA event; return existing result for duplicate token.
 
-- [ ] **Step 5: Add the narrow receipt page/form**
+- [x] **Step 5: Add the narrow receipt page/form**
 
 No sidebar module. The route requires `rma.receive`, shows only the linked claim/release/returnable units for an authorized warehouse, and provides the single Confirm Physical Return Receipt action.
 
-- [ ] **Step 6: Verify GREEN and Daily Closing Return In**
+- [x] **Step 6: Verify GREEN and Daily Closing Return In**
 
 Run return/cancellation tests and Daily Closing tests.
 
-- [ ] **Step 7: Commit cancellation and return safety**
+- [x] **Step 7: Commit cancellation and return safety**
 
 ```text
 git add supabase/migrations/202608220001_employee_stock_out_product_release.sql app/employee/rma components/inventory/PhysicalReturnReceiptForm.tsx tests/stock-out-return-cancellation.test.mts tests/inventory-daily-closing.test.mts
@@ -406,23 +406,23 @@ git commit -m "feat: confirm physical customer returns safely"
 - Script reads local `DATABASE_URL`, starts a transaction, creates isolated fixture rows with unique UUIDs, exercises the real RPCs, asserts balances/ledger/statuses, and rolls back all test fixtures.
 - Script command: `npm run test:stock-out`
 
-- [ ] **Step 1: Write the database verification script before applying the migration**
+- [x] **Step 1: Write the database verification script before applying the migration**
 
 The script must test finalized request idempotency, reservation increase/decrease, partial/full release, serial uniqueness, stale concurrency outcome, shipment no-deduction, cancellation guard, physical return, badge SQL predicates, and Daily Closing movement rows.
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 Expected: missing tables/functions in the current local database.
 
-- [ ] **Step 3: Back up and apply the additive migration locally**
+- [x] **Step 3: Back up and apply the additive migration locally**
 
 Resolve the configured database explicitly, take a local PostgreSQL custom-format backup, apply only `202608220001_employee_stock_out_product_release.sql` with stop-on-error, and record the migration in the local schema migration ledger if present. Do not reset or delete the database.
 
-- [ ] **Step 4: Run the real database verification and verify GREEN**
+- [x] **Step 4: Run the real database verification and verify GREEN**
 
 Run `npm run test:stock-out`. Expected: all transaction and rollback assertions pass with no permanent fixture rows.
 
-- [ ] **Step 5: Commit the database verification harness**
+- [x] **Step 5: Commit the database verification harness**
 
 ```text
 git add scripts/verify-stock-out-database.mjs package.json database/native/schema.sql
@@ -438,7 +438,7 @@ git commit -m "test: verify stock out database workflow"
 **Interfaces:**
 - Local handoff must include URL, Admin credentials, Employee credentials with Receive + Stock Out + warehouse permissions, migration backup/result, exact changed files/schema, and known issues.
 
-- [ ] **Step 1: Run focused suites**
+- [x] **Step 1: Run focused suites**
 
 ```text
 npm run test:stock-out
@@ -449,7 +449,7 @@ npm run test:standalone
 npm run test:native
 ```
 
-- [ ] **Step 2: Run static checks and production build**
+- [x] **Step 2: Run static checks and production build**
 
 ```text
 npm run lint
@@ -457,26 +457,26 @@ npx tsc --noEmit
 npm run build
 ```
 
-- [ ] **Step 3: Start the local application and perform Admin browser checks**
+- [x] **Step 3: Start the local application and perform Admin browser checks**
 
 Verify Confirm Sale reserves without physical deduction; Generate Invoice creates one request; re-finalization synchronizes one request; packing does not deduct; shipment blocks before release and dispatches after release without another deduction; cancellation and return rules show clear messages; existing purchasing/Receive remains intact.
 
-- [ ] **Step 4: Perform Employee browser checks**
+- [x] **Step 4: Perform Employee browser checks**
 
 Verify independent permissions, menu order, both badges, warehouse scoping, shared queue, serial scan/search/preselection/replacement, partial/full release, concurrency refresh behavior, Daily Closing movement, and Receive New Products carrier/tracking/serial workflow.
 
-- [ ] **Step 5: Perform public/customer checks**
+- [x] **Step 5: Perform public/customer checks**
 
 Verify public availability is physical minus reserved/damaged/unavailable before release, remains correct after release, increases on pre-release cancellation, and changes physical quantity only on confirmed Stock Out/Return.
 
-- [ ] **Step 6: Request code review and fix every Critical/Important finding**
+- [x] **Step 6: Request code review and fix every Critical/Important finding**
 
 Review the implementation against this plan and the approved spec, then rerun affected tests after fixes.
 
-- [ ] **Step 7: Run the complete final verification gate fresh**
+- [x] **Step 7: Run the complete final verification gate fresh**
 
 Rerun the full standalone suite, native suite, Stock Out database script, lint, typecheck, and build. Record exact pass/fail counts and exit codes. Do not claim completion from earlier runs.
 
-- [ ] **Step 8: Preserve the branch and hand off locally**
+- [x] **Step 8: Preserve the branch and hand off locally**
 
 Do not deploy. Report the local URL, credentials, implementation summary, exact changed files/database objects, tests/results, backup location, and any remaining known issues.
