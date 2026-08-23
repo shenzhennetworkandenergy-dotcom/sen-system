@@ -5,13 +5,17 @@ const root = process.cwd();
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
 const required = [
   "supabase/migrations/202607230001_minimal_sales_module.sql",
+  "supabase/migrations/202608230001_sales_payment_accounting_integration.sql",
   "supabase/tests/minimal_sales.sql",
+  "supabase/tests/sales_payment_accounting.sql",
   "app/admin/sales/page.tsx",
   "app/admin/sales/new/page.tsx",
   "app/admin/sales/[saleId]/page.tsx",
   "app/admin/sales/[saleId]/documents/[documentId]/page.tsx",
   "app/admin/sales/actions.ts",
   "components/sales/SaleBuilder.tsx",
+  "components/sales/SalePaymentMethodFields.tsx",
+  "lib/sales/payment-accounting.ts",
   "lib/sales/data.ts",
   "app/account/sales/page.tsx",
   "app/admin/users/[id]/sales/page.tsx",
@@ -32,6 +36,19 @@ if (!/label:\s*"Sales"/.test(navigation) || !navigation.includes("routes.adminSa
 const invoice = read("app/admin/sales/[saleId]/documents/[documentId]/page.tsx");
 for (const token of ["Amount paid", "Remaining balance", "Payment method", "Date and time", "sale_payments", "downloadName"]) {
   if (!invoice.includes(token)) throw new Error(`Sales invoice is missing ${token}`);
+}
+const paymentMigration = read("supabase/migrations/202608230001_sales_payment_accounting_integration.sql");
+for (const token of ["requested_operation_id", "requested_receipt_channel", "sale_payment_id", "4000", "cashbook_days", "cashbook_entries"]) {
+  if (!paymentMigration.includes(token)) throw new Error(`Sales payment accounting migration is missing ${token}`);
+}
+const paymentForm = read("components/sales/SalePaymentMethodFields.tsx");
+for (const token of ["receipt_channel", "advance_payment", "other", "useFormStatus"]) {
+  if (!paymentForm.includes(token)) throw new Error(`Sales payment form is missing ${token}`);
+}
+const saleDetail = read("app/admin/sales/[saleId]/page.tsx");
+if (!saleDetail.includes('name="operation_id"')) throw new Error("Sales payment form is missing its operation ID");
+for (const token of ["buildSalePaymentRpcArguments", "operation_id", "receipt_channel", "/admin/accounting"]) {
+  if (!actions.includes(token)) throw new Error(`Sales payment action is missing ${token}`);
 }
 const printButton = read("components/sales/PrintDocumentButton.tsx");
 for (const token of ["fileName", "document.title", "window.print()"]) {
