@@ -16,7 +16,6 @@ export default async function ManageQuotationPage({
   searchParams: Promise<{
     success?: string;
     error?: string;
-    customerCreation?: string;
   }>;
 }) {
   await connection();
@@ -42,7 +41,7 @@ export default async function ManageQuotationPage({
     email: string | null;
     role: string;
   };
-  const [{ data: staff }, { data: warehouses }, { data: contacts }, { data: auditRows }] =
+  const [{ data: staff }, { data: auditRows }] =
     await Promise.all([
       db
         .from("profiles")
@@ -50,16 +49,6 @@ export default async function ManageQuotationPage({
         .in("role", ["admin", "employee"])
         .eq("status", "active")
         .order("full_name"),
-      db
-        .from("warehouses")
-        .select("id,code,name")
-        .eq("is_active", true)
-        .order("name"),
-      db
-        .from("crm_contacts")
-        .select("id")
-        .eq("profile_id", quotation.profile_id)
-        .limit(1),
       db
         .from("audit_logs")
         .select("id,action,description,created_at,actor_id")
@@ -94,19 +83,16 @@ export default async function ManageQuotationPage({
         quotation={quotation}
         customer={customer}
         staff={staff ?? []}
-        warehouses={warehouses ?? []}
         audits={audits}
-        customerExists={Boolean(contacts?.length)}
-        customerCreationRequired={notice.customerCreation === "required"}
         capabilities={{
           edit: can("quotations.edit"),
           assign: can("quotations.assign"),
-          requestInformation: can("quotations.edit"),
           approve: can("quotations.approve"),
           reject: can("quotations.reject"),
+          issue: can("quotations.send"),
+          recordCustomerOutcome: can("quotations.record_customer_outcome"),
           print: can("quotations.print"),
-          convert: can("quotations.convert_to_invoice"),
-          createCustomer: can("quotations.create_customer"),
+          convertToSale: can("quotations.convert_to_sale") && can("sales.create"),
           viewHistory: can("quotations.view_history"),
         }}
         success={notice.success}

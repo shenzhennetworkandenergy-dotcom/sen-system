@@ -6,6 +6,7 @@ import { redirect } from "next/navigation";
 import { writeAuditLog } from "@/lib/audit/log";
 import { requirePermission } from "@/lib/auth/permissions";
 import { mustRestrictQuotationToCreator } from "@/lib/quotations/access-policy";
+import { isQuotationImmutable } from "@/lib/quotations/workflow";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { parseMoney } from "@/lib/validation/numbers";
 
@@ -63,8 +64,8 @@ export async function updateQuotationDetailsAction(
     profile,
     permissions,
   );
-  if (quotation.status === "converted_to_invoice") {
-    fail(path, "A converted quotation cannot be edited.");
+  if (isQuotationImmutable(quotation.status)) {
+    fail(path, "An immutable quotation cannot be edited.");
   }
   const { error } = await db
     .from("quotation_requests")
@@ -121,6 +122,9 @@ export async function assignQuotationAction(
     profile,
     permissions,
   );
+  if (isQuotationImmutable(quotation.status)) {
+    fail(path, "An immutable quotation cannot be assigned.");
+  }
   if (assignedTo) {
     const { data: assignee } = await db
       .from("profiles")
@@ -155,55 +159,35 @@ export async function assignQuotationAction(
   redirect(`${path}?success=Quotation%20assignment%20saved.`);
 }
 
-async function setQuotationStatus(
+async function transitionQuotationBusinessStatus(
   quotationId: string,
   permission: string,
-  status: "additional_info_required" | "approved" | "rejected",
+  transition: "approve" | "reject" | "issue" | "accept" | "decline",
   form: FormData,
 ) {
   const { profile, permissions } = await requirePermission(permission);
   const path = quotationPath(quotationId);
-  const { db, quotation } = await quotationForUpdate(
+  const { db } = await quotationForUpdate(
     quotationId,
     profile,
     permissions,
   );
-  if (quotation.status === "converted_to_invoice") {
-    fail(path, "A converted quotation cannot change status.");
+  const reason = String(
+    form.get(transition === "decline" ? "reason" : "note") ?? "",
+  ).trim();
+  if (transition === "decline" && (reason.length < 1 || reason.length > 2000)) {
+    fail(path, "Provide a customer decline reason between 1 and 2000 characters.");
   }
-  const note = clean(form.get("note"));
-  const timestamps =
-    status === "approved"
-      ? { approved_at: new Date().toISOString(), approved_by: profile.id }
-      : status === "rejected"
-        ? { rejected_at: new Date().toISOString(), rejected_by: profile.id }
-        : {};
-  const { error } = await db
-    .from("quotation_requests")
-    .update({
-      status,
-      internal_notes: note,
-      updated_by: profile.id,
-      updated_at: new Date().toISOString(),
-      ...timestamps,
-    })
-    .eq("id", quotationId);
-  if (error) fail(path, `Unable to mark quotation as ${status}.`);
-  await writeAuditLog({
-    actorId: profile.id,
-    actorRole: profile.role,
-    targetProfileId: quotation.profile_id,
-    action: `quotation.${status}`,
-    module: "quotations",
-    entityType: "quotation_request",
-    entityId: quotationId,
-    description: `Quotation marked ${status.replaceAll("_", " ")}.`,
-    oldValues: { status: quotation.status },
-    newValues: { status, note },
+  const { error } = await db.rpc("transition_quotation_business_status", {
+    actor_profile_id: profile.id,
+    requested_quotation_id: quotationId,
+    requested_transition: transition,
+    requested_reason: reason,
   });
+  if (error) fail(path, "Unable to record the quotation outcome.");
   refreshQuotationPaths(quotationId);
   redirect(
-    `${path}?success=${encodeURIComponent(`Quotation marked ${status.replaceAll("_", " ")}.`)}`,
+    `${path}?success=${encodeURIComponent(`Quotation ${transition} recorded.`)}`,
   );
 }
 
@@ -211,22 +195,51 @@ export async function requestQuotationInformationAction(
   quotationId: string,
   form: FormData,
 ) {
-  return setQuotationStatus(
+  const { profile, permissions } = await requirePermission("quotations.edit");
+  const path = quotationPath(quotationId);
+  const { db, quotation } = await quotationForUpdate(
     quotationId,
-    "quotations.edit",
-    "additional_info_required",
-    form,
+    profile,
+    permissions,
   );
+  if (isQuotationImmutable(quotation.status)) {
+    fail(path, "An immutable quotation cannot change status.");
+  }
+  const note = clean(form.get("note"));
+  const { error } = await db
+    .from("quotation_requests")
+    .update({
+      status: "additional_info_required",
+      internal_notes: note,
+      updated_by: profile.id,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", quotationId);
+  if (error) fail(path, "Unable to request additional information.");
+  await writeAuditLog({
+    actorId: profile.id,
+    actorRole: profile.role,
+    targetProfileId: quotation.profile_id,
+    action: "quotation.additional_info_required",
+    module: "quotations",
+    entityType: "quotation_request",
+    entityId: quotationId,
+    description: "Additional information requested from customer.",
+    oldValues: { status: quotation.status },
+    newValues: { status: "additional_info_required", note },
+  });
+  refreshQuotationPaths(quotationId);
+  redirect(`${path}?success=Additional%20information%20requested.`);
 }
 
 export async function approveQuotationAction(
   quotationId: string,
   form: FormData,
 ) {
-  return setQuotationStatus(
+  return transitionQuotationBusinessStatus(
     quotationId,
     "quotations.approve",
-    "approved",
+    "approve",
     form,
   );
 }
@@ -235,10 +248,46 @@ export async function rejectQuotationAction(
   quotationId: string,
   form: FormData,
 ) {
-  return setQuotationStatus(
+  return transitionQuotationBusinessStatus(
     quotationId,
     "quotations.reject",
-    "rejected",
+    "reject",
+    form,
+  );
+}
+
+export async function issueQuotationAction(
+  quotationId: string,
+  form: FormData,
+) {
+  return transitionQuotationBusinessStatus(
+    quotationId,
+    "quotations.send",
+    "issue",
+    form,
+  );
+}
+
+export async function acceptQuotationAction(
+  quotationId: string,
+  form: FormData,
+) {
+  return transitionQuotationBusinessStatus(
+    quotationId,
+    "quotations.record_customer_outcome",
+    "accept",
+    form,
+  );
+}
+
+export async function declineQuotationAction(
+  quotationId: string,
+  form: FormData,
+) {
+  return transitionQuotationBusinessStatus(
+    quotationId,
+    "quotations.record_customer_outcome",
+    "decline",
     form,
   );
 }
