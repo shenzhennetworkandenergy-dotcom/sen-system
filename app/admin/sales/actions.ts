@@ -4,6 +4,8 @@ import { redirect } from "next/navigation";
 import { requirePermission } from "@/lib/auth/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
+import { normalizeBasicCustomerInput } from "@/lib/customers/basic";
+import { createBasicCustomerRecord } from "@/lib/customers/create-basic";
 import { addressFromForm, jsonArray, optionalString, uuid } from "@/lib/orders/validation";
 import { moneyFromForm, parseMoney, parseWholeNumber } from "@/lib/validation/numbers";
 import { normalizeSaleLineEdit } from "@/lib/sales/line-editing";
@@ -200,15 +202,25 @@ export async function generateSaleDocumentAction(saleId: string, type: "invoice"
 }
 
 export async function createBasicCustomerAction(form: FormData) {
-  const { profile } = await requirePermission("sales.create"), db = createSupabaseAdminClient();
-  const email = String(form.get("email") ?? "").trim().toLowerCase(), fullName = String(form.get("full_name") ?? "").trim(), phone = optionalString(form, "phone", 50);
-  const addressLine1=String(form.get("address_line_1")??"").trim(), city="Not specified", countryCode="BD";
-  if (!email || !fullName || !phone || !addressLine1) redirect("/admin/sales/new?error=Name%2C%20email%2C%20phone%20and%20address%20are%20required.");
-  const created = await db.auth.admin.createUser({ email, email_confirm: true, user_metadata: { full_name: fullName, phone, role: "customer", status: "active" } });
-  if (created.error || !created.data.user) redirect(`/admin/sales/new?error=${encodeURIComponent(safe(created.error?.message, "Unable to add customer."))}`);
-  await db.from("profiles").update({ full_name: fullName, phone, role: "customer", status: "active" }).eq("id", created.data.user.id);
-  const {error:addressError}=await db.from("customer_addresses").insert({profile_id:created.data.user.id,recipient_name:fullName,phone,address_line_1:addressLine1,city,country_code:countryCode,is_default_shipping:true});
-  if(addressError){await db.auth.admin.deleteUser(created.data.user.id);redirect("/admin/sales/new?error=Unable%20to%20save%20the%20customer%20address.");}
-  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "sale.customer_created", module: "sales", entityType: "profile", entityId: created.data.user.id, targetProfileId: created.data.user.id, description: "Basic customer created from Sales." });
-  revalidatePath("/admin/sales/new"); redirect(`/admin/sales/new?success=${encodeURIComponent(`Customer ${fullName} added. They can use password recovery to set a password.`)}`);
+  const { profile } = await requirePermission("sales.create");
+  let input;
+  let customer;
+  try {
+    input = normalizeBasicCustomerInput({
+      fullName: form.get("full_name"),
+      companyName: form.get("company_name"),
+      email: form.get("email"),
+      phone: form.get("phone"),
+      addressLine1: form.get("address_line_1"),
+    });
+    customer = await createBasicCustomerRecord(input);
+  } catch (error) {
+    redirect(
+      `/admin/sales/new?error=${encodeURIComponent(
+        error instanceof Error ? error.message : "Unable to add customer.",
+      )}`,
+    );
+  }
+  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "sale.customer_created", module: "sales", entityType: "profile", entityId: customer.id, targetProfileId: customer.id, description: "Basic customer created from Sales." });
+  revalidatePath("/admin/sales/new"); redirect(`/admin/sales/new?success=${encodeURIComponent(`Customer ${input.fullName} added. They can use password recovery to set a password.`)}`);
 }

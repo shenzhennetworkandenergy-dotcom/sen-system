@@ -1,20 +1,20 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useActionState, useMemo, useState } from "react";
 
-import { createQuotationAction } from "@/app/admin/quotations/actions";
+import {
+  createQuotationAction,
+  createQuotationCustomerAction,
+  type QuotationCustomerActionState,
+} from "@/app/admin/quotations/actions";
+import { CustomerTypeahead } from "@/components/customers/CustomerTypeahead";
 import {
   SaleProductPicker,
   type SalePickerProduct,
 } from "@/components/sales/SaleProductPicker";
+import type { CustomerSearchOption } from "@/lib/customers/search";
 import { roundMoney } from "@/lib/validation/numbers";
 
-type Customer = {
-  id: string;
-  full_name: string | null;
-  email: string;
-  company_name: string | null;
-};
 type Variation = {
   id: string;
   product_id: string;
@@ -51,13 +51,41 @@ export function QuotationBuilder({
   variations,
   defaultExpiration,
 }: {
-  customers: Customer[];
+  customers: CustomerSearchOption[];
   products: SalePickerProduct[];
   variations: Variation[];
   defaultExpiration: string;
 }) {
   const [customerId, setCustomerId] = useState("");
+  const createAndSelectCustomer = async (
+    previousState: QuotationCustomerActionState,
+    form: FormData,
+  ) => {
+    const nextState = await createQuotationCustomerAction(previousState, form);
+    if (nextState.customer) setCustomerId(nextState.customer.id);
+    return nextState;
+  };
+  const [customerState, customerFormAction, customerPending] = useActionState(
+    createAndSelectCustomer,
+    {
+      status: "idle",
+      message: "",
+      customer: null,
+    } satisfies QuotationCustomerActionState,
+  );
   const [rows, setRows] = useState<Row[]>([emptyRow()]);
+  const customerOptions = useMemo(
+    () =>
+      customerState.customer
+        ? [
+            customerState.customer,
+            ...customers.filter(
+              (customer) => customer.id !== customerState.customer!.id,
+            ),
+          ]
+        : customers,
+    [customerState.customer, customers],
+  );
   const searchableProducts = useMemo(
     () =>
       products.map((product) => ({
@@ -124,26 +152,75 @@ export function QuotationBuilder({
   const hasIncompleteRow = selected.some((row) => !row.product);
 
   return (
-    <form action={createQuotationAction} className="space-y-5">
+    <>
+      <details className="mb-5 rounded-2xl border bg-[var(--surface)] p-4" open>
+        <summary className="cursor-pointer font-bold">Add a new customer</summary>
+        <form
+          key={customerState.customer?.id ?? "new-customer"}
+          action={customerFormAction}
+          className="mt-4 grid gap-3 lg:grid-cols-5"
+        >
+          <input
+            name="full_name"
+            required
+            placeholder="Full name"
+            className={field}
+          />
+          <input
+            name="company_name"
+            placeholder="Company (optional)"
+            className={field}
+          />
+          <input
+            name="email"
+            type="email"
+            required
+            placeholder="Email"
+            className={field}
+          />
+          <input
+            name="phone"
+            required
+            placeholder="Phone"
+            className={field}
+          />
+          <input
+            name="address_line_1"
+            required
+            placeholder="Full address"
+            className={field}
+          />
+          <button
+            disabled={customerPending}
+            className="rounded-xl bg-[var(--primary)] px-4 py-3 font-bold text-[var(--primary-foreground)] disabled:opacity-50 lg:col-start-5"
+          >
+            {customerPending ? "Adding customer…" : "Add customer"}
+          </button>
+        </form>
+        {customerState.message ? (
+          <p
+            aria-live="polite"
+            className={`mt-3 text-sm ${
+              customerState.status === "error"
+                ? "text-red-700"
+                : "text-emerald-700"
+            }`}
+          >
+            {customerState.message}
+          </p>
+        ) : null}
+      </details>
+
+      <form action={createQuotationAction} className="space-y-5">
       <input type="hidden" name="items" value={JSON.stringify(payload)} />
       <section className="grid gap-4 rounded-2xl border bg-[var(--surface)] p-5 md:grid-cols-2">
-        <label className="font-semibold">
-          Customer
-          <select
-            name="customer_id"
-            value={customerId}
-            onChange={(event) => setCustomerId(event.target.value)}
-            required
-            className={field}
-          >
-            <option value="">Choose customer</option>
-            {customers.map((customer) => (
-              <option key={customer.id} value={customer.id}>
-                {customer.full_name || customer.email} · {customer.email}
-              </option>
-            ))}
-          </select>
-        </label>
+        <CustomerTypeahead
+          customers={customerOptions}
+          selectedCustomerId={customerId}
+          onSelectionChange={(customer) => setCustomerId(customer?.id ?? "")}
+          fieldClassName={field}
+          labelClassName="font-semibold"
+        />
         <label className="font-semibold">
           Quotation subject
           <input
@@ -386,6 +463,7 @@ export function QuotationBuilder({
           Generate quotation
         </button>
       </div>
-    </form>
+      </form>
+    </>
   );
 }

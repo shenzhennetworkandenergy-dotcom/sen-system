@@ -4,6 +4,11 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { requirePermission } from "@/lib/auth/permissions";
+import { normalizeBasicCustomerInput } from "@/lib/customers/basic";
+import {
+  createBasicCustomerRecord,
+  type CreatedBasicCustomer,
+} from "@/lib/customers/create-basic";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
 import { parseQuotationItems } from "@/lib/quotations/create";
@@ -23,9 +28,56 @@ const statuses = new Set([
   "converted_to_invoice",
 ]);
 
+export type QuotationCustomerActionState = {
+  status: "idle" | "success" | "error";
+  message: string;
+  customer: CreatedBasicCustomer | null;
+};
+
+export async function createQuotationCustomerAction(
+  _previousState: QuotationCustomerActionState,
+  form: FormData,
+): Promise<QuotationCustomerActionState> {
+  const { profile } = await requirePermission("quotations.create");
+  try {
+    const input = normalizeBasicCustomerInput({
+      fullName: form.get("full_name"),
+      companyName: form.get("company_name"),
+      email: form.get("email"),
+      phone: form.get("phone"),
+      addressLine1: form.get("address_line_1"),
+    });
+    const customer = await createBasicCustomerRecord(input);
+    await writeAuditLog({
+      actorId: profile.id,
+      actorRole: profile.role,
+      action: "quotation.customer_created",
+      module: "quotations",
+      entityType: "profile",
+      entityId: customer.id,
+      targetProfileId: customer.id,
+      description: "Basic customer created from Quotations.",
+    });
+    return {
+      status: "success",
+      message: `Customer ${customer.full_name} added and selected.`,
+      customer,
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "";
+    return {
+      status: "error",
+      message: /already|registered|exists/i.test(detail)
+        ? "A customer with this email already exists. Search for the existing customer below."
+        : detail || "Unable to add customer.",
+      customer: null,
+    };
+  }
+}
+
 export async function createQuotationAction(form: FormData) {
   const { profile, permissions } = await requirePermission("quotations.create");
-  let customerId = String(form.get("customer_id") ?? "").trim();
+  const customerId = String(form.get("customer_id") ?? "").trim();
   let requestedItems;
   try {
     requestedItems = parseQuotationItems(
@@ -49,24 +101,16 @@ export async function createQuotationAction(form: FormData) {
     ),
   ];
   const db = createSupabaseAdminClient();
-  let customer: { id: string; full_name: string | null; email: string | null; company_name: string | null } | null = null;
-  if (customerId) {
-    const result = await db.from("profiles").select("id,full_name,email,company_name").eq("id", customerId).eq("role", "customer").maybeSingle();
-    customer = result.data;
-  } else {
-    const email = String(form.get("new_customer_email") ?? "").trim().toLowerCase();
-    const fullName = String(form.get("new_customer_name") ?? "").trim();
-    const phone = String(form.get("new_customer_phone") ?? "").trim();
-    const addressLine = String(form.get("new_customer_address") ?? "").trim();
-    if (!email || !fullName || !phone || !addressLine) redirect("/admin/quotations/new?error=Select%20a%20customer%20or%20complete%20the%20new%20customer%20details.");
-    const created = await db.auth.admin.createUser({ email, email_confirm: true, user_metadata: { full_name: fullName, phone, role: "customer", status: "active" } });
-    if (created.error || !created.data.user) redirect("/admin/quotations/new?error=Unable%20to%20create%20customer.");
-    customerId = created.data.user.id;
-    await db.from("profiles").update({ full_name: fullName, phone, role: "customer", status: "active" }).eq("id", customerId);
-    const address = await db.from("customer_addresses").insert({ profile_id: customerId, recipient_name: fullName, phone, address_line_1: addressLine, city: String(form.get("new_customer_city") ?? "Not specified"), country_code: "BD", is_default_shipping: true });
-    if (address.error) { await db.auth.admin.deleteUser(customerId); redirect("/admin/quotations/new?error=Unable%20to%20save%20the%20customer%20address."); }
-    customer = { id: customerId, full_name: fullName, email, company_name: null };
+  if (!customerId) {
+    redirect("/admin/quotations/new?error=Choose%20a%20customer.");
   }
+  const { data: customer } = await db
+    .from("profiles")
+    .select("id,full_name,email,company_name")
+    .eq("id", customerId)
+    .eq("role", "customer")
+    .eq("status", "active")
+    .maybeSingle();
   const { data: products } = await db
     .from("products")
     .select("id,name,sku")
