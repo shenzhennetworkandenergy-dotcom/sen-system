@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
 
@@ -14,6 +15,12 @@ const allowedHosts = new Set(["localhost", "127.0.0.1", "::1"]);
 const linkedProjectMarker = resolve(repositoryRoot, "supabase", ".temp", "project-ref");
 const requestedApiUrl = process.env.QUOTATION_TO_SALE_SUPABASE_URL;
 const requestedDatabaseUrl = process.env.QUOTATION_TO_SALE_DATABASE_URL;
+const fetchTimeoutMs = 15_000;
+const interactiveReadinessTimeoutMs = 10_000;
+const interactiveShutdownTimeoutMs = 2_000;
+const interactiveKillTimeoutMs = 2_000;
+const supabaseCommandTimeoutMs = 120_000;
+const dockerCommandTimeoutMs = 10_000;
 
 function normalizedHostname(url) {
   return url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
@@ -38,6 +45,36 @@ function requireLoopbackUrl(value, label, protocols) {
     throw new Error(`${label} refused libpq connection-routing parameters (${routingParameter}).`);
   }
   return parsed;
+}
+
+function createBoundedFetch(baseFetch, timeoutMs) {
+  assert.equal(typeof baseFetch, "function", "A fetch implementation is required.");
+  assert.ok(Number.isSafeInteger(timeoutMs) && timeoutMs > 0, "Fetch timeout must be positive.");
+  return async (input, init = {}) => {
+    const controller = new AbortController();
+    const externalSignal = init.signal;
+    const propagateAbort = () => controller.abort(externalSignal.reason);
+    if (externalSignal?.aborted) propagateAbort();
+    else externalSignal?.addEventListener("abort", propagateAbort, { once: true });
+    let timer;
+    const timeoutError = new Error(`Supabase request timed out after ${timeoutMs}ms.`);
+    const timeoutPromise = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        controller.abort(timeoutError);
+        reject(timeoutError);
+      }, timeoutMs);
+    });
+    try {
+      const requestPromise = Promise.resolve().then(() => baseFetch(input, {
+        ...init,
+        signal: controller.signal,
+      }));
+      return await Promise.race([requestPromise, timeoutPromise]);
+    } finally {
+      clearTimeout(timer);
+      externalSignal?.removeEventListener("abort", propagateAbort);
+    }
+  };
 }
 
 async function runWithGuaranteedCleanup(work, cleanup) {
@@ -66,6 +103,247 @@ async function runWithGuaranteedCleanup(work, cleanup) {
 }
 
 async function runVerifierSelfTests() {
+  const createFakeInteractiveChild = ({
+    readyOutput,
+    closeOnWrite = false,
+    errorOnWrite = false,
+    closeOnEnd = false,
+    closeOnKill = true,
+  } = {}) => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdout.setEncoding = () => {};
+    child.stderr.setEncoding = () => {};
+    child.stdin = {
+      destroyed: false,
+      writable: true,
+      writes: [],
+      write(value) {
+        this.writes.push(value);
+        if (readyOutput) queueMicrotask(() => child.stdout.emit("data", readyOutput));
+        if (closeOnWrite) queueMicrotask(() => child.emit("close", 1));
+        if (errorOnWrite) queueMicrotask(() => child.emit("error", new Error("fake child error")));
+      },
+      end(value) {
+        this.writes.push(value);
+        this.writable = false;
+        this.destroyed = true;
+        if (closeOnEnd) queueMicrotask(() => child.emit("close", 0));
+      },
+    };
+    child.killCalls = 0;
+    child.kill = () => {
+      child.killCalls += 1;
+      if (closeOnKill) queueMicrotask(() => child.emit("close", 143));
+      return true;
+    };
+    return child;
+  };
+
+  const timedOutLockChild = createFakeInteractiveChild();
+  await assert.rejects(
+    acquireInteractiveQuotationLock(timedOutLockChild, "00000000-0000-4000-8000-000000000009", {
+      readinessTimeoutMs: 5,
+      shutdownTimeoutMs: 5,
+      killTimeoutMs: 5,
+    }),
+    /timed out acquiring/i,
+  );
+  assert.match(timedOutLockChild.stdin.writes.join(""), /rollback;\s*\\q/i);
+  assert.equal(timedOutLockChild.stdin.destroyed, true, "Failed acquisition did not close stdin.");
+  assert.equal(timedOutLockChild.killCalls, 1, "Failed acquisition did not terminate a wedged child.");
+
+  const invalidPidLockChild = createFakeInteractiveChild({
+    readyOutput: "Q2S9_LOCK_READY:99999999999999999999\n",
+    closeOnEnd: true,
+  });
+  await assert.rejects(
+    acquireInteractiveQuotationLock(invalidPidLockChild, "00000000-0000-4000-8000-000000000014", {
+      readinessTimeoutMs: 5,
+      shutdownTimeoutMs: 5,
+      killTimeoutMs: 5,
+    }),
+    /did not report its backend PID/i,
+  );
+  assert.match(invalidPidLockChild.stdin.writes.join(""), /rollback;\s*\\q/i);
+
+  const earlyExitLockChild = createFakeInteractiveChild({ closeOnWrite: true });
+  await assert.rejects(
+    acquireInteractiveQuotationLock(earlyExitLockChild, "00000000-0000-4000-8000-000000000015", {
+      readinessTimeoutMs: 5,
+      shutdownTimeoutMs: 5,
+      killTimeoutMs: 5,
+    }),
+    /closed before acquiring/i,
+  );
+  assert.match(earlyExitLockChild.stdin.writes.join(""), /rollback;\s*\\q/i);
+
+  const erroredLockChild = createFakeInteractiveChild({ errorOnWrite: true, closeOnEnd: true });
+  await assert.rejects(
+    acquireInteractiveQuotationLock(erroredLockChild, "00000000-0000-4000-8000-000000000017", {
+      readinessTimeoutMs: 5,
+      shutdownTimeoutMs: 5,
+      killTimeoutMs: 5,
+    }),
+    /fake child error/i,
+  );
+  assert.match(erroredLockChild.stdin.writes.join(""), /rollback;\s*\\q/i);
+
+  const releasableLockChild = createFakeInteractiveChild({
+    readyOutput: "Q2S9_LOCK_READY:4242\n",
+    closeOnEnd: true,
+  });
+  const releasableLock = await acquireInteractiveQuotationLock(
+    releasableLockChild,
+    "00000000-0000-4000-8000-000000000010",
+    { readinessTimeoutMs: 5, shutdownTimeoutMs: 5, killTimeoutMs: 5 },
+  );
+  assert.equal(releasableLock.holderPid, 4242);
+  await Promise.all([releasableLock.release(), releasableLock.release()]);
+  assert.equal(
+    releasableLockChild.stdin.writes.filter((value) => /commit;/i.test(value)).length,
+    1,
+    "Idempotent release wrote COMMIT more than once.",
+  );
+  assert.equal(releasableLockChild.killCalls, 0);
+
+  const wedgedReleaseChild = createFakeInteractiveChild({
+    readyOutput: "Q2S9_LOCK_READY:4243\n",
+  });
+  const wedgedReleaseLock = await acquireInteractiveQuotationLock(
+    wedgedReleaseChild,
+    "00000000-0000-4000-8000-000000000016",
+    { readinessTimeoutMs: 5, shutdownTimeoutMs: 5, killTimeoutMs: 5 },
+  );
+  let wedgedReleaseError;
+  try {
+    await wedgedReleaseLock.release();
+  } catch (error) {
+    wedgedReleaseError = error;
+  }
+  assert.ok(wedgedReleaseError instanceof AggregateError);
+  assert.match(wedgedReleaseError.errors[0].message, /required process termination/i);
+  await assert.rejects(wedgedReleaseLock.release(), (error) => error === wedgedReleaseError);
+  assert.equal(wedgedReleaseChild.killCalls, 1, "Wedged release was not terminated exactly once.");
+
+  const remoteDockerCalls = [];
+  assert.throws(
+    () => validateLocalDockerDaemon({
+      environment: { DOCKER_CONTEXT: "remote-self-test" },
+      runDocker: (arguments_) => {
+        remoteDockerCalls.push(arguments_);
+        if (arguments_[0] === "context" && arguments_[1] === "inspect") {
+          return JSON.stringify([{
+            Name: "remote-self-test",
+            Endpoints: { docker: { Host: "tcp://203.0.113.9:2376" } },
+          }]);
+        }
+        throw new Error("Remote Docker context validation contacted the daemon.");
+      },
+    }),
+    /refused non-local Docker endpoint/i,
+  );
+  assert.deepEqual(remoteDockerCalls, [["context", "inspect", "remote-self-test"]]);
+
+  const remoteDockerHostCalls = [];
+  assert.throws(
+    () => validateLocalDockerDaemon({
+      environment: {
+        DOCKER_CONTEXT: "local-self-test",
+        DOCKER_HOST: "ssh://docker.example.test",
+      },
+      runDocker: (arguments_) => {
+        remoteDockerHostCalls.push(arguments_);
+        if (arguments_[0] === "context" && arguments_[1] === "inspect") {
+          return JSON.stringify([{
+            Name: "local-self-test",
+            Endpoints: { docker: { Host: "npipe:////./pipe/docker_engine" } },
+          }]);
+        }
+        throw new Error("Remote DOCKER_HOST validation contacted the daemon.");
+      },
+    }),
+    /refused non-local Docker endpoint from DOCKER_HOST/i,
+  );
+  assert.deepEqual(remoteDockerHostCalls, [["context", "inspect", "local-self-test"]]);
+
+  const localDockerCalls = [];
+  const localDocker = validateLocalDockerDaemon({
+    environment: {},
+    runDocker: (arguments_) => {
+      localDockerCalls.push(arguments_);
+      if (arguments_[0] === "context" && arguments_[1] === "show") return "desktop-linux\n";
+      if (arguments_[0] === "context" && arguments_[1] === "inspect") {
+        return JSON.stringify([{
+          Name: "desktop-linux",
+          Endpoints: { docker: { Host: "npipe:////./pipe/dockerDesktopLinuxEngine" } },
+        }]);
+      }
+      if (arguments_[0] === "version") return '"29.6.2"\n';
+      throw new Error(`Unexpected Docker self-test call: ${arguments_.join(" ")}`);
+    },
+  });
+  assert.equal(localDocker.endpoint, "npipe:////./pipe/dockerDesktopLinuxEngine");
+  assert.deepEqual(localDockerCalls, [
+    ["context", "show"],
+    ["context", "inspect", "desktop-linux"],
+    ["version", "--format", "{{json .Server.Version}}"],
+  ]);
+
+  const waiterSql = buildConversionWaiterSql(4242);
+  assert.match(waiterSql, /with recursive/i);
+  assert.match(waiterSql, /a\.datname\s*=\s*current_database\(\)/i);
+  assert.match(waiterSql, /join\s+extensions\.pg_stat_statements\s+statements/i);
+  assert.match(waiterSql, /statements\.queryid\s*=\s*a\.query_id/i);
+  assert.match(waiterSql, /statements\.query\s+ilike\s+'%create_sale_from_quotation%'/i);
+  assert.match(waiterSql, /usename\s*=\s*'authenticator'/i);
+  assert.match(waiterSql, /application_name\s+like\s+'PostgREST%'/i);
+  assert.match(waiterSql, /count\(distinct waiter_pid\)/i);
+  assert.match(waiterSql, /current_pid\s*=\s*4242/i);
+
+  let wedgedRequestSignal;
+  const boundedFetch = createBoundedFetch(async (_input, init) => {
+    wedgedRequestSignal = init.signal;
+    return new Promise(() => {});
+  }, 5);
+  await assert.rejects(
+    boundedFetch("http://127.0.0.1:54321/rest/v1/rpc/self-test"),
+    /timed out after 5ms/i,
+  );
+  assert.equal(wedgedRequestSignal.aborted, true, "A wedged fetch was not aborted on timeout.");
+
+  const boundedSpawnOptions = buildBoundedSpawnOptions(1234, { timeout: 99, stdio: "inherit" });
+  assert.equal(boundedSpawnOptions.timeout, 1234, "External process callers could override the deadline.");
+  assert.equal(boundedSpawnOptions.stdio, "inherit");
+
+  const cleanupOrder = [];
+  const cleanupPlan = buildProductSerialCleanupPlan({
+    deleteProductMedia: async () => cleanupOrder.push("product_media"),
+    deleteMovementSerialHistory: async () => cleanupOrder.push("movement_serial_history"),
+    deleteMovementSerialTracking: async () => cleanupOrder.push("movement_serial_tracking"),
+    deleteSerialHistory: async () => cleanupOrder.push("serial_history"),
+    deleteSerialTracking: async () => cleanupOrder.push("serial_tracking"),
+    deleteSerialNumbers: async () => cleanupOrder.push("serial_numbers"),
+    deleteMovementReleaseLinks: async () => cleanupOrder.push("movement_release_links"),
+    deleteMovementItems: async () => cleanupOrder.push("movement_items"),
+    deleteMovements: async () => cleanupOrder.push("movements"),
+    deleteSerialBatches: async () => cleanupOrder.push("serial_batches"),
+  });
+  await executeCleanupPlan(cleanupPlan);
+  assert.deepEqual(cleanupOrder, [
+    "product_media",
+    "movement_serial_history",
+    "movement_serial_tracking",
+    "serial_history",
+    "serial_tracking",
+    "serial_numbers",
+    "movement_release_links",
+    "movement_items",
+    "movements",
+    "serial_batches",
+  ]);
+
   for (const value of [
     "postgresql://postgres:postgres@localhost:54322/postgres?host=remote.example",
     "postgresql://postgres:postgres@127.0.0.1:54322/postgres?hostaddr=203.0.113.9",
@@ -86,29 +364,79 @@ async function runVerifierSelfTests() {
   assert.doesNotMatch(sensitiveFailure, /self-test-secret|stderr-secret|SERVICE_ROLE_KEY|ANON_KEY|API_URL/);
   assert.match(sensitiveFailure, /sensitive output omitted/i);
 
-  const partiallyCreatedSales = new Set(["first-call-sale"]);
-  await assert.rejects(
-    runWithGuaranteedCleanup(
-      async () => { throw new Error("second conversion failed"); },
-      async () => { partiallyCreatedSales.clear(); },
-    ),
-    /second conversion failed/,
+  let allConcurrencyFailures;
+  try {
+    throwIfConcurrencyFailed({
+      barrierError: new Error("barrier self-test failure"),
+      releaseError: new Error("release self-test failure"),
+      callErrors: [
+        new Error("first RPC self-test failure"),
+        new Error("second RPC self-test failure"),
+      ],
+    });
+  } catch (error) {
+    allConcurrencyFailures = error;
+  }
+  assert.ok(allConcurrencyFailures instanceof AggregateError);
+  assert.equal(allConcurrencyFailures.errors.length, 4);
+  assert.deepEqual(
+    allConcurrencyFailures.errors.map((error) => error.message),
+    [
+      "barrier self-test failure",
+      "release self-test failure",
+      "first RPC self-test failure",
+      "second RPC self-test failure",
+    ],
   );
-  assert.equal(partiallyCreatedSales.size, 0, "Cleanup did not remove a partial success fixture.");
 
+  const selfTestActorId = "00000000-0000-4000-8000-000000000011";
+  const selfTestCustomerId = "00000000-0000-4000-8000-000000000012";
+  const partialSuccessSaleId = "00000000-0000-4000-8000-000000000013";
+  const independentlyQueryableSales = new Map([[
+    partialSuccessSaleId,
+    { created_by: selfTestActorId, customer_profile_id: selfTestCustomerId },
+  ]]);
+  let rediscoveryCount = 0;
+  const partialCleanupOrder = [];
   let combinedFailure;
   try {
     await runWithGuaranteedCleanup(
-      async () => { throw new Error("primary self-test failure"); },
-      async () => { throw new Error("cleanup self-test failure"); },
+      async () => {
+        const settled = [
+          { status: "fulfilled", value: { data: { sale_id: partialSuccessSaleId }, error: null } },
+          { status: "fulfilled", value: { data: null, error: new Error("second conversion failed") } },
+        ];
+        const callErrors = settled.flatMap(({ value }) => value.error ? [value.error] : []);
+        throwIfConcurrencyFailed({ barrierError: null, releaseError: null, callErrors });
+      },
+      async () => {
+        rediscoveryCount += 1;
+        partialCleanupOrder.push("discover_owned_sales");
+        const discovered = [...independentlyQueryableSales]
+          .filter(([, sale]) => (
+            sale.created_by === selfTestActorId
+            || sale.customer_profile_id === selfTestCustomerId
+          ))
+          .map(([id]) => id);
+        partialCleanupOrder.push("sale_children");
+        for (const saleId of discovered) independentlyQueryableSales.delete(saleId);
+        partialCleanupOrder.push("sales", "fixtures");
+        throw new Error("cleanup self-test failure after removing owned fixtures");
+      },
     );
   } catch (error) {
     combinedFailure = error;
   }
   assert.ok(combinedFailure instanceof AggregateError);
   assert.match(combinedFailure.message, /verification failed and cleanup also failed/i);
-  assert.match(combinedFailure.errors[0].message, /primary self-test failure/);
+  assert.ok(combinedFailure.errors[0] instanceof AggregateError);
+  assert.match(combinedFailure.errors[0].errors[0].message, /second conversion failed/);
   assert.match(combinedFailure.errors[1].message, /cleanup self-test failure/);
+  assert.equal(rediscoveryCount, 1);
+  assert.equal(independentlyQueryableSales.size, 0, "Independent rediscovery did not remove the partial Sale.");
+  assert.deepEqual(partialCleanupOrder, [
+    "discover_owned_sales", "sale_children", "sales", "fixtures",
+  ]);
   console.log("Quotation-to-Sale verifier self-tests passed.");
 }
 
@@ -134,6 +462,21 @@ function buildSupabaseFailureMessage(arguments_, stdout, stderr, sensitiveOutput
   return `Supabase ${arguments_.join(" ")} failed.${detail ? `\n${detail}` : ""}`;
 }
 
+function buildBoundedSpawnOptions(timeoutMs, overrides = {}) {
+  assert.ok(Number.isSafeInteger(timeoutMs) && timeoutMs > 0, "External process timeout must be positive.");
+  const safeOverrides = { ...overrides };
+  delete safeOverrides.timeout;
+  delete safeOverrides.shell;
+  return {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+    maxBuffer: 20 * 1024 * 1024,
+    ...safeOverrides,
+    shell: false,
+    timeout: timeoutMs,
+  };
+}
+
 function runSupabase(arguments_, options = {}) {
   if (npxCli && !existsSync(npxCli)) {
     throw new Error(`Unable to locate the local npx runner at ${npxCli}.`);
@@ -144,12 +487,7 @@ function runSupabase(arguments_, options = {}) {
     npxCli
       ? [npxCli, "supabase", "--workdir", repositoryRoot, ...arguments_]
       : ["supabase", "--workdir", repositoryRoot, ...arguments_],
-    {
-      cwd: repositoryRoot,
-      encoding: "utf8",
-      maxBuffer: 20 * 1024 * 1024,
-      ...spawnOptions,
-    },
+    buildBoundedSpawnOptions(supabaseCommandTimeoutMs, spawnOptions),
   );
   if (result.error) throw result.error;
   if (result.status !== 0) {
@@ -189,17 +527,41 @@ async function countRows(client, table, applyFilter) {
 }
 
 function runDockerSync(arguments_) {
-  const result = spawnSync("docker", arguments_, {
-    cwd: repositoryRoot,
-    encoding: "utf8",
-    maxBuffer: 20 * 1024 * 1024,
-    shell: false,
-  });
+  const result = spawnSync(
+    "docker",
+    arguments_,
+    buildBoundedSpawnOptions(dockerCommandTimeoutMs),
+  );
   if (result.error) throw result.error;
   if (result.status !== 0) {
     throw new Error(`Local Docker command failed: ${result.stderr?.trim() || "no diagnostic output"}`);
   }
   return result.stdout;
+}
+
+function isAllowedLocalDockerEndpoint(value) {
+  const endpoint = value?.trim().toLowerCase();
+  return endpoint?.startsWith("npipe://")
+    || endpoint?.startsWith("unix:///");
+}
+
+function validateLocalDockerDaemon({ environment = process.env, runDocker = runDockerSync } = {}) {
+  const contextName = environment.DOCKER_CONTEXT?.trim()
+    || runDocker(["context", "show"]).trim();
+  assert.ok(contextName, "Docker did not report an active context.");
+  const contexts = JSON.parse(runDocker(["context", "inspect", contextName]));
+  assert.equal(contexts?.[0]?.Name, contextName, "Docker context inspection returned a different context.");
+  const contextEndpoint = contexts?.[0]?.Endpoints?.docker?.Host;
+  if (!isAllowedLocalDockerEndpoint(contextEndpoint)) {
+    throw new Error(`Refused non-local Docker endpoint for context ${contextName}.`);
+  }
+  const explicitHost = environment.DOCKER_HOST?.trim();
+  if (explicitHost && !isAllowedLocalDockerEndpoint(explicitHost)) {
+    throw new Error("Refused non-local Docker endpoint from DOCKER_HOST.");
+  }
+  const serverVersion = runDocker(["version", "--format", "{{json .Server.Version}}"]).trim();
+  assert.ok(serverVersion && serverVersion !== "null", "Local Docker daemon did not report a server version.");
+  return { contextName, endpoint: explicitHost || contextEndpoint };
 }
 
 function validateLocalDatabaseContainer(databaseUrl) {
@@ -211,6 +573,7 @@ function validateLocalDatabaseContainer(databaseUrl) {
   const config = readFileSync(resolve(repositoryRoot, "supabase", "config.toml"), "utf8");
   const projectId = /^project_id\s*=\s*"([A-Za-z0-9_-]+)"\s*$/m.exec(config)?.[1];
   assert.ok(projectId, "Supabase config.toml does not contain a safe local project_id.");
+  const dockerDaemon = validateLocalDockerDaemon();
   const containerName = `supabase_db_${projectId}`;
   const inspected = JSON.parse(runDockerSync(["inspect", containerName]))[0];
   assert.equal(inspected?.Name, `/${containerName}`, "Unexpected Supabase database container name.");
@@ -221,7 +584,7 @@ function validateLocalDatabaseContainer(databaseUrl) {
     publishedPorts.some(({ HostPort }) => HostPort === parsedDatabaseUrl.port),
     "Supabase database container is not published on the verified loopback database port.",
   );
-  return containerName;
+  return { containerName, dockerDaemon };
 }
 
 function runLocalPsql(containerName, sql) {
@@ -231,8 +594,161 @@ function runLocalPsql(containerName, sql) {
   ]).trim();
 }
 
-async function holdQuotationLock(containerName, quotationId) {
+async function waitWithDeadline(promise, timeoutMs, message) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function shutdownInteractiveChild(child, exitPromise, stderr, {
+  command,
+  shutdownTimeoutMs,
+  killTimeoutMs,
+  requireCleanExit,
+}) {
+  let stdinError;
+  try {
+    if (!child.stdin.destroyed) {
+      if (child.stdin.writable) child.stdin.end(command);
+      else child.stdin.destroy?.();
+    }
+  } catch (error) {
+    stdinError = error;
+    try { child.stdin.destroy?.(); } catch { /* teardown continues */ }
+  }
+
+  let exitResult;
+  let forcedTermination = false;
+  try {
+    exitResult = await waitWithDeadline(
+      exitPromise,
+      shutdownTimeoutMs,
+      "Timed out waiting for the interactive quotation lock session to exit.",
+    );
+  } catch (error) {
+    forcedTermination = true;
+    try {
+      child.kill("SIGTERM");
+    } catch (killError) {
+      throw new AggregateError(
+        [error, killError, ...(stdinError ? [stdinError] : [])],
+        "Interactive quotation lock teardown could not terminate the child process.",
+      );
+    }
+    try {
+      exitResult = await waitWithDeadline(
+        exitPromise,
+        killTimeoutMs,
+        "Timed out waiting for the terminated quotation lock session to exit.",
+      );
+    } catch (killWaitError) {
+      throw new AggregateError(
+        [error, killWaitError, ...(stdinError ? [stdinError] : [])],
+        "Interactive quotation lock teardown remained wedged after termination.",
+      );
+    }
+  }
+
+  const teardownErrors = [];
+  if (stdinError) teardownErrors.push(stdinError);
+  if (requireCleanExit && forcedTermination) {
+    teardownErrors.push(new Error("Interactive quotation lock release required process termination."));
+  }
+  if (requireCleanExit && exitResult.error) teardownErrors.push(exitResult.error);
+  if (requireCleanExit && exitResult.code !== 0) {
+    teardownErrors.push(new Error(
+      `Interactive quotation lock session exited ${exitResult.code}: ${stderr().trim()}`,
+    ));
+  }
+  if (teardownErrors.length === 1) throw teardownErrors[0];
+  if (teardownErrors.length > 1) {
+    throw new AggregateError(teardownErrors, "Interactive quotation lock release failed.");
+  }
+}
+
+async function acquireInteractiveQuotationLock(child, quotationId, {
+  readinessTimeoutMs = interactiveReadinessTimeoutMs,
+  shutdownTimeoutMs = interactiveShutdownTimeoutMs,
+  killTimeoutMs = interactiveKillTimeoutMs,
+} = {}) {
   assert.match(quotationId, /^[0-9a-f-]{36}$/i, "Quotation lock ID must be a UUID.");
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => { stdout += chunk; });
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  const exitPromise = new Promise((resolveExit) => {
+    child.once("error", (error) => resolveExit({ error, code: null }));
+    child.once("close", (code) => resolveExit({ error: null, code }));
+  });
+  const readyPromise = new Promise((resolveReady, rejectReady) => {
+    const inspectOutput = () => {
+      if (/Q2S9_LOCK_READY:\d+/.test(stdout)) resolveReady();
+    };
+    child.stdout.on("data", inspectOutput);
+    child.once("close", (code) => {
+      if (!/Q2S9_LOCK_READY:\d+/.test(stdout)) {
+        rejectReady(new Error(`Quotation lock session closed before acquiring the lock (${code}).`));
+      }
+    });
+    child.once("error", rejectReady);
+    inspectOutput();
+  });
+  try {
+    child.stdin.write([
+      "begin;",
+      `select id from public.quotation_requests where id='${quotationId}'::uuid for update;`,
+      "select 'Q2S9_LOCK_READY:'||pg_backend_pid();",
+      "",
+    ].join("\n"));
+    await waitWithDeadline(
+      readyPromise,
+      readinessTimeoutMs,
+      "Timed out acquiring the local quotation contention lock.",
+    );
+    const holderPid = Number(/Q2S9_LOCK_READY:(\d+)/.exec(stdout)?.[1]);
+    assert.ok(Number.isSafeInteger(holderPid) && holderPid > 0, "Local lock session did not report its backend PID.");
+    let releasePromise;
+    return {
+      holderPid,
+      release() {
+        releasePromise ??= shutdownInteractiveChild(child, exitPromise, () => stderr, {
+          command: "commit;\n\\q\n",
+          shutdownTimeoutMs,
+          killTimeoutMs,
+          requireCleanExit: true,
+        });
+        return releasePromise;
+      },
+    };
+  } catch (primaryError) {
+    try {
+      await shutdownInteractiveChild(child, exitPromise, () => stderr, {
+        command: "rollback;\n\\q\n",
+        shutdownTimeoutMs,
+        killTimeoutMs,
+        requireCleanExit: false,
+      });
+    } catch (teardownError) {
+      throw new AggregateError(
+        [primaryError, teardownError],
+        "Interactive quotation lock acquisition failed and teardown also failed.",
+      );
+    }
+    throw primaryError;
+  }
+}
+
+async function holdQuotationLock(containerName, quotationId) {
   const child = spawn(
     "docker",
     [
@@ -241,76 +757,40 @@ async function holdQuotationLock(containerName, quotationId) {
     ],
     { cwd: repositoryRoot, stdio: ["pipe", "pipe", "pipe"], shell: false },
   );
-  let stdout = "";
-  let stderr = "";
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  child.stdout.on("data", (chunk) => { stdout += chunk; });
-  child.stderr.on("data", (chunk) => { stderr += chunk; });
-  const exitPromise = new Promise((resolveExit, rejectExit) => {
-    child.once("error", rejectExit);
-    child.once("close", (code) => {
-      if (code === 0) resolveExit();
-      else rejectExit(new Error(`Local quotation lock session exited ${code}: ${stderr.trim()}`));
-    });
-  });
-  child.stdin.write([
-    "begin;",
-    `select id from public.quotation_requests where id='${quotationId}'::uuid for update;`,
-    "select 'Q2S9_LOCK_READY:'||pg_backend_pid();",
-    "",
-  ].join("\n"));
-  const readyPromise = new Promise((resolveReady, rejectReady) => {
-    const inspectOutput = () => {
-      if (stdout.includes("Q2S9_LOCK_READY")) resolveReady();
-    };
-    child.stdout.on("data", inspectOutput);
-    child.once("close", (code) => {
-      if (!stdout.includes("Q2S9_LOCK_READY")) {
-        rejectReady(new Error(`Quotation lock session closed before acquiring the lock (${code}).`));
-      }
-    });
-    child.once("error", rejectReady);
-    inspectOutput();
-  });
-  let readyTimeout;
-  try {
-    await Promise.race([
-      readyPromise,
-      new Promise((_, reject) => {
-        readyTimeout = setTimeout(
-          () => reject(new Error("Timed out acquiring the local quotation contention lock.")),
-          10_000,
-        );
-      }),
-    ]);
-  } finally {
-    clearTimeout(readyTimeout);
-  }
-  const holderPid = Number(/Q2S9_LOCK_READY:(\d+)/.exec(stdout)?.[1]);
-  assert.ok(Number.isSafeInteger(holderPid) && holderPid > 0, "Local lock session did not report its backend PID.");
-  return {
-    async release() {
-      if (child.stdin.writable) {
-        child.stdin.end("commit;\n\\q\n");
-      }
-      await exitPromise;
-    },
-  };
+  return acquireInteractiveQuotationLock(child, quotationId);
 }
 
-async function waitForTwoConversionWaiters(containerName) {
-  const waiterSql = [
-    "select count(*)",
-    "from pg_stat_activity",
-    "where pid <> pg_backend_pid()",
-    "and state = 'active'",
-    "and wait_event_type = 'Lock'",
-    "and cardinality(pg_blocking_pids(pid)) > 0",
-    "and usename = 'authenticator'",
-    "and application_name like 'PostgREST%'",
+function buildConversionWaiterSql(holderPid) {
+  assert.ok(Number.isSafeInteger(holderPid) && holderPid > 0, "Lock holder PID must be a positive integer.");
+  return [
+    "with recursive candidate_waiters(waiter_pid) as (",
+    "select distinct a.pid from pg_stat_activity a",
+    "join extensions.pg_stat_statements statements",
+    "on statements.queryid = a.query_id",
+    "and statements.dbid = (select oid from pg_database where datname=current_database())",
+    "where a.pid <> pg_backend_pid()",
+    "and a.datname = current_database()",
+    "and a.state = 'active'",
+    "and a.wait_event_type = 'Lock'",
+    "and cardinality(pg_blocking_pids(a.pid)) > 0",
+    "and a.usename = 'authenticator'",
+    "and a.application_name like 'PostgREST%'",
+    "and statements.query ilike '%create_sale_from_quotation%'",
+    "), blocking_chain(waiter_pid,current_pid,path) as (",
+    "select waiter_pid,waiter_pid,array[waiter_pid] from candidate_waiters",
+    "union all",
+    "select chain.waiter_pid,blockers.blocker_pid,chain.path||blockers.blocker_pid",
+    "from blocking_chain chain",
+    "cross join lateral unnest(pg_blocking_pids(chain.current_pid)) blockers(blocker_pid)",
+    "where not blockers.blocker_pid=any(chain.path)",
+    ") select count(distinct waiter_pid) from blocking_chain",
+    `where current_pid = ${holderPid}`,
   ].join(" ");
-  const deadline = Date.now() + 10_000;
+}
+
+async function waitForTwoConversionWaiters(containerName, holderPid) {
+  const waiterSql = buildConversionWaiterSql(holderPid);
+  const deadline = Date.now() + 5_000;
   let observed = 0;
   while (Date.now() < deadline) {
     observed = Number(runLocalPsql(containerName, waiterSql));
@@ -321,15 +801,42 @@ async function waitForTwoConversionWaiters(containerName) {
     await new Promise((resolveWait) => setTimeout(resolveWait, 50));
   }
   const activity = runLocalPsql(containerName, [
-    "select pid||'|'||state||'|'||coalesce(wait_event_type,'')||'|'||coalesce(wait_event,'')",
-    "||'|'||pg_blocking_pids(pid)::text||'|'||left(replace(query,E'\\n',' '),180)",
-    "from pg_stat_activity where pid<>pg_backend_pid() and datname=current_database() order by pid",
+    "select a.pid||'|'||a.usename||'|'||a.application_name||'|'||a.state",
+    "||'|'||coalesce(wait_event_type,'')||'|'||coalesce(wait_event,'')",
+    "||'|'||pg_blocking_pids(a.pid)::text||'|'||coalesce(a.query_id::text,'no-query-id')",
+    "||'|'||coalesce((select length(statements.query)::text from extensions.pg_stat_statements statements",
+    "where statements.queryid=a.query_id",
+    "and statements.dbid=(select oid from pg_database where datname=current_database()) limit 1),'no-statement')",
+    "||'|'||replace(a.query,E'\\n',' ')",
+    "from pg_stat_activity a where a.pid<>pg_backend_pid() and a.datname=current_database() order by a.pid",
   ].join(" "));
   throw new Error(`Expected two blocked conversion calls, observed ${observed}. Activity: ${activity}`);
 }
 
+function buildProductSerialCleanupPlan(operations) {
+  return [
+    { name: "product_media", run: operations.deleteProductMedia },
+    { name: "movement_serial_history", run: operations.deleteMovementSerialHistory },
+    { name: "movement_serial_tracking", run: operations.deleteMovementSerialTracking },
+    { name: "serial_history", run: operations.deleteSerialHistory },
+    { name: "serial_tracking", run: operations.deleteSerialTracking },
+    { name: "serial_numbers", run: operations.deleteSerialNumbers },
+    { name: "movement_release_links", run: operations.deleteMovementReleaseLinks },
+    { name: "movement_items", run: operations.deleteMovementItems },
+    { name: "movements", run: operations.deleteMovements },
+    { name: "serial_batches", run: operations.deleteSerialBatches },
+  ];
+}
+
+async function executeCleanupPlan(plan) {
+  for (const step of plan) {
+    assert.equal(typeof step.run, "function", `Cleanup step ${step.name} is missing.`);
+    await step.run();
+  }
+}
+
 async function cleanupRunOwnedData(client, context) {
-  const { actorId, containerName, customerId, ids } = context;
+  const { actorId, containerName, customerId, dockerDaemon, ids } = context;
   const errors = [];
   const attempt = async (label, operation, fallback = null) => {
     try {
@@ -360,6 +867,14 @@ async function cleanupRunOwnedData(client, context) {
   };
   const removeExact = async (label, table, applyFilter) => {
     await attempt(label, () => applyFilter(client.from(table).delete()));
+  };
+  const runCleanupPsql = (sql) => {
+    assert.deepEqual(
+      validateLocalDockerDaemon(),
+      dockerDaemon,
+      "Docker context or endpoint changed before local psql cleanup.",
+    );
+    return runLocalPsql(containerName, sql);
   };
 
   const discoveredSaleIds = actorId && customerId
@@ -431,17 +946,17 @@ async function cleanupRunOwnedData(client, context) {
   if (saleIds.length) {
     for (const value of saleIds) assert.match(value, /^[0-9a-f-]{36}$/i, "Run-owned Sale ID must be a UUID.");
     const saleIdArray = `array[${saleIds.map((value) => `'${value}'::uuid`).join(",")}]`;
-    await attempt("delete run-owned RMA return serials", () => runLocalPsql(containerName,
+    await attempt("delete run-owned RMA return serials", () => runCleanupPsql(
       `delete from public.rma_return_receipt_serials where return_receipt_id in (select id from public.rma_return_receipts where sales_order_id=any(${saleIdArray}))`));
-    await attempt("delete run-owned RMA return receipts", () => runLocalPsql(containerName,
+    await attempt("delete run-owned RMA return receipts", () => runCleanupPsql(
       `delete from public.rma_return_receipts where sales_order_id=any(${saleIdArray})`));
-    await attempt("clear run-owned serial RMA links", () => runLocalPsql(containerName,
+    await attempt("clear run-owned serial RMA links", () => runCleanupPsql(
       `update public.serial_numbers set active_rma_claim_id=null where product_id='${ids.product}'::uuid and active_rma_claim_id in (select id from public.rma_claims where sales_order_id=any(${saleIdArray}))`));
-    await attempt("delete run-owned RMA events", () => runLocalPsql(containerName,
+    await attempt("delete run-owned RMA events", () => runCleanupPsql(
       `delete from public.rma_events where rma_claim_id in (select id from public.rma_claims where sales_order_id=any(${saleIdArray}))`));
-    await attempt("delete run-owned RMA claims", () => runLocalPsql(containerName,
+    await attempt("delete run-owned RMA claims", () => runCleanupPsql(
       `delete from public.rma_claims where sales_order_id=any(${saleIdArray})`));
-    await attempt("delete run-owned warranties", () => runLocalPsql(containerName,
+    await attempt("delete run-owned warranties", () => runCleanupPsql(
       `delete from public.warranty_coverages where sales_order_id=any(${saleIdArray})`));
   }
 
@@ -469,15 +984,24 @@ async function cleanupRunOwnedData(client, context) {
   await removeIds("sale_payments", "id", paymentIds);
   await removeIds("payment_transactions", "order_id", saleIds);
 
-  await removeIds("serial_number_history", "movement_id", movementIds);
-  await removeIds("serial_tracking_events", "movement_id", movementIds);
-  await removeIds("serial_number_history", "serial_number_id", serialNumberIds);
-  await removeIds("serial_tracking_events", "serial_number_id", serialNumberIds);
-  await removeIds("serial_numbers", "id", serialNumberIds);
-  await removeIds("sales_stock_out_release_items", "inventory_movement_item_id", movementItemIds);
-  await removeIds("inventory_movement_items", "id", movementItemIds);
-  await removeIds("inventory_movements", "id", movementIds);
-  await removeExact("delete run-owned serial batches", "serial_generation_batches", (query) => query.eq("product_id", ids.product));
+  await executeCleanupPlan(buildProductSerialCleanupPlan({
+    deleteProductMedia: () => removeExact(
+      "delete run product media", "product_media", (query) => query.eq("product_id", ids.product),
+    ),
+    deleteMovementSerialHistory: () => removeIds("serial_number_history", "movement_id", movementIds),
+    deleteMovementSerialTracking: () => removeIds("serial_tracking_events", "movement_id", movementIds),
+    deleteSerialHistory: () => removeIds("serial_number_history", "serial_number_id", serialNumberIds),
+    deleteSerialTracking: () => removeIds("serial_tracking_events", "serial_number_id", serialNumberIds),
+    deleteSerialNumbers: () => removeIds("serial_numbers", "id", serialNumberIds),
+    deleteMovementReleaseLinks: () => removeIds(
+      "sales_stock_out_release_items", "inventory_movement_item_id", movementItemIds,
+    ),
+    deleteMovementItems: () => removeIds("inventory_movement_items", "id", movementItemIds),
+    deleteMovements: () => removeIds("inventory_movements", "id", movementIds),
+    deleteSerialBatches: () => removeExact(
+      "delete run-owned serial batches", "serial_generation_batches", (query) => query.eq("product_id", ids.product),
+    ),
+  }));
 
   await removeIds("inventory_reservations", "order_id", saleIds);
   await removeIds("sale_documents", "order_id", saleIds);
@@ -513,7 +1037,6 @@ async function cleanupRunOwnedData(client, context) {
   await removeExact("delete run variation values", "variation_attribute_values", (query) => query.eq("variation_id", ids.variation));
   await removeExact("delete run product identifiers", "product_identifier_history", (query) => query.eq("product_id", ids.product));
   await removeExact("delete run product revisions", "product_revisions", (query) => query.eq("product_id", ids.product));
-  await removeExact("delete run product media", "product_media", (query) => query.eq("product_id", ids.product));
   await removeExact("delete run product category assignments", "product_category_assignments", (query) => query.eq("product_id", ids.product));
   await removeExact("delete run product tag assignments", "product_tag_assignments", (query) => query.eq("product_id", ids.product));
   await removeExact("delete run product attributes", "product_attributes", (query) => query.eq("product_id", ids.product));
@@ -533,10 +1056,21 @@ async function cleanupRunOwnedData(client, context) {
   }
 }
 
+function throwIfConcurrencyFailed({ barrierError, releaseError, callErrors }) {
+  const errors = [barrierError, releaseError, ...callErrors].filter(Boolean);
+  if (errors.length) {
+    throw new AggregateError(
+      errors,
+      "Quotation-to-Sale contention barrier, release, or concurrent RPC failed.",
+    );
+  }
+}
+
 async function runConcurrentVerification(apiUrl, databaseUrl, serviceRoleKey) {
-  const containerName = validateLocalDatabaseContainer(databaseUrl);
+  const { containerName, dockerDaemon } = validateLocalDatabaseContainer(databaseUrl);
   const client = createClient(apiUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    global: { fetch: createBoundedFetch(globalThis.fetch, fetchTimeoutMs) },
   });
   const runId = randomUUID();
   const prefix = `q2s9-${runId.slice(0, 12)}`;
@@ -553,6 +1087,7 @@ async function runConcurrentVerification(apiUrl, databaseUrl, serviceRoleKey) {
     actorId: null,
     containerName,
     customerId: null,
+    dockerDaemon,
     ids,
   };
 
@@ -666,7 +1201,7 @@ async function runConcurrentVerification(apiUrl, databaseUrl, serviceRoleKey) {
     let barrierError;
     let releaseError;
     try {
-      const waiterCount = await waitForTwoConversionWaiters(containerName);
+      const waiterCount = await waitForTwoConversionWaiters(containerName, lock.holderPid);
       assert.equal(waiterCount, 2, "The PostgreSQL contention barrier did not observe both conversion calls.");
       console.log("PostgreSQL contention barrier observed exactly two blocked conversion RPCs before release.");
     } catch (error) {
@@ -678,10 +1213,6 @@ async function runConcurrentVerification(apiUrl, databaseUrl, serviceRoleKey) {
       releaseError = error;
     }
     const settledCalls = await Promise.allSettled(concurrentCalls);
-    for (const settled of settledCalls) {
-      if (settled.status === "fulfilled" && settled.value.data?.sale_id) {
-      }
-    }
     const concurrentCallErrors = settledCalls.flatMap((settled, index) => {
       if (settled.status === "rejected") {
         return [new Error(`Concurrent RPC ${index + 1} rejected: ${settled.reason instanceof Error ? settled.reason.message : String(settled.reason)}`)];
@@ -691,14 +1222,7 @@ async function runConcurrentVerification(apiUrl, databaseUrl, serviceRoleKey) {
       }
       return [];
     });
-    if (barrierError && releaseError) {
-      throw new AggregateError([barrierError, releaseError, ...concurrentCallErrors], "Contention barrier and lock release both failed.");
-    }
-    if (barrierError && concurrentCallErrors.length) {
-      throw new AggregateError([barrierError, ...concurrentCallErrors], "Contention barrier and concurrent RPCs failed.");
-    }
-    if (barrierError) throw barrierError;
-    if (releaseError) throw releaseError;
+    throwIfConcurrencyFailed({ barrierError, releaseError, callErrors: concurrentCallErrors });
     assert.ok(settledCalls.every(({ status }) => status === "fulfilled"), "A concurrent HTTP call rejected.");
     const [first, second] = settledCalls.map(({ value }) => value);
     assert.ifError(first.error);
