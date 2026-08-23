@@ -193,7 +193,7 @@ test("prefill eligibility requires an active customer and respects the date-only
   );
 });
 
-test("prefill mapping preserves the quoted unit price and only falls back to target price when unit price is null", () => {
+test("prefill mapping preserves zero-priced quotation lines and only falls back to target price when unit price is null", () => {
   const normalizeInitial = conversionFunction<
     (quotation: unknown, items: unknown) => unknown
   >("normalizeQuotationSaleInitial");
@@ -229,21 +229,53 @@ test("prefill mapping preserves the quoted unit price and only falls back to tar
     { unitPrice: 40, lineDiscount: 3, lineTax: 1.5 },
     { unitPrice: 37.5, lineDiscount: 0, lineTax: 0 },
   ]);
-  assert.equal(
-    normalizeInitial(quotationFixture, [
-      {
-        id: "66666666-6666-4666-8666-666666666666",
-        product_id: productUuid,
-        variation_id: null,
-        quantity: 1,
-        unit_price: 0,
-        target_price: 37.5,
-        discount_amount: 0,
-        tax_amount: 0,
-      },
-    ]),
-    null,
-  );
+  const zeroPrices = normalizeInitial(quotationFixture, [
+    {
+      id: "66666666-6666-4666-8666-666666666666",
+      product_id: productUuid,
+      variation_id: null,
+      quantity: 1,
+      unit_price: 0,
+      target_price: 37.5,
+      discount_amount: 0,
+      tax_amount: 0,
+    },
+    {
+      id: "77777777-7777-4777-8777-777777777777",
+      product_id: productUuid,
+      variation_id: null,
+      quantity: 1,
+      unit_price: null,
+      target_price: 0,
+      discount_amount: 0,
+      tax_amount: 0,
+    },
+  ]) as { lines: Array<{ unitPrice: number }> };
+  assert.deepEqual(zeroPrices.lines.map((line) => line.unitPrice), [0, 0]);
+});
+
+test("prefill rejects fractional, zero, negative, and nonfinite quantities while accepting whole positive quantities", () => {
+  const normalizeInitial = conversionFunction<
+    (quotation: unknown, items: unknown) => unknown
+  >("normalizeQuotationSaleInitial");
+  const item = {
+    id: "66666666-6666-4666-8666-666666666666",
+    product_id: productUuid,
+    variation_id: null,
+    unit_price: 1,
+    target_price: 1,
+    discount_amount: 0,
+    tax_amount: 0,
+  };
+
+  assert.notEqual(normalizeInitial(quotationFixture, [{ ...item, quantity: 2 }]), null);
+  for (const quantity of [1.5, 0, -1, Number.POSITIVE_INFINITY, "not-a-number"]) {
+    assert.equal(
+      normalizeInitial(quotationFixture, [{ ...item, quantity }]),
+      null,
+      `quantity ${quantity} must be rejected`,
+    );
+  }
 });
 
 test("prefill address ownership rejects foreign shipping or billing IDs and retains null addresses", () => {
@@ -319,4 +351,59 @@ test("RPC normalization rejects malformed rows, caps valid results, and builds o
   });
   assert.equal(destination(validUuid), `/admin/sales/new?quotation=${validUuid}`);
   assert.equal(destination("not-a-uuid"), null);
+  assert.deepEqual(
+    normalizeOptions([{ ...validRow, customer_email: null }]),
+    [{
+      quotationId: validUuid,
+      reference: "QT-EXACT",
+      customerId: customerUuid,
+      customerName: "Amina Rahman",
+      customerCompany: "SEN Test",
+      customerEmail: "",
+      totalAmount: 12.5,
+      currency: "BDT",
+      expirationDate: "2026-08-31",
+    }],
+  );
+  assert.deepEqual(
+    normalizeOptions([{ ...validRow, customer_email: "   " }]),
+    [{
+      quotationId: validUuid,
+      reference: "QT-EXACT",
+      customerId: customerUuid,
+      customerName: "Amina Rahman",
+      customerCompany: "SEN Test",
+      customerEmail: "",
+      totalAmount: 12.5,
+      currency: "BDT",
+      expirationDate: "2026-08-31",
+    }],
+  );
+});
+
+test("typeahead key behavior wraps active options and exposes selection or close intent", () => {
+  const keyResult = conversionFunction<
+    (key: unknown, activeIndex: unknown, optionCount: unknown) => unknown
+  >("quotationTypeaheadKeyResult");
+
+  assert.deepEqual(keyResult("ArrowDown", -1, 3), {
+    activeIndex: 0,
+    select: false,
+    close: false,
+  });
+  assert.deepEqual(keyResult("ArrowUp", 0, 3), {
+    activeIndex: 2,
+    select: false,
+    close: false,
+  });
+  assert.deepEqual(keyResult("Enter", 1, 3), {
+    activeIndex: 1,
+    select: true,
+    close: false,
+  });
+  assert.deepEqual(keyResult("Escape", 1, 3), {
+    activeIndex: -1,
+    select: false,
+    close: true,
+  });
 });

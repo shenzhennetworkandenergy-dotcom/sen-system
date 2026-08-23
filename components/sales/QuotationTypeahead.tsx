@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { searchEligibleQuotationsAction } from "@/app/admin/sales/from-quotation/actions";
 import {
   quotationSaleDestination,
+  quotationTypeaheadKeyResult,
   type EligibleQuotationOption,
 } from "@/lib/quotations/sale-conversion-types";
 
@@ -23,6 +24,7 @@ export function QuotationTypeahead() {
   const [options, setOptions] = useState<EligibleQuotationOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [activeIndex, setActiveIndex] = useState(-1);
 
   useEffect(() => {
     const query = search.trim();
@@ -47,6 +49,16 @@ export function QuotationTypeahead() {
   }, [search]);
 
   const showResults = search.trim().length >= 2;
+  const selectOption = (option: EligibleQuotationOption | undefined) => {
+    if (!option) return;
+    const destination = quotationSaleDestination(option.quotationId);
+    if (destination) router.push(destination);
+  };
+  const statusMessage = loading
+    ? "Searching quotations."
+    : error ?? (showResults && !options.length
+      ? "No eligible quotations match this search."
+      : `${options.length} eligible quotation${options.length === 1 ? "" : "s"} available.`);
   return (
     <div className="relative max-w-2xl">
       <label className="block text-sm font-semibold" htmlFor="quotation-search">
@@ -62,7 +74,27 @@ export function QuotationTypeahead() {
             setLoading(false);
             setError(null);
           }
+          setActiveIndex(-1);
           setSearch(nextSearch);
+        }}
+        onKeyDown={(event) => {
+          const keyResult = quotationTypeaheadKeyResult(
+            event.key,
+            activeIndex,
+            options.length,
+          );
+          if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Enter" || event.key === "Escape") {
+            event.preventDefault();
+          } else {
+            return;
+          }
+          if (keyResult.close) {
+            setActiveIndex(-1);
+            setSearch("");
+            return;
+          }
+          setActiveIndex(keyResult.activeIndex);
+          if (keyResult.select) selectOption(options[keyResult.activeIndex]);
         }}
         placeholder="Reference, customer, company or email"
         className="mt-1 w-full rounded-lg border px-3 py-2"
@@ -71,23 +103,29 @@ export function QuotationTypeahead() {
         aria-autocomplete="list"
         aria-expanded={showResults}
         aria-controls={showResults ? listboxId : undefined}
+        aria-activedescendant={
+          showResults && activeIndex >= 0
+            ? `${listboxId}-option-${activeIndex}`
+            : undefined
+        }
       />
+      <p className="sr-only" role="status" aria-live="polite">
+        {statusMessage}
+      </p>
       {showResults ? (
         <div
           id={listboxId}
           className="absolute z-30 mt-1 w-full overflow-hidden rounded-xl border bg-white text-slate-950 shadow-xl"
           role="listbox"
         >
-          {options.map((option) => (
+          {options.map((option, index) => (
             <button
               key={option.quotationId}
+              id={`${listboxId}-option-${index}`}
               type="button"
               role="option"
-              aria-selected="false"
-              onClick={() => {
-                const destination = quotationSaleDestination(option.quotationId);
-                if (destination) router.push(destination);
-              }}
+              aria-selected={activeIndex === index}
+              onClick={() => selectOption(option)}
               className="block w-full border-b px-3 py-3 text-left last:border-b-0 hover:bg-blue-50"
             >
               <b>{option.reference}</b>

@@ -67,9 +67,11 @@ function nullableDate(value: unknown): string | null | undefined {
 }
 
 function finiteMoney(value: unknown): number | null {
-  const number = typeof value === "number" || typeof value === "string"
-    ? Number(value)
-    : Number.NaN;
+  if (typeof value === "string" && !value.trim()) return null;
+  const number =
+    typeof value === "number" || typeof value === "string"
+      ? Number(value)
+      : Number.NaN;
   return Number.isFinite(number) ? number : null;
 }
 
@@ -78,9 +80,11 @@ function nonnegativeMoney(value: unknown): number | null {
   return number !== null && number >= 0 ? number : null;
 }
 
-function positiveMoney(value: unknown): number | null {
+function positiveWholeQuantity(value: unknown): number | null {
   const number = finiteMoney(value);
-  return number !== null && number > 0 ? number : null;
+  return number !== null && number > 0 && Number.isInteger(number)
+    ? number
+    : null;
 }
 
 function nullableText(value: unknown): string | null | undefined {
@@ -92,6 +96,11 @@ function normalizableText(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const text = value.trim();
   return text || null;
+}
+
+function nullableCustomerEmail(value: unknown): string | null {
+  if (value === null) return "";
+  return typeof value === "string" ? value.trim() : null;
 }
 
 export function isEligibleQuotationSalePrefill(value: unknown, today: string) {
@@ -145,8 +154,8 @@ export function normalizeQuotationSaleInitial(
   for (const item of items) {
     if (!isRecord(item)) return null;
     const variationId = nullableUuid(item.variation_id);
-    const quantity = positiveMoney(item.quantity);
-    const unitPrice = positiveMoney(
+    const quantity = positiveWholeQuantity(item.quantity);
+    const unitPrice = nonnegativeMoney(
       item.unit_price === null ? item.target_price : item.unit_price,
     );
     const lineDiscount =
@@ -216,8 +225,8 @@ export function normalizeEligibleQuotationOptions(
     if (options.length === 20) break;
     if (!isRecord(row)) continue;
     const reference = normalizableText(row.reference);
-    const customerEmail = normalizableText(row.customer_email);
-    const customerName = normalizableText(row.customer_name) ?? customerEmail;
+    const customerEmail = nullableCustomerEmail(row.customer_email);
+    const customerName = normalizableText(row.customer_name);
     const customerCompany = normalizableText(row.customer_company);
     const totalAmount = nonnegativeMoney(row.total_amount);
     const expirationDate = nullableDate(row.expiration_date);
@@ -227,7 +236,7 @@ export function normalizeEligibleQuotationOptions(
       !isUuid(row.customer_id) ||
       !reference ||
       !customerName ||
-      !customerEmail ||
+      customerEmail === null ||
       totalAmount === null ||
       expirationDate === undefined ||
       !currency
@@ -252,4 +261,35 @@ export function normalizeEligibleQuotationOptions(
 export function quotationSaleDestination(quotationId: unknown): string | null {
   if (!isUuid(quotationId)) return null;
   return `/admin/sales/new?${new URLSearchParams({ quotation: quotationId })}`;
+}
+
+export function quotationTypeaheadKeyResult(
+  key: unknown,
+  activeIndex: unknown,
+  optionCount: unknown,
+) {
+  const count =
+    typeof optionCount === "number" && Number.isInteger(optionCount) && optionCount > 0
+      ? optionCount
+      : 0;
+  const current =
+    typeof activeIndex === "number" &&
+    Number.isInteger(activeIndex) &&
+    activeIndex >= 0 &&
+    activeIndex < count
+      ? activeIndex
+      : -1;
+  if (key === "ArrowDown" && count) {
+    return { activeIndex: current === count - 1 ? 0 : current + 1, select: false, close: false };
+  }
+  if (key === "ArrowUp" && count) {
+    return { activeIndex: current <= 0 ? count - 1 : current - 1, select: false, close: false };
+  }
+  if (key === "Enter") {
+    return { activeIndex: current, select: current >= 0, close: false };
+  }
+  if (key === "Escape") {
+    return { activeIndex: -1, select: false, close: true };
+  }
+  return { activeIndex: current, select: false, close: false };
 }
