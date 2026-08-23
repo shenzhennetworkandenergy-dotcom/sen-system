@@ -158,12 +158,13 @@ begin
   insert into public.inventory_balances(id,warehouse_id,product_id,on_hand,reserved)
   values(zero_balance_id,warehouse_id,zero_product_id,100,0);
   insert into public.customer_addresses(
-    id,profile_id,recipient_name,phone,address_line_1,city,country_code,
-    delivery_instructions,map_label,created_by,updated_by
+    id,profile_id,recipient_name,phone,alternate_phone,address_line_1,address_line_2,
+    area,city,region,postal_code,country_code,delivery_instructions,
+    latitude,longitude,map_label,created_by,updated_by
   ) values
-    (shipping_id,customer_id,'Task 9 Shipping','01700000009','Shipping Road 9','Dhaka','BD','Shipping instructions','Shipping pin',admin_id,admin_id),
-    (billing_id,customer_id,'Task 9 Billing','01700000009','Billing Road 9','Dhaka','BD','Billing instructions','Billing pin',admin_id,admin_id),
-    (foreign_address_id,other_customer_id,'Foreign Task 9','01700000008','Foreign Road 9','Dhaka','BD',null,null,admin_id,admin_id);
+    (shipping_id,customer_id,'Task 9 Shipping','01700000009','01800000009','Shipping Road 9','Shipping Floor 9','Shipping Area 9','Dhaka','Dhaka Division','1209','BD','Shipping instructions',23.780901,90.407201,'Shipping pin',admin_id,admin_id),
+    (billing_id,customer_id,'Task 9 Billing','01700000019','01800000019','Billing Road 9','Billing Floor 9','Billing Area 9','Chattogram','Chattogram Division','4009','BD','Billing instructions',22.356901,91.783201,'Billing pin',admin_id,admin_id),
+    (foreign_address_id,other_customer_id,'Foreign Task 9','01700000008',null,'Foreign Road 9',null,null,'Dhaka',null,null,'BD',null,null,null,null,admin_id,admin_id);
 
   -- Business transition state and metadata are separate from internal approval/rejection.
   insert into public.quotation_requests(id,reference,profile_id,created_by,status,subject,expiration_date)
@@ -201,8 +202,20 @@ begin
     main_quote_id,'Q2S9-MAIN-'||left(stamp,10),customer_id,owner_id,'accepted',
     'Exact commercial transfer','Task 9 Company',current_date+20,current_date+30,'BDT',
     shipping_id,billing_id,
-    jsonb_build_object('recipient_name','Task 9 Shipping','address_line_1','Shipping Road 9','city','Dhaka','country_code','BD'),
-    jsonb_build_object('recipient_name','Task 9 Billing','address_line_1','Billing Road 9','city','Dhaka','country_code','BD'),
+    jsonb_build_object(
+      'recipient_name','Task 9 Shipping','phone','01700000009','alternate_phone','01800000009',
+      'address_line_1','Shipping Road 9','address_line_2','Shipping Floor 9',
+      'area','Shipping Area 9','city','Dhaka','region','Dhaka Division','postal_code','1209',
+      'country_code','BD','delivery_instructions','Shipping instructions',
+      'latitude',23.780901::numeric,'longitude',90.407201::numeric,'map_label','Shipping pin'
+    ),
+    jsonb_build_object(
+      'recipient_name','Task 9 Billing','phone','01700000019','alternate_phone','01800000019',
+      'address_line_1','Billing Road 9','address_line_2','Billing Floor 9',
+      'area','Billing Area 9','city','Chattogram','region','Chattogram Division','postal_code','4009',
+      'country_code','BD','delivery_instructions','Billing instructions',
+      'latitude',22.356901::numeric,'longitude',91.783201::numeric,'map_label','Billing pin'
+    ),
     246.90,10.11,12.34,251.47,'Exact internal notes','Exact customer notes',
     'Read-only source terms','30 days','Source delivery information',now(),owner_id
   );
@@ -332,12 +345,46 @@ begin
   sale_id:=(result->>'sale_id')::uuid;
   perform pg_temp.assert_q2s(coalesce((result->>'existing')::boolean,false)=false,'First conversion was reported as existing');
   perform pg_temp.assert_q2s((select count(*)=1 from public.sales_orders where id=sale_id and status='draft' and confirmed_at is null),'Conversion did not create exactly one unconfirmed draft Sale');
-  perform pg_temp.assert_q2s((select customer_profile_id=customer_id and shipping_address_id=shipping_id and billing_address_id=billing_id and fulfillment_warehouse_id=warehouse_id and sales_source='existing_customer' and expected_delivery_date=current_date+20 and discount_amount=10.11 and shipping_amount=4.56 and service_amount=6.78 and tax_amount=12.34 and internal_notes='Exact internal notes' and customer_notes='Exact customer notes' from public.sales_orders where id=sale_id),'Header, customer, address, date, or notes did not transfer exactly');
-  perform pg_temp.assert_q2s((select shipping_address_snapshot->>'address_line_1'='Shipping Road 9' and billing_address_snapshot->>'address_line_1'='Billing Road 9' from public.sales_orders where id=sale_id),'Address snapshots did not transfer exactly');
+  perform pg_temp.assert_q2s((select
+    customer_profile_id=customer_id
+    and shipping_address_id=shipping_id and billing_address_id=billing_id
+    and fulfillment_warehouse_id=warehouse_id and sales_source='existing_customer'
+    and currency='BDT' and expected_delivery_date=current_date+20
+    and subtotal=246.90 and discount_amount=10.11 and shipping_amount=4.56
+    and service_amount=6.78 and tax_amount=12.34 and total_amount=262.81
+    and internal_notes='Exact internal notes' and customer_notes='Exact customer notes'
+    from public.sales_orders where id=sale_id
+  ),'Header, customer, address IDs, warehouse, currency, totals, date, or notes did not transfer exactly');
+  perform pg_temp.assert_q2s((select shipping_address_snapshot=jsonb_build_object(
+    'recipient_name','Task 9 Shipping','phone','01700000009','alternate_phone','01800000009',
+    'address_line_1','Shipping Road 9','address_line_2','Shipping Floor 9',
+    'area','Shipping Area 9','city','Dhaka','region','Dhaka Division',
+    'postal_code','1209','country_code','BD','delivery_instructions','Shipping instructions',
+    'latitude',23.780901::numeric,'longitude',90.407201::numeric,'map_label','Shipping pin'
+  ) from public.sales_orders where id=sale_id),'Shipping address ID/snapshot fields did not transfer exactly');
+  perform pg_temp.assert_q2s((select billing_address_snapshot=jsonb_build_object(
+    'recipient_name','Task 9 Billing','phone','01700000019','alternate_phone','01800000019',
+    'address_line_1','Billing Road 9','address_line_2','Billing Floor 9',
+    'area','Billing Area 9','city','Chattogram','region','Chattogram Division',
+    'postal_code','4009','country_code','BD','delivery_instructions','Billing instructions',
+    'latitude',22.356901::numeric,'longitude',91.783201::numeric,'map_label','Billing pin'
+  ) from public.sales_orders where id=sale_id),'Billing address ID/snapshot fields did not transfer exactly');
   perform pg_temp.assert_q2s((select count(*)=2 from public.sales_order_items where order_id=sale_id),'Sale item count is not exact');
-  perform pg_temp.assert_q2s((select count(*)=1 from public.sales_order_items i where i.order_id=sale_id and i.product_id=q2s_test.product_id and i.variation_id=q2s_test.variation_id and i.quantity=2 and i.unit_price=123.45 and i.line_discount=5.55 and i.line_tax=7.89),'Approved variable line did not transfer exactly or catalogue price replaced it');
-  perform pg_temp.assert_q2s((select count(*)=1 from public.sales_order_items i where i.order_id=sale_id and i.product_id=q2s_test.zero_product_id and i.variation_id is null and i.quantity=3 and i.unit_price=0 and i.line_discount=0 and i.line_tax=0),'Exact zero-priced line did not transfer');
-  perform pg_temp.assert_q2s((select total_amount=262.81 from public.sales_orders where id=sale_id),'Sale total did not preserve line/header tax, discount, shipping, and service');
+  perform pg_temp.assert_q2s((select count(*)=1 from public.sales_order_items i where
+    i.order_id=sale_id and i.product_id=q2s_test.product_id
+    and i.variation_id=q2s_test.variation_id and i.fulfillment_warehouse_id=warehouse_id
+    and i.product_name_snapshot='Task 9 Variable Product'
+    and i.sku_snapshot='Q2S9-V-'||left(stamp,8) and i.currency='BDT'
+    and i.quantity=2 and i.unit_price=123.45 and i.line_subtotal=246.90
+    and i.line_discount=5.55 and i.line_tax=7.89 and i.line_total=249.24
+  ),'Approved variable line snapshots, warehouse, quantity, price, discount, or tax did not transfer exactly');
+  perform pg_temp.assert_q2s((select count(*)=1 from public.sales_order_items i where
+    i.order_id=sale_id and i.product_id=q2s_test.zero_product_id and i.variation_id is null
+    and i.fulfillment_warehouse_id=warehouse_id and i.product_name_snapshot='Task 9 Zero Product'
+    and i.sku_snapshot='Q2S9-Z-'||left(stamp,8) and i.currency='BDT'
+    and i.quantity=3 and i.unit_price=0 and i.line_subtotal=0
+    and i.line_discount=0 and i.line_tax=0 and i.line_total=0
+  ),'Exact zero-priced line snapshots, warehouse, quantity, price, discount, or tax did not transfer');
   perform pg_temp.assert_q2s((select count(*)=1 from public.sale_price_adjustments where order_id=sale_id and adjustment_type='service_charge' and previous_value=0 and new_value=6.78),'Reviewed service adjustment history is not exact');
   perform pg_temp.assert_q2s((select count(*)=2 from public.order_status_events where order_id=sale_id),'Draft creation and quotation-origin events are not exact');
   perform pg_temp.assert_q2s((select count(*)=1 from public.order_status_events where order_id=sale_id and note like 'Draft Sale created from accepted quotation%'),'Quotation origin event is missing or duplicated');
@@ -376,9 +423,18 @@ begin
   perform pg_temp.assert_q2s(not exists(select 1 from public.quotation_requests where converted_order_id=manual_sale_id),'Manual Sale was incorrectly linked to a quotation');
   perform public.confirm_sales_order(admin_id,manual_sale_id);
   perform pg_temp.assert_q2s((select status='confirmed' from public.sales_orders where id=manual_sale_id),'Manual confirmation stopped working');
+  perform pg_temp.assert_q2s((select count(*)=1 from public.inventory_reservations r where
+    r.order_id=manual_sale_id and r.product_id=q2s_test.product_id
+    and r.variation_id=q2s_test.variation_id and r.warehouse_id=q2s_test.warehouse_id
+    and r.quantity=1 and r.status='active'
+  ),'Manual confirmation did not create the exact active reservation');
+  perform pg_temp.assert_q2s((select reserved=1 from public.inventory_balances where id=balance_id),'Manual confirmation did not increase the reserved balance by one');
+  perform pg_temp.assert_q2s(not exists(select 1 from public.quotation_requests where converted_order_id=manual_sale_id),'Confirmed manual Sale was incorrectly linked to a quotation');
   perform public.cancel_sales_order(admin_id,manual_sale_id,'Task 9 manual workflow rollback verification');
   perform pg_temp.assert_q2s((select status='cancelled' from public.sales_orders where id=manual_sale_id),'Manual cancellation stopped working');
+  perform pg_temp.assert_q2s((select count(*)=1 from public.inventory_reservations where order_id=manual_sale_id and quantity=1 and status='cancelled'),'Manual cancellation did not cancel the exact reservation');
   perform pg_temp.assert_q2s((select reserved=0 from public.inventory_balances where id=balance_id),'Manual cancellation did not release its reservation');
+  perform pg_temp.assert_q2s(not exists(select 1 from public.quotation_requests where converted_order_id=manual_sale_id),'Cancelled manual Sale was incorrectly linked to a quotation');
 end $$;
 
 select ok(true,'Quotation-to-Sale database behavior passed inside a rollback-only transaction');
