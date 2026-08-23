@@ -391,6 +391,71 @@ test("all line, header, and adjustment money rejects overflowing or unsafe cents
   );
 });
 
+test("decimal money rounds exact digit strings to cents without binary drift", () => {
+  const normalizeMoney = productionFunction<(value: unknown) => number>(
+    "normalizeDraftSaleMoney",
+  );
+  const cases: Array<[unknown, number]> = [
+    ["0", 0],
+    ["12", 12],
+    ["12.3", 12.3],
+    ["12.34", 12.34],
+    ["1.234", 1.23],
+    ["1.235", 1.24],
+    ["1.236", 1.24],
+    ["0.004", 0],
+    ["0.005", 0.01],
+    ["0.006", 0.01],
+    [12.345, 12.35],
+    ["+12.345", 12.35],
+  ];
+  for (const [value, expected] of cases) {
+    assert.equal(normalizeMoney(value), expected, String(value));
+  }
+
+  const exactLarge = normalizeMoney("45035996273704.95");
+  assert.equal(exactLarge, 45035996273704.95);
+  assert.equal(JSON.stringify(exactLarge), "45035996273704.95");
+  assert.notEqual(JSON.stringify(exactLarge), "45035996273704.96");
+
+  const maximum = normalizeMoney("70368744177664.00");
+  assert.equal(maximum, 70368744177664);
+  assert.equal(JSON.stringify(maximum), "70368744177664");
+
+  const parse = productionFunction<ParseDraftSaleInput>("parseDraftSaleInput");
+  const form = validForm();
+  form.set("tax_amount", "1.235");
+  form.set("items", JSON.stringify([{
+    product_id: productId,
+    warehouse_id: warehouseId,
+    quantity: 1,
+    unit_price: 12.345,
+  }]));
+  const parsed = parse(form, { mode: "manual" });
+  assert.equal(parsed.items[0]?.unit_price, 12.35);
+  assert.equal(parsed.taxAmount, 1.24);
+});
+
+test("decimal money rejects ambiguous cents, database overflow, huge values, signs, exponents, and garbage", () => {
+  const normalizeMoney = productionFunction<(value: unknown) => number>(
+    "normalizeDraftSaleMoney",
+  );
+  for (const value of [
+    "70368744177664.01",
+    "99999999999999.99",
+    "100000000000000.00",
+    "179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000.00",
+    "-0.01",
+    "-0",
+    "1e2",
+    "Infinity",
+    "not-money",
+    {},
+  ]) {
+    assert.throws(() => normalizeMoney(value), /valid amount|supported range/i, String(value));
+  }
+});
+
 test("draft parser rejects invalid adjustment types, values, reasons, existing-item IDs, and mismatched line identifiers", () => {
   const parse = productionFunction<ParseDraftSaleInput>("parseDraftSaleInput");
   const base = {

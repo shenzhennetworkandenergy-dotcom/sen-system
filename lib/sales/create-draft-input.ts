@@ -1,9 +1,14 @@
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const MONEY_PATTERN = /^\d+(?:\.\d{1,2})?$/;
+const MONEY_PATTERN = /^\+?(\d+)(?:\.(\d+))?$/;
 const WHOLE_NUMBER_PATTERN = /^\d+$/;
 const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
-const MAX_DATABASE_MONEY = 99_999_999_999_999.9999;
+const ONE_CENT = BigInt(1);
+const ONE_HUNDRED_CENTS = BigInt(100);
+const MAX_DATABASE_MONEY_CENTS = BigInt("9999999999999999");
+// At 2^46 the next Number magnitude has a 0.015625 ULP, so adjacent cents
+// are no longer continuously distinguishable for JSON transport.
+const MAX_SAFE_TRANSPORT_CENTS = BigInt("7036874417766400");
 
 const SALES_SOURCES = new Set([
   "website",
@@ -96,27 +101,48 @@ function nullableUuid(value: unknown, label: string): string | null {
   return candidate ? parseUuid(candidate, label) : null;
 }
 
-function parseMoney(value: unknown, label: string): number {
-  const raw = String(value ?? "").trim();
-  if (!MONEY_PATTERN.test(raw)) {
-    throw new Error(`${label} must be a valid amount with no more than 2 decimal places.`);
+function serializedMoneyCents(value: number): bigint | null {
+  const serialized = JSON.stringify(value);
+  if (!serialized) return null;
+  const match = /^(\d+)(?:\.(\d{1,2}))?$/.exec(serialized);
+  if (!match) return null;
+  const fraction = (match[2] ?? "").padEnd(2, "0");
+  return BigInt(match[1]) * ONE_HUNDRED_CENTS + BigInt(fraction || "0");
+}
+
+export function normalizeDraftSaleMoney(
+  value: unknown,
+  label = "Amount",
+): number {
+  if (typeof value !== "string" && typeof value !== "number") {
+    throw new Error(`${label} must be a valid amount.`);
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    throw new Error(`${label} must be at least 0.00.`);
+  if (typeof value === "number" && !Number.isFinite(value)) {
+    throw new Error(`${label} must be a valid amount.`);
   }
-  const cents = Math.round((parsed + Number.EPSILON) * 100);
-  const normalized = cents / 100;
+  const raw = String(value).trim();
+  const match = MONEY_PATTERN.exec(raw);
+  if (!match) throw new Error(`${label} must be a valid amount.`);
+
+  const fraction = match[2] ?? "";
+  let cents = BigInt(match[1]) * ONE_HUNDRED_CENTS +
+    BigInt(fraction.padEnd(2, "0").slice(0, 2) || "0");
+  if (fraction.length > 2 && fraction[2] >= "5") cents += ONE_CENT;
+  if (cents > MAX_DATABASE_MONEY_CENTS || cents > MAX_SAFE_TRANSPORT_CENTS) {
+    throw new Error(`${label} is outside the supported range.`);
+  }
+
+  const normalized = Number(cents) / 100;
   if (
-    !Number.isFinite(cents) ||
-    !Number.isSafeInteger(cents) ||
     !Number.isFinite(normalized) ||
-    normalized > MAX_DATABASE_MONEY
+    serializedMoneyCents(normalized) !== cents
   ) {
     throw new Error(`${label} is outside the supported range.`);
   }
   return normalized;
 }
+
+const parseMoney = normalizeDraftSaleMoney;
 
 function parseQuantity(value: unknown, label: string): number {
   const raw = String(value ?? "").trim();
