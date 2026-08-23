@@ -3,6 +3,7 @@ const UUID_PATTERN =
 const MONEY_PATTERN = /^\d+(?:\.\d{1,2})?$/;
 const WHOLE_NUMBER_PATTERN = /^\d+$/;
 const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+const MAX_DATABASE_MONEY = 99_999_999_999_999.9999;
 
 const SALES_SOURCES = new Set([
   "website",
@@ -72,6 +73,8 @@ export type DraftSaleInput = {
   hasDiscount: boolean;
 };
 
+export type DraftSaleInputMode = "manual" | "quotation";
+
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Sale item is invalid.");
@@ -80,13 +83,16 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 function parseUuid(value: unknown, label: string): string {
-  const candidate = String(value ?? "").trim();
+  if (typeof value !== "string") throw new Error(`${label} is invalid.`);
+  const candidate = value.trim();
   if (!UUID_PATTERN.test(candidate)) throw new Error(`${label} is invalid.`);
   return candidate;
 }
 
 function nullableUuid(value: unknown, label: string): string | null {
-  const candidate = String(value ?? "").trim();
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value !== "string") throw new Error(`${label} is invalid.`);
+  const candidate = value.trim();
   return candidate ? parseUuid(candidate, label) : null;
 }
 
@@ -99,7 +105,17 @@ function parseMoney(value: unknown, label: string): number {
   if (!Number.isFinite(parsed) || parsed < 0) {
     throw new Error(`${label} must be at least 0.00.`);
   }
-  return Math.round((parsed + Number.EPSILON) * 100) / 100;
+  const cents = Math.round((parsed + Number.EPSILON) * 100);
+  const normalized = cents / 100;
+  if (
+    !Number.isFinite(cents) ||
+    !Number.isSafeInteger(cents) ||
+    !Number.isFinite(normalized) ||
+    normalized > MAX_DATABASE_MONEY
+  ) {
+    throw new Error(`${label} is outside the supported range.`);
+  }
+  return normalized;
 }
 
 function parseQuantity(value: unknown, label: string): number {
@@ -180,14 +196,20 @@ function parseDate(value: unknown): string | null {
   return raw;
 }
 
-function parseItem(value: unknown, index: number): DraftSaleItem {
+function parseItem(value: unknown, index: number, retainQuotationSource: boolean): DraftSaleItem {
   const item = record(value);
   const label = `Item ${index + 1}`;
   const unitPrice = parseMoney(item.unit_price, `${label} unit price`);
-  const sourceQuotationItemId = nullableUuid(
-    item.source_quotation_item_id,
-    `${label} source quotation item`,
-  );
+  const sourceQuotationItemId = retainQuotationSource
+    ? nullableUuid(item.source_quotation_item_id, `${label} source quotation item`)
+    : null;
+  if (
+    item.adjustment_reason !== undefined &&
+    item.adjustment_reason !== null &&
+    typeof item.adjustment_reason !== "string"
+  ) {
+    throw new Error(`${label} adjustment reason is invalid.`);
+  }
   const normalized: DraftSaleItem = {
     product_id: parseUuid(item.product_id, `${label} product`),
     variation_id: nullableUuid(item.variation_id, `${label} variation`),
@@ -201,7 +223,7 @@ function parseItem(value: unknown, index: number): DraftSaleItem {
     line_discount: parseMoney(item.line_discount ?? 0, `${label} discount`),
     line_tax: parseMoney(item.line_tax ?? 0, `${label} tax`),
     price_overridden: Boolean(item.price_overridden),
-    adjustment_reason: String(item.adjustment_reason || "Sales price adjustment").slice(0, 500),
+    adjustment_reason: (item.adjustment_reason || "Sales price adjustment").slice(0, 500),
   };
   if (sourceQuotationItemId) normalized.source_quotation_item_id = sourceQuotationItemId;
   return normalized;
@@ -221,14 +243,18 @@ function lineMatchesAdjustment(
 function parseAdjustment(value: unknown, index: number, items: DraftSaleItem[]): DraftSaleAdjustment {
   const item = record(value);
   const label = `Adjustment ${index + 1}`;
-  const adjustmentType = String(item.adjustment_type ?? "");
+  if (typeof item.adjustment_type !== "string") {
+    throw new Error(`${label} type is invalid.`);
+  }
+  const adjustmentType = item.adjustment_type;
   if (!ADJUSTMENT_TYPES.has(adjustmentType)) {
     throw new Error(`${label} type is invalid.`);
   }
   if (item.order_item_id !== null && item.order_item_id !== undefined && item.order_item_id !== "") {
     throw new Error(`${label} cannot reference an existing Sale item.`);
   }
-  const reason = String(item.reason ?? "").trim().slice(0, 500);
+  if (typeof item.reason !== "string") throw new Error(`${label} reason is invalid.`);
+  const reason = item.reason.trim().slice(0, 500);
   if (!reason) throw new Error(`${label} reason is required.`);
   const isLine = adjustmentType === "manual_unit_price" || adjustmentType === "fixed_line_discount";
   const parsed: DraftSaleAdjustment = {
@@ -283,7 +309,14 @@ function legacyAdjustments(
   return adjustments;
 }
 
-export function parseDraftSaleInput(form: FormData): DraftSaleInput {
+export function parseDraftSaleInput(
+  form: FormData,
+  options: { mode: DraftSaleInputMode },
+): DraftSaleInput {
+  const mode = options?.mode;
+  if (mode !== "manual" && mode !== "quotation") {
+    throw new Error("Draft Sale input mode is invalid.");
+  }
   const customerId = parseUuid(form.get("customer_id"), "Customer");
   const warehouseId = parseUuid(form.get("warehouse_id"), "Warehouse");
   const addressId = nullableUuid(form.get("address_id"), "Delivery address");
@@ -293,16 +326,22 @@ export function parseDraftSaleInput(form: FormData): DraftSaleInput {
 
   const rawItems = parseArray(form, "items");
   if (!rawItems.length) throw new Error("At least one product is required.");
-  const items = rawItems.map(parseItem);
+  const items = rawItems.map((value, index) => parseItem(value, index, mode === "quotation"));
   const discountAmount = parseMoney(form.get("discount_amount") || 0, "Order discount");
   const shippingAmount = parseMoney(form.get("shipping_amount") || 0, "Shipping charge");
   const serviceAmount = parseMoney(form.get("service_amount") || 0, "Installation / service");
   const taxAmount = parseMoney(form.get("tax_amount") || 0, "VAT / tax");
   const address = addressId ? {} : addressFromForm(form);
-  const explicitAdjustments = form.has("adjustments") && String(form.get("adjustments") ?? "").trim() !== "";
-  const adjustments = explicitAdjustments
-    ? parseArray(form, "adjustments").map((value, index) => parseAdjustment(value, index, items))
-    : legacyAdjustments(form, items, discountAmount, serviceAmount);
+  let adjustments: DraftSaleAdjustment[];
+  if (mode === "manual") {
+    adjustments = legacyAdjustments(form, items, discountAmount, serviceAmount);
+  } else {
+    if (!form.has("adjustments") || !String(form.get("adjustments") ?? "").trim()) {
+      throw new Error("Sale adjustments are invalid.");
+    }
+    adjustments = parseArray(form, "adjustments")
+      .map((value, index) => parseAdjustment(value, index, items));
+  }
 
   return {
     customerId,
@@ -326,6 +365,46 @@ export function parseDraftSaleInput(form: FormData): DraftSaleInput {
   };
 }
 
+function commonSaleRpcArguments(actorProfileId: string, input: DraftSaleInput) {
+  return {
+    actor_profile_id: actorProfileId,
+    requested_customer_id: input.customerId,
+    requested_address_id: input.addressId,
+    requested_address: input.address,
+    requested_billing_address_id: input.billingAddressId,
+    requested_billing_address: input.billingAddress,
+    requested_warehouse_id: input.warehouseId,
+    requested_source: input.source,
+    requested_expected_delivery_date: input.expectedDeliveryDate,
+    requested_discount: input.discountAmount,
+    requested_shipping: input.shippingAmount,
+    requested_service: input.serviceAmount,
+    requested_tax: input.taxAmount,
+    requested_internal_notes: input.internalNotes,
+    requested_customer_notes: input.customerNotes,
+    requested_items: input.items,
+    requested_adjustments: input.adjustments,
+  };
+}
+
+export function buildManualSaleRpcArguments(
+  actorProfileId: string,
+  input: DraftSaleInput,
+) {
+  return commonSaleRpcArguments(actorProfileId, input);
+}
+
+export function buildQuotationSaleRpcArguments(
+  actorProfileId: string,
+  quotationId: string,
+  input: DraftSaleInput,
+) {
+  return {
+    ...commonSaleRpcArguments(actorProfileId, input),
+    requested_quotation_id: quotationId,
+  };
+}
+
 export function normalizeConversionSaleResult(value: unknown): {
   saleId: string;
   saleNumber: string;
@@ -333,9 +412,14 @@ export function normalizeConversionSaleResult(value: unknown): {
 } | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const result = value as Record<string, unknown>;
-  const saleId = String(result.sale_id ?? "").trim();
-  const orderId = String(result.order_id ?? "").trim();
-  const saleNumber = String(result.order_number ?? "").trim();
+  if (
+    typeof result.sale_id !== "string" ||
+    typeof result.order_id !== "string" ||
+    typeof result.order_number !== "string"
+  ) return null;
+  const saleId = result.sale_id.trim();
+  const orderId = result.order_id.trim();
+  const saleNumber = result.order_number.trim();
   if (
     !UUID_PATTERN.test(saleId) ||
     orderId !== saleId ||

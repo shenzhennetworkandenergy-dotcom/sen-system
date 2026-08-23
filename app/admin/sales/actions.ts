@@ -10,6 +10,8 @@ import { optionalString, uuid } from "@/lib/orders/validation";
 import { resolveQuotationViewScope } from "@/lib/quotations/access-policy";
 import { QUOTATION_SALE_CONVERSION_PERMISSIONS } from "@/lib/quotations/sale-conversion-types";
 import {
+  buildManualSaleRpcArguments,
+  buildQuotationSaleRpcArguments,
   normalizeConversionSaleResult,
   parseDraftSaleInput,
 } from "@/lib/sales/create-draft-input";
@@ -72,23 +74,17 @@ export async function createSaleAction(form: FormData) {
   const { profile, permissions } = await requirePermission("sales.create");
   let input;
   try {
-    input = parseDraftSaleInput(form);
+    input = parseDraftSaleInput(form, { mode: "manual" });
   } catch (error) {
     redirect(`/admin/sales/new?error=${encodeURIComponent(error instanceof Error ? error.message : "Sale items are invalid.")}`);
   }
   if (profile.role !== "admin" && input.hasPriceOverride && !permissions.has("sales.change_price")) redirect("/admin/sales/new?error=Price%20override%20permission%20is%20required.");
   if (profile.role !== "admin" && input.hasDiscount && !permissions.has("sales.apply_discount")) redirect("/admin/sales/new?error=Discount%20permission%20is%20required.");
   const db = createSupabaseAdminClient();
-  const result = await db.rpc("create_minimal_sale", {
-    actor_profile_id: profile.id, requested_customer_id: input.customerId, requested_address_id: input.addressId, requested_address: input.address,
-    requested_billing_address_id: input.billingAddressId, requested_billing_address: input.billingAddress,
-    requested_warehouse_id: input.warehouseId, requested_source: input.source,
-    requested_expected_delivery_date: input.expectedDeliveryDate,
-    requested_discount: input.discountAmount,
-    requested_shipping: input.shippingAmount, requested_tax: input.taxAmount,
-    requested_service: input.serviceAmount, requested_internal_notes: input.internalNotes,
-    requested_customer_notes: input.customerNotes, requested_items: input.items, requested_adjustments: input.adjustments,
-  });
+  const result = await db.rpc(
+    "create_minimal_sale",
+    buildManualSaleRpcArguments(profile.id, input),
+  );
   if (result.error || !result.data) redirect(`/admin/sales/new?error=${encodeURIComponent(safe(result.error?.message, "Unable to create sale."))}`);
   const saleId = String(result.data);
   await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "sale.created", module: "sales", entityType: "sales_order", entityId: saleId, targetProfileId: input.customerId, description: "Sale created.", newValues: { source: input.source, item_count: input.items.length } });
@@ -113,10 +109,7 @@ export async function createSaleFromQuotationAction(form: FormData) {
   const formTarget = `/admin/sales/new?quotation=${quotationId}`;
   let input;
   try {
-    if (!form.has("adjustments") || !String(form.get("adjustments") ?? "").trim()) {
-      throw new Error("Sale adjustments are invalid.");
-    }
-    input = parseDraftSaleInput(form);
+    input = parseDraftSaleInput(form, { mode: "quotation" });
   } catch (error) {
     redirect(`${formTarget}&error=${encodeURIComponent(error instanceof Error ? error.message : "Sale details are invalid.")}`);
   }
@@ -144,26 +137,10 @@ export async function createSaleFromQuotationAction(form: FormData) {
     redirect(`${formTarget}&error=${encodeURIComponent("Quotation is not eligible for Sale conversion.")}`);
   }
 
-  const result = await db.rpc("create_sale_from_quotation", {
-    actor_profile_id: profile.id,
-    requested_quotation_id: quotationId,
-    requested_customer_id: input.customerId,
-    requested_address_id: input.addressId,
-    requested_address: input.address,
-    requested_billing_address_id: input.billingAddressId,
-    requested_billing_address: input.billingAddress,
-    requested_warehouse_id: input.warehouseId,
-    requested_source: input.source,
-    requested_expected_delivery_date: input.expectedDeliveryDate,
-    requested_discount: input.discountAmount,
-    requested_shipping: input.shippingAmount,
-    requested_service: input.serviceAmount,
-    requested_tax: input.taxAmount,
-    requested_internal_notes: input.internalNotes,
-    requested_customer_notes: input.customerNotes,
-    requested_items: input.items,
-    requested_adjustments: input.adjustments,
-  });
+  const result = await db.rpc(
+    "create_sale_from_quotation",
+    buildQuotationSaleRpcArguments(profile.id, quotationId, input),
+  );
   const sale = normalizeConversionSaleResult(result.data);
   if (result.error || !sale) {
     console.error("Unable to create a draft Sale from the quotation.");
