@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 
 import { writeAuditLog } from "@/lib/audit/log";
 import { requirePermission } from "@/lib/auth/permissions";
+import { mustRestrictQuotationToCreator } from "@/lib/quotations/access-policy";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { parseMoney } from "@/lib/validation/numbers";
 
@@ -24,13 +25,20 @@ function refreshQuotationPaths(id: string) {
   revalidatePath("/account/quotations");
 }
 
-async function quotationForUpdate(id: string) {
+async function quotationForUpdate(
+  id: string,
+  profile: { id: string; role: string },
+  permissions: ReadonlySet<string>,
+) {
   const db = createSupabaseAdminClient();
-  const { data, error } = await db
+  let query = db
     .from("quotation_requests")
-    .select("id,reference,profile_id,status,assigned_to")
-    .eq("id", id)
-    .maybeSingle();
+    .select("id,reference,profile_id,status,assigned_to,created_by")
+    .eq("id", id);
+  if (mustRestrictQuotationToCreator(profile.role, permissions)) {
+    query = query.eq("created_by", profile.id);
+  }
+  const { data, error } = await query.maybeSingle();
   if (error || !data) fail("/admin/quotations", "Quotation not found.");
   return { db, quotation: data };
 }
@@ -39,7 +47,7 @@ export async function updateQuotationDetailsAction(
   quotationId: string,
   form: FormData,
 ) {
-  const { profile } = await requirePermission("quotations.edit");
+  const { profile, permissions } = await requirePermission("quotations.edit");
   const path = quotationPath(quotationId);
   let discountAmount: number;
   let taxAmount: number;
@@ -50,7 +58,11 @@ export async function updateQuotationDetailsAction(
   } catch (error) {
     fail(path, error instanceof Error ? error.message : "Amounts are invalid.");
   }
-  const { db, quotation } = await quotationForUpdate(quotationId);
+  const { db, quotation } = await quotationForUpdate(
+    quotationId,
+    profile,
+    permissions,
+  );
   if (quotation.status === "converted_to_invoice") {
     fail(path, "A converted quotation cannot be edited.");
   }
@@ -101,10 +113,14 @@ export async function assignQuotationAction(
   quotationId: string,
   form: FormData,
 ) {
-  const { profile } = await requirePermission("quotations.assign");
+  const { profile, permissions } = await requirePermission("quotations.assign");
   const path = quotationPath(quotationId);
   const assignedTo = String(form.get("assigned_to") ?? "").trim() || null;
-  const { db, quotation } = await quotationForUpdate(quotationId);
+  const { db, quotation } = await quotationForUpdate(
+    quotationId,
+    profile,
+    permissions,
+  );
   if (assignedTo) {
     const { data: assignee } = await db
       .from("profiles")
@@ -145,9 +161,13 @@ async function setQuotationStatus(
   status: "additional_info_required" | "approved" | "rejected",
   form: FormData,
 ) {
-  const { profile } = await requirePermission(permission);
+  const { profile, permissions } = await requirePermission(permission);
   const path = quotationPath(quotationId);
-  const { db, quotation } = await quotationForUpdate(quotationId);
+  const { db, quotation } = await quotationForUpdate(
+    quotationId,
+    profile,
+    permissions,
+  );
   if (quotation.status === "converted_to_invoice") {
     fail(path, "A converted quotation cannot change status.");
   }
@@ -227,12 +247,15 @@ export async function convertQuotationToInvoiceAction(
   quotationId: string,
   form: FormData,
 ) {
-  const { profile } = await requirePermission("quotations.convert_to_invoice");
+  const { profile, permissions } = await requirePermission(
+    "quotations.convert_to_invoice",
+  );
   const path = quotationPath(quotationId);
   const warehouseId = String(form.get("warehouse_id") ?? "").trim();
   const createCustomer = String(form.get("create_customer") ?? "") === "true";
   if (!warehouseId) fail(path, "Choose a fulfilment warehouse.");
-  const { data, error } = await createSupabaseAdminClient().rpc(
+  const { db } = await quotationForUpdate(quotationId, profile, permissions);
+  const { data, error } = await db.rpc(
     "convert_quotation_to_invoice",
     {
       actor_profile_id: profile.id,

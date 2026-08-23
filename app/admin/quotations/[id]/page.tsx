@@ -4,9 +4,10 @@ import { notFound } from "next/navigation";
 import { connection } from "next/server";
 
 import { PrintDocumentButton } from "@/components/sales/PrintDocumentButton";
-import { requirePermission } from "@/lib/auth/permissions";
 import { calculateDocumentDiscounts } from "@/lib/documents/commercial-totals";
 import { label, money } from "@/lib/orders/types";
+import { requireQuotationView } from "@/lib/quotations/access";
+import { canOpenQuotationDocument } from "@/lib/quotations/access-policy";
 import {
   paginateQuotationItems,
   QUOTATION_PAGE_SIZE,
@@ -144,15 +145,20 @@ export default async function QuotationDocumentPage({
   params: Promise<{ id: string }>;
 }) {
   await connection();
-  await requirePermission("quotations.view");
+  const { profile, permissions, quotationViewScope } =
+    await requireQuotationView();
+  if (!canOpenQuotationDocument(profile.role, permissions)) notFound();
   const { id } = await params;
-  const { data, error } = await createSupabaseAdminClient()
+  let quotationQuery = createSupabaseAdminClient()
     .from("quotation_requests")
     .select(
-      "id,reference,status,subject,message,company_name,customer_tax_identification_number,required_by,expiration_date,created_at,currency,billing_address_snapshot,shipping_address_snapshot,subtotal,discount_amount,tax_amount,total_amount,terms_and_conditions,payment_terms,delivery_information,customer_notes,profiles!quotation_requests_profile_id_fkey(full_name,email,phone,company_name),quotation_request_items(id,product_name_snapshot,sku_snapshot,quantity,target_price,unit_price,discount_amount,tax_amount,line_subtotal,line_total,currency)",
+      "id,reference,status,subject,message,company_name,customer_tax_identification_number,required_by,expiration_date,created_at,created_by,currency,billing_address_snapshot,shipping_address_snapshot,subtotal,discount_amount,tax_amount,total_amount,terms_and_conditions,payment_terms,delivery_information,customer_notes,profiles!quotation_requests_profile_id_fkey(full_name,email,phone,company_name),quotation_request_items(id,product_name_snapshot,sku_snapshot,quantity,target_price,unit_price,discount_amount,tax_amount,line_subtotal,line_total,currency)",
     )
-    .eq("id", id)
-    .maybeSingle();
+    .eq("id", id);
+  if (quotationViewScope === "own") {
+    quotationQuery = quotationQuery.eq("created_by", profile.id);
+  }
+  const { data, error } = await quotationQuery.maybeSingle();
 
   if (error || !data) notFound();
 

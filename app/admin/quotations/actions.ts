@@ -11,6 +11,7 @@ import {
 } from "@/lib/customers/create-basic";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
+import { mustRestrictQuotationToCreator } from "@/lib/quotations/access-policy";
 import { parseQuotationItems } from "@/lib/quotations/create";
 import { defaultQuotationExpiration } from "@/lib/quotations/validity";
 
@@ -183,6 +184,7 @@ export async function createQuotationAction(form: FormData) {
     billing_address_snapshot: addressSnapshot,
     shipping_address_snapshot: addressSnapshot,
     currency: "BDT",
+    created_by: profile.id,
     updated_by: profile.id,
   }).select("id").single();
   if (error || !quotation) redirect("/admin/quotations/new?error=Unable%20to%20create%20quotation.");
@@ -226,7 +228,10 @@ export async function createQuotationAction(form: FormData) {
   await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "quotation.created", module: "quotations", entityType: "quotation_request", entityId: quotation.id, targetProfileId: customer.id, description: "Quotation created by staff.", newValues: { reference, product_ids: uniqueProductIds, item_count: quotationItems.length } });
   revalidatePath("/admin/quotations");
   const destination =
-    profile.role === "admin" || permissions.has("quotations.view")
+    profile.role === "admin" ||
+    permissions.has("quotations.view") ||
+    permissions.has("quotations.view_all") ||
+    permissions.has("quotations.view_own")
       ? "/admin/quotations"
       : "/admin/quotations/new";
   redirect(`${destination}?success=${encodeURIComponent(`Quotation ${reference} created.`)}`);
@@ -236,13 +241,24 @@ export async function updateQuotationAction(
   quotationId: string,
   form: FormData,
 ) {
-  const { profile } = await requirePermission("quotations.edit");
+  const { profile, permissions } = await requirePermission("quotations.edit");
   const status = String(form.get("status") ?? "");
   if (!statuses.has(status)) {
     redirect("/admin/quotations?error=Invalid%20quotation%20status.");
   }
 
   const db = createSupabaseAdminClient();
+  let quotationQuery = db
+    .from("quotation_requests")
+    .select("id")
+    .eq("id", quotationId);
+  if (mustRestrictQuotationToCreator(profile.role, permissions)) {
+    quotationQuery = quotationQuery.eq("created_by", profile.id);
+  }
+  const { data: quotation } = await quotationQuery.maybeSingle();
+  if (!quotation) {
+    redirect("/admin/quotations?error=Quotation%20not%20found.");
+  }
   const { error } = await db
     .from("quotation_requests")
     .update({

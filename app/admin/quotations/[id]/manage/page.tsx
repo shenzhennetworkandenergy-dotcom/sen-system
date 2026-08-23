@@ -3,7 +3,7 @@ import { connection } from "next/server";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { QuotationOperations } from "@/components/quotations/QuotationOperations";
-import { requirePermission } from "@/lib/auth/permissions";
+import { requireQuotationView } from "@/lib/quotations/access";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -20,17 +20,21 @@ export default async function ManageQuotationPage({
   }>;
 }) {
   await connection();
-  const { profile, permissions } = await requirePermission("quotations.view");
+  const { profile, permissions, quotationViewScope } =
+    await requireQuotationView();
   const [{ id }, notice] = await Promise.all([params, searchParams]);
   const db = createSupabaseAdminClient();
   await db.rpc("queue_quotation_expiry_notifications");
-  const { data: quotation, error } = await db
+  let quotationQuery = db
     .from("quotation_requests")
     .select(
-      "id,reference,profile_id,status,subject,company_name,customer_tax_identification_number,required_by,expiration_date,subtotal,discount_amount,tax_amount,total_amount,currency,terms_and_conditions,payment_terms,delivery_information,customer_notes,internal_notes,assigned_to,approved_at,converted_at,converted_order_id,converted_invoice_id,profiles!quotation_requests_profile_id_fkey(id,full_name,email,role)",
+      "id,reference,profile_id,status,subject,company_name,customer_tax_identification_number,required_by,expiration_date,subtotal,discount_amount,tax_amount,total_amount,currency,terms_and_conditions,payment_terms,delivery_information,customer_notes,internal_notes,assigned_to,approved_at,converted_at,converted_order_id,converted_invoice_id,created_by,profiles!quotation_requests_profile_id_fkey(id,full_name,email,role)",
     )
-    .eq("id", id)
-    .maybeSingle();
+    .eq("id", id);
+  if (quotationViewScope === "own") {
+    quotationQuery = quotationQuery.eq("created_by", profile.id);
+  }
+  const { data: quotation, error } = await quotationQuery.maybeSingle();
   if (error || !quotation) notFound();
   const customer = quotation.profiles as unknown as {
     id: string;
