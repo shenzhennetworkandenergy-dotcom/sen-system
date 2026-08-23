@@ -59,20 +59,22 @@ test("self attendance migration uses server time and preserves device-ready sour
 });
 
 test("attendance page exposes automatic-timezone check-in and check-out controls", async () => {
-  const [page, actions, control, deviceRoute] = await Promise.all([
+  const [page, actions, control, presentation, deviceRoute] = await Promise.all([
     readFile("app/employee/hr/attendance/page.tsx", "utf8"),
     readFile("app/employee/hr/actions.ts", "utf8"),
     readFile("components/hr/AttendanceClockControls.tsx", "utf8"),
+    readFile("components/hr/attendance-clock-presentation.ts", "utf8"),
     readFile("app/api/hr/attendance-events/route.ts", "utf8"),
   ]);
+  const attendanceUi = `${control}\n${presentation}`;
 
   assert.match(page, /AttendanceClockControls/);
   assert.match(actions, /recordSelfAttendanceAction/);
   assert.match(actions, /requireEmployeeHrRecord/);
   assert.match(actions, /hr_record_self_attendance/);
   assert.match(control, /resolvedOptions\(\)\.timeZone/);
-  assert.match(control, /Check in/);
-  assert.match(control, /Check out/);
+  assert.match(attendanceUi, /CHECK IN NOW/);
+  assert.match(attendanceUi, /CHECK OUT NOW/);
   assert.match(page, /openAttendance/);
   assert.match(deviceRoute, /hr_apply_device_attendance_event/);
   assert.doesNotMatch(deviceRoute, /from\("hr_attendance"\)[\s\S]*\.upsert/);
