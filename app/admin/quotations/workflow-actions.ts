@@ -61,7 +61,7 @@ export async function updateQuotationDetailsAction(
   } catch (error) {
     fail(path, error instanceof Error ? error.message : "Amounts are invalid.");
   }
-  const { db, quotation, scope } = await quotationForUpdate(
+  const { db, quotation } = await quotationForUpdate(
     quotationId,
     profile,
     permissions,
@@ -69,41 +69,29 @@ export async function updateQuotationDetailsAction(
   if (isQuotationImmutable(quotation.status)) {
     fail(path, "An immutable quotation cannot be edited.");
   }
-  let updateQuery = db
-    .from("quotation_requests")
-    .update({
-      subject: clean(form.get("subject"), 200),
-      company_name: clean(form.get("company_name"), 180),
-      customer_tax_identification_number: clean(
-        form.get("customer_tax_identification_number"),
-        100,
-      ),
-      required_by: clean(form.get("required_by"), 10),
-      expiration_date: clean(form.get("expiration_date"), 10),
-      terms_and_conditions: clean(form.get("terms_and_conditions")),
-      payment_terms: clean(form.get("payment_terms"), 2000),
-      delivery_information: clean(form.get("delivery_information"), 2000),
-      customer_notes: clean(form.get("customer_notes")),
-      message: clean(form.get("customer_notes")),
-      internal_notes: clean(form.get("internal_notes")),
-      discount_amount: discountAmount,
-      tax_amount: taxAmount,
-      updated_by: profile.id,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", quotationId)
-    .eq("status", quotation.status);
-  if (scope === "own") {
-    updateQuery = updateQuery.eq("created_by", profile.id);
-  }
-  const { data, error } = await updateQuery.select("id").maybeSingle();
+  const { data, error } = await db.rpc("update_quotation_details_and_totals", {
+    actor_profile_id: profile.id,
+    requested_quotation_id: quotationId,
+    requested_expected_status: quotation.status,
+    requested_subject: clean(form.get("subject"), 200),
+    requested_company_name: clean(form.get("company_name"), 180),
+    requested_customer_tax_identification_number: clean(
+      form.get("customer_tax_identification_number"),
+      100,
+    ),
+    requested_required_by: clean(form.get("required_by"), 10),
+    requested_expiration_date: clean(form.get("expiration_date"), 10),
+    requested_terms_and_conditions: clean(form.get("terms_and_conditions")),
+    requested_payment_terms: clean(form.get("payment_terms"), 2000),
+    requested_delivery_information: clean(form.get("delivery_information"), 2000),
+    requested_customer_notes: clean(form.get("customer_notes")),
+    requested_internal_notes: clean(form.get("internal_notes")),
+    requested_discount_amount: discountAmount,
+    requested_tax_amount: taxAmount,
+  });
   if (error || !data) {
     fail(path, "Quotation changed before its details could be saved.");
   }
-  const { error: totalError } = await db.rpc("refresh_quotation_totals", {
-    requested_quotation_id: quotationId,
-  });
-  if (totalError) fail(path, "Details saved, but totals could not be refreshed.");
   await writeAuditLog({
     actorId: profile.id,
     actorRole: profile.role,

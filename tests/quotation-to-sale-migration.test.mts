@@ -82,6 +82,7 @@ test("every privileged quotation function pins an empty search path", () => {
   for (const name of [
     "notify_quotation_change",
     "transition_quotation_business_status",
+    "update_quotation_details_and_totals",
     "search_eligible_quotations_for_sale",
     "create_sale_from_quotation",
   ]) {
@@ -153,6 +154,96 @@ test("business transitions lock, authorize, scope, validate, update metadata, an
   assert.match(body, /customer_declined_at\s*=\s*now\(\)[\s\S]{0,160}customer_declined_by\s*=\s*actor_profile_id[\s\S]{0,160}customer_decline_reason/i);
   assert.match(body, /insert\s+into\s+public\.audit_logs/i);
   assert.doesNotMatch(body, /status\s*=\s*'accepted'[\s\S]{0,120}approved_by/i);
+});
+
+test("atomic quotation details update locks, scopes, validates, and refreshes totals in one RPC", () => {
+  const definition = functionDefinition("update_quotation_details_and_totals");
+  const body = functionBody("update_quotation_details_and_totals");
+  const lockAt = body.search(
+    /from\s+public\.quotation_requests[\s\S]{0,160}for\s+update/i,
+  );
+  const updateAt = body.search(/update\s+public\.quotation_requests\s+set/i);
+  const totalsAt = body.search(
+    /perform\s+public\.refresh_quotation_totals\s*\(\s*quotation\.id\s*\)/i,
+  );
+  const updateBody = body.slice(updateAt, totalsAt);
+
+  assert.match(
+    definition,
+    /security\s+definer[\s\S]{0,80}set\s+search_path\s*=\s*''[\s\S]{0,80}\bas\s+\$\$/i,
+  );
+  assert.match(body, /assert_actor_permission\(\s*actor_profile_id\s*,\s*'quotations\.edit'\s*\)/i);
+  assert.match(body, /quotations\.view_own/i);
+  assert.match(body, /quotations\.view_all/i);
+  assert.match(body, /quotations\.view/i);
+  assert.match(body, /coalesce\s*\(\s*actor\.role\s*=\s*'admin'\s*,\s*false\s*\)/i);
+  assert.match(
+    body,
+    /coalesce\s*\(\s*quotation\.created_by\s*=\s*actor_profile_id\s*,\s*false\s*\)/i,
+    "a null historical owner must not satisfy own-only scope",
+  );
+  assert.match(body, /requested_expected_status/i);
+  assert.match(body, /quotation\.status\s+is\s+distinct\s+from\s+requested_expected_status/i);
+  assert.match(
+    body,
+    /quotation\.status\s+in\s*\(\s*'accepted'\s*,\s*'declined'\s*,\s*'rejected'\s*,\s*'closed'\s*,\s*'expired'\s*,\s*'converted_to_sale'\s*,\s*'converted_to_invoice'\s*\)/i,
+  );
+  for (const field of [
+    "subject",
+    "company_name",
+    "customer_tax_identification_number",
+    "required_by",
+    "expiration_date",
+    "terms_and_conditions",
+    "payment_terms",
+    "delivery_information",
+    "customer_notes",
+    "internal_notes",
+    "discount_amount",
+    "tax_amount",
+  ]) {
+    assert.match(body, new RegExp(`${field}\\s*=`), field);
+  }
+  for (const forbiddenField of [
+    "status",
+    "created_by",
+    "profile_id",
+    "converted_order_id",
+  ]) {
+    assert.doesNotMatch(
+      updateBody,
+      new RegExp(`\\b${forbiddenField}\\s*=`),
+      `${forbiddenField} must not be writable through commercial details`,
+    );
+  }
+  assert.deepEqual(
+    [...updateBody.matchAll(/^\s{4}([a-z_]+)=/gm)].map((match) => match[1]),
+    [
+      "subject",
+      "company_name",
+      "customer_tax_identification_number",
+      "required_by",
+      "expiration_date",
+      "terms_and_conditions",
+      "payment_terms",
+      "delivery_information",
+      "customer_notes",
+      "message",
+      "internal_notes",
+      "discount_amount",
+      "tax_amount",
+      "updated_by",
+      "updated_at",
+    ],
+    "the atomic RPC may update only existing commercial details and traceability fields",
+  );
+  assert.ok(lockAt >= 0, "the quotation row must be locked before mutation");
+  assert.ok(updateAt > lockAt, "details update must happen under the quotation lock");
+  assert.ok(totalsAt > updateAt, "totals refresh must run after the details update under that lock");
+  assert.doesNotMatch(
+    body,
+    /\b(?:insert\s+into|delete\s+from|update)\s+public\.(?:sales_orders|sale_documents|inventory\w*)\b/i,
+  );
 });
 
 test("eligible search requires conversion and Sale creation access within quotation scope", () => {
@@ -383,6 +474,19 @@ test("new RPCs are service-role only", () => {
       new RegExp(`grant\\s+execute\\s+on\\s+function\\s+public\\.${flexibleSignature}[\\s\\S]{0,80}to\\s+(?:authenticated|anon|public)`, "i"),
     );
   }
+
+  assert.match(
+    migration,
+    /revoke\s+all\s+on\s+function\s+public\.update_quotation_details_and_totals\([\s\S]{0,500}from\s+public\s*,\s*anon\s*,\s*authenticated/i,
+  );
+  assert.match(
+    migration,
+    /grant\s+execute\s+on\s+function\s+public\.update_quotation_details_and_totals\([\s\S]{0,500}to\s+service_role/i,
+  );
+  assert.doesNotMatch(
+    migration,
+    /grant\s+execute\s+on\s+function\s+public\.update_quotation_details_and_totals\([\s\S]{0,500}to\s+(?:authenticated|anon|public)/i,
+  );
 });
 
 test("conversion cannot confirm, reserve, invoice, finalize, release stock, take payment, or ship", () => {

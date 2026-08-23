@@ -212,7 +212,7 @@ begin
   for update;
   if quotation.id is null then raise exception 'Quotation not found'; end if;
 
-  can_view_all:=actor.role='admin' or exists(
+  can_view_all:=coalesce(actor.role='admin',false) or exists(
     select 1 from public.effective_permissions_for_profile(actor_profile_id) e
     where e.permission_key in ('quotations.view','quotations.view_all')
   );
@@ -307,6 +307,91 @@ begin
     )
   );
   return next_status;
+end $$;
+
+create or replace function public.update_quotation_details_and_totals(
+  actor_profile_id uuid,
+  requested_quotation_id uuid,
+  requested_expected_status text,
+  requested_subject text,
+  requested_company_name text,
+  requested_customer_tax_identification_number text,
+  requested_required_by date,
+  requested_expiration_date date,
+  requested_terms_and_conditions text,
+  requested_payment_terms text,
+  requested_delivery_information text,
+  requested_customer_notes text,
+  requested_internal_notes text,
+  requested_discount_amount numeric,
+  requested_tax_amount numeric
+) returns uuid
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  actor public.profiles%rowtype;
+  quotation public.quotation_requests%rowtype;
+  can_view_all boolean;
+  can_view_own boolean;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'quotations.edit');
+  select * into actor from public.profiles p
+  where p.id=actor_profile_id and p.status='active';
+  if actor.id is null then raise exception 'Active actor not found'; end if;
+
+  select * into quotation
+  from public.quotation_requests q
+  where q.id=requested_quotation_id
+  for update;
+  if quotation.id is null then raise exception 'Quotation not found'; end if;
+
+  can_view_all:=coalesce(actor.role='admin',false) or exists(
+    select 1 from public.effective_permissions_for_profile(actor_profile_id) e
+    where e.permission_key in ('quotations.view','quotations.view_all')
+  );
+  can_view_own:=exists(
+    select 1 from public.effective_permissions_for_profile(actor_profile_id) e
+    where e.permission_key='quotations.view_own'
+  );
+  if not can_view_all and not (
+    can_view_own and coalesce(quotation.created_by=actor_profile_id,false)
+  ) then
+    raise exception 'Quotation access denied';
+  end if;
+
+  if quotation.status in (
+    'accepted','declined','rejected','closed','expired','converted_to_sale','converted_to_invoice'
+  ) then
+    raise exception 'An immutable quotation cannot be edited';
+  end if;
+  if requested_expected_status not in (
+    'draft','submitted','reviewing','additional_info_required','approved','quoted'
+  ) or quotation.status is distinct from requested_expected_status then
+    raise exception 'Quotation changed before its details could be saved';
+  end if;
+
+  update public.quotation_requests set
+    subject=requested_subject,
+    company_name=requested_company_name,
+    customer_tax_identification_number=requested_customer_tax_identification_number,
+    required_by=requested_required_by,
+    expiration_date=requested_expiration_date,
+    terms_and_conditions=requested_terms_and_conditions,
+    payment_terms=requested_payment_terms,
+    delivery_information=requested_delivery_information,
+    customer_notes=requested_customer_notes,
+    message=requested_customer_notes,
+    internal_notes=requested_internal_notes,
+    discount_amount=requested_discount_amount,
+    tax_amount=requested_tax_amount,
+    updated_by=actor_profile_id,
+    updated_at=now()
+  where id=quotation.id;
+
+  perform public.refresh_quotation_totals(quotation.id);
+  return quotation.id;
 end $$;
 
 create or replace function public.search_eligible_quotations_for_sale(
@@ -776,6 +861,13 @@ revoke all on function public.transition_quotation_business_status(uuid,uuid,tex
   from public,anon,authenticated;
 grant execute on function public.transition_quotation_business_status(uuid,uuid,text,text)
   to service_role;
+
+revoke all on function public.update_quotation_details_and_totals(
+  uuid,uuid,text,text,text,text,date,date,text,text,text,text,text,numeric,numeric
+) from public,anon,authenticated;
+grant execute on function public.update_quotation_details_and_totals(
+  uuid,uuid,text,text,text,text,date,date,text,text,text,text,text,numeric,numeric
+) to service_role;
 
 revoke all on function public.search_eligible_quotations_for_sale(uuid,text,integer)
   from public,anon,authenticated;

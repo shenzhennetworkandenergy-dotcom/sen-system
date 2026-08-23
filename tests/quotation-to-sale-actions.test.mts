@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { resolveQuotationViewScope } from "../lib/quotations/access-policy.ts";
-import { canTransitionQuotation } from "../lib/quotations/workflow.ts";
+import {
+  canTransitionQuotation,
+  isQuotationImmutable,
+} from "../lib/quotations/workflow.ts";
 
 const source = (path: string) => readFileSync(path, "utf8");
 const actionSource = (name: string) => {
@@ -120,16 +123,44 @@ test("customer decline requires a trimmed reason within the database contract bo
   assert.match(actions, /"decline"/);
 });
 
-test("non-terminal quotation mutations compare the read status and require the guarded write result", () => {
-  for (const action of [
-    "updateQuotationDetailsAction",
-    "assignQuotationAction",
-    "requestQuotationInformationAction",
-  ]) {
+test("details mutation delegates its only write to the locked atomic totals RPC", () => {
+  const body = actionSource("updateQuotationDetailsAction");
+
+  assert.match(
+    body,
+    /requirePermission\("quotations\.edit"\)[\s\S]*quotationForUpdate\([\s\S]*db\.rpc\("update_quotation_details_and_totals"/,
+  );
+  assert.match(body, /requested_expected_status:\s*quotation\.status/);
+  assert.doesNotMatch(body, /\.from\("quotation_requests"\)\.update\(/);
+  assert.doesNotMatch(body, /rpc\("refresh_quotation_totals"/);
+  assert.equal((body.match(/db\.rpc\(/g) ?? []).length, 1);
+  assert.match(body, /if \(error \|\| !data\)/);
+});
+
+test("single-statement non-terminal mutations compare the read status and require the guarded write result", () => {
+  for (const action of ["assignQuotationAction", "requestQuotationInformationAction"]) {
     const body = actionSource(action);
     assert.match(body, /\.eq\("status", quotation\.status\)/);
     assert.match(body, /\.select\("id"\)\.maybeSingle\(\)/);
     assert.match(body, /if \(error \|\| !data\)/);
+  }
+});
+
+test("terminal business statuses are immutable before any staff mutation", () => {
+  const cases = [
+    ["draft", false],
+    ["quoted", false],
+    ["accepted", true],
+    ["declined", true],
+    ["rejected", true],
+    ["closed", true],
+    ["expired", true],
+    ["converted_to_sale", true],
+    ["converted_to_invoice", true],
+  ] as const;
+
+  for (const [status, expected] of cases) {
+    assert.equal(isQuotationImmutable(status), expected, status);
   }
 });
 

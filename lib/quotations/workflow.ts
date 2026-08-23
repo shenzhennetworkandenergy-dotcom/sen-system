@@ -91,6 +91,7 @@ export function isQuotationImmutable(status: string) {
     "accepted",
     "declined",
     "rejected",
+    "closed",
     "expired",
     "converted_to_sale",
     "converted_to_invoice",
