@@ -331,7 +331,8 @@ set search_path=''
 as $$
 declare
   actor public.profiles%rowtype;
-  search_query text:=btrim(coalesce(requested_query,''));
+  search_query text:=left(btrim(coalesce(requested_query,'')),80);
+  escaped_query text;
   search_pattern text;
   result_limit integer:=least(greatest(coalesce(requested_limit,20),1),20);
   can_view_all boolean;
@@ -351,7 +352,10 @@ begin
   );
   if not can_view_all and not can_view_own then raise exception 'Quotation access denied'; end if;
   if search_query='' then return; end if;
-  search_pattern:='%'||search_query||'%';
+  escaped_query:=replace(search_query,E'\\',E'\\\\');
+  escaped_query:=replace(escaped_query,'%',E'\\%');
+  escaped_query:=replace(escaped_query,'_',E'\\_');
+  search_pattern:='%'||escaped_query||'%';
 
   return query
   select
@@ -360,7 +364,8 @@ begin
     coalesce(nullif(q.company_name,''),p.company_name),
     p.email,q.total_amount,q.currency::text,q.expiration_date
   from public.quotation_requests q
-  join public.profiles p on p.id=q.profile_id
+  join public.profiles p
+    on p.id=q.profile_id and p.role='customer' and p.status='active'
   where q.status='accepted'
     and (q.expiration_date is null or q.expiration_date>=current_date)
     and q.converted_order_id is null
@@ -369,10 +374,10 @@ begin
       or (can_view_own and q.created_by=actor_profile_id)
     )
     and (
-      q.reference ilike search_pattern
-      or p.full_name ilike search_pattern
-      or coalesce(q.company_name,p.company_name,'') ilike search_pattern
-      or p.email ilike search_pattern
+      q.reference ilike search_pattern escape E'\\'
+      or p.full_name ilike search_pattern escape E'\\'
+      or coalesce(q.company_name,p.company_name,'') ilike search_pattern escape E'\\'
+      or p.email ilike search_pattern escape E'\\'
     )
   order by
     case when lower(q.reference)=lower(search_query) then 0 else 1 end,
@@ -412,6 +417,12 @@ declare
   variation_row public.product_variations%rowtype;
   entry jsonb;
   adjustment jsonb;
+  expected_adjustment jsonb;
+  expected_adjustments jsonb:='[]'::jsonb;
+  validated_adjustments jsonb:='[]'::jsonb;
+  adjustment_index integer;
+  matching_adjustment_index integer;
+  consumed_adjustment_indexes integer[]:='{}'::integer[];
   source_quotation_item_id uuid;
   requested_product_id uuid;
   requested_variation_id uuid;
@@ -476,6 +487,9 @@ begin
   if quotation.expiration_date is not null and quotation.expiration_date<current_date then
     raise exception 'Expired quotation cannot be converted';
   end if;
+  if quotation.currency is distinct from 'BDT' then
+    raise exception 'Only BDT quotations can be converted to a Sale';
+  end if;
   if requested_customer_id is distinct from quotation.profile_id then
     raise exception 'Sale customer must match the quotation customer';
   end if;
@@ -483,6 +497,18 @@ begin
     select 1 from public.profiles p
     where p.id=requested_customer_id and p.role='customer' and p.status='active'
   ) then raise exception 'Active quotation customer is required'; end if;
+  if requested_address_id is not null and not exists(
+    select 1 from public.customer_addresses a
+    where a.id=requested_address_id and a.profile_id=requested_customer_id
+  ) then
+    raise exception 'Shipping address does not belong to the quotation customer';
+  end if;
+  if requested_billing_address_id is not null and not exists(
+    select 1 from public.customer_addresses a
+    where a.id=requested_billing_address_id and a.profile_id=requested_customer_id
+  ) then
+    raise exception 'Billing address does not belong to the quotation customer';
+  end if;
 
   if not exists(
     select 1 from public.quotation_request_items qi
@@ -558,10 +584,26 @@ begin
       if item_unit_price<>baseline_unit_price then
         perform public.assert_actor_permission(actor_profile_id,'sales.change_price');
         accepted_values_edited:=true;
+        expected_adjustments:=expected_adjustments||jsonb_build_array(jsonb_build_object(
+          'source_quotation_item_id',source_quotation_item_id,
+          'product_id',requested_product_id,
+          'variation_id',requested_variation_id,
+          'adjustment_type','manual_unit_price',
+          'previous_value',baseline_unit_price,
+          'new_value',item_unit_price
+        ));
       end if;
       if item_line_discount<>round(coalesce(quote_item.discount_amount,0),2) then
         perform public.assert_actor_permission(actor_profile_id,'sales.apply_discount');
         accepted_values_edited:=true;
+        expected_adjustments:=expected_adjustments||jsonb_build_array(jsonb_build_object(
+          'source_quotation_item_id',source_quotation_item_id,
+          'product_id',requested_product_id,
+          'variation_id',requested_variation_id,
+          'adjustment_type','fixed_line_discount',
+          'previous_value',round(coalesce(quote_item.discount_amount,0),2),
+          'new_value',item_line_discount
+        ));
       end if;
       if item_quantity<>quote_item.quantity
         or item_line_tax<>round(coalesce(quote_item.tax_amount,0),2)
@@ -574,9 +616,25 @@ begin
       ),2);
       if item_unit_price<>catalogue_unit_price then
         perform public.assert_actor_permission(actor_profile_id,'sales.change_price');
+        expected_adjustments:=expected_adjustments||jsonb_build_array(jsonb_build_object(
+          'source_quotation_item_id',null,
+          'product_id',requested_product_id,
+          'variation_id',requested_variation_id,
+          'adjustment_type','manual_unit_price',
+          'previous_value',catalogue_unit_price,
+          'new_value',item_unit_price
+        ));
       end if;
       if item_line_discount>0 then
         perform public.assert_actor_permission(actor_profile_id,'sales.apply_discount');
+        expected_adjustments:=expected_adjustments||jsonb_build_array(jsonb_build_object(
+          'source_quotation_item_id',null,
+          'product_id',requested_product_id,
+          'variation_id',requested_variation_id,
+          'adjustment_type','fixed_line_discount',
+          'previous_value',catalogue_unit_price,
+          'new_value',item_line_discount
+        ));
       end if;
     end if;
 
@@ -594,6 +652,24 @@ begin
   if header_discount<>round(coalesce(quotation.discount_amount,0),2) then
     perform public.assert_actor_permission(actor_profile_id,'sales.apply_discount');
     accepted_values_edited:=true;
+    expected_adjustments:=expected_adjustments||jsonb_build_array(jsonb_build_object(
+      'source_quotation_item_id',null,
+      'product_id',null,
+      'variation_id',null,
+      'adjustment_type','order_discount',
+      'previous_value',round(coalesce(quotation.discount_amount,0),2),
+      'new_value',header_discount
+    ));
+  end if;
+  if header_service>0 then
+    expected_adjustments:=expected_adjustments||jsonb_build_array(jsonb_build_object(
+      'source_quotation_item_id',null,
+      'product_id',null,
+      'variation_id',null,
+      'adjustment_type','service_charge',
+      'previous_value',0,
+      'new_value',header_service
+    ));
   end if;
   if header_shipping<>0 or header_service<>0
     or header_tax<>round(coalesce(quotation.tax_amount,0),2)
@@ -603,25 +679,50 @@ begin
     )
   then accepted_values_edited:=true; end if;
 
-  for adjustment in
-    select requested.value
-    from jsonb_array_elements(coalesce(requested_adjustments,'[]'::jsonb)) as requested(value)
+  if jsonb_array_length(coalesce(requested_adjustments,'[]'::jsonb))
+    <>jsonb_array_length(expected_adjustments)
+  then
+    raise exception 'Sale adjustments do not match reviewed commercial edits';
+  end if;
+  for expected_adjustment in
+    select expected.value from jsonb_array_elements(expected_adjustments) as expected(value)
   loop
+    matching_adjustment_index:=null;
+    for adjustment,adjustment_index in
+      select requested.value,requested.ordinality::integer
+      from jsonb_array_elements(coalesce(requested_adjustments,'[]'::jsonb))
+        with ordinality as requested(value,ordinality)
+    loop
+      if adjustment_index=any(consumed_adjustment_indexes) then continue; end if;
+      if adjustment->>'adjustment_type'=expected_adjustment->>'adjustment_type'
+        and nullif(adjustment->>'source_quotation_item_id','')::uuid
+          is not distinct from nullif(expected_adjustment->>'source_quotation_item_id','')::uuid
+        and nullif(adjustment->>'product_id','')::uuid
+          is not distinct from nullif(expected_adjustment->>'product_id','')::uuid
+        and nullif(adjustment->>'variation_id','')::uuid
+          is not distinct from nullif(expected_adjustment->>'variation_id','')::uuid
+        and nullif(adjustment->>'previous_value','')::numeric
+          is not distinct from nullif(expected_adjustment->>'previous_value','')::numeric
+        and nullif(adjustment->>'new_value','')::numeric
+          is not distinct from nullif(expected_adjustment->>'new_value','')::numeric
+      then
+        matching_adjustment_index:=adjustment_index;
+        exit;
+      end if;
+    end loop;
+    if matching_adjustment_index is null then
+      raise exception 'Sale adjustments do not match reviewed commercial edits';
+    end if;
     if nullif(adjustment->>'order_item_id','') is not null then
       raise exception 'Creation adjustments cannot reference an existing Sale item';
     end if;
-    if adjustment->>'adjustment_type' is null or adjustment->>'adjustment_type' not in (
-      'manual_unit_price','percentage_discount','fixed_line_discount',
-      'order_discount','shipping_charge','service_charge','tax'
-    ) then raise exception 'Sale adjustment type is invalid'; end if;
     if nullif(btrim(coalesce(adjustment->>'reason','')),'') is null then
       raise exception 'Price adjustment reason required';
     end if;
-    if nullif(adjustment->>'new_value','') is null
-      or nullif(adjustment->>'new_value','')::numeric<0
-    then
-      raise exception 'Sale adjustment value is invalid';
-    end if;
+    consumed_adjustment_indexes:=array_append(
+      consumed_adjustment_indexes,matching_adjustment_index
+    );
+    validated_adjustments:=validated_adjustments||jsonb_build_array(adjustment);
   end loop;
 
   created_sale_id:=public.create_minimal_sale(
@@ -629,7 +730,7 @@ begin
     requested_billing_address_id,requested_billing_address,requested_warehouse_id,
     requested_source,requested_expected_delivery_date,header_discount,header_shipping,
     header_service,header_tax,requested_internal_notes,requested_customer_notes,
-    normalized_items,coalesce(requested_adjustments,'[]'::jsonb)
+    normalized_items,validated_adjustments
   );
   select o.order_number,o.status into created_sale_number,created_sale_status
   from public.sales_orders o where o.id=created_sale_id;
