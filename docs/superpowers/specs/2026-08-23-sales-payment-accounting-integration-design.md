@@ -1,7 +1,9 @@
 # Sales Payment Accounting Integration Design
 
-**Status:** Approved for implementation  
-**Date:** 2026-08-23  
+**Status:** Approved for implementation
+
+**Date:** 2026-08-23
+
 **Scope:** Sales Record Payment to Quick Cash Book income and posted Sales Revenue journal
 
 ## Purpose
