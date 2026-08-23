@@ -263,6 +263,51 @@ export function quotationSaleDestination(quotationId: unknown): string | null {
   return `/admin/sales/new?${new URLSearchParams({ quotation: quotationId })}`;
 }
 
+export type QuotationTypeaheadState = {
+  options: EligibleQuotationOption[];
+  activeIndex: number;
+  loading: boolean;
+  error: string | null;
+  requestId: number;
+};
+
+export type QuotationTypeaheadStateEvent =
+  | { type: "query" | "escape"; requestId: number }
+  | { type: "loading"; requestId: number }
+  | {
+    type: "response";
+    requestId: number;
+    options: EligibleQuotationOption[];
+    error: string | null;
+  };
+
+export function quotationTypeaheadStateTransition(
+  state: QuotationTypeaheadState,
+  event: QuotationTypeaheadStateEvent,
+): QuotationTypeaheadState {
+  if (event.type === "query" || event.type === "escape") {
+    return {
+      options: [],
+      activeIndex: -1,
+      loading: false,
+      error: null,
+      requestId: event.requestId,
+    };
+  }
+  if (event.requestId !== state.requestId) return state;
+  if (event.type === "loading") {
+    return { ...state, options: [], activeIndex: -1, loading: true, error: null };
+  }
+  if (event.type !== "response") return state;
+  return {
+    options: event.options,
+    activeIndex: -1,
+    loading: false,
+    error: event.error,
+    requestId: state.requestId,
+  };
+}
+
 export function quotationTypeaheadKeyResult(
   key: unknown,
   activeIndex: unknown,

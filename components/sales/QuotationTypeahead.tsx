@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { searchEligibleQuotationsAction } from "@/app/admin/sales/from-quotation/actions";
 import {
   quotationSaleDestination,
   quotationTypeaheadKeyResult,
+  quotationTypeaheadStateTransition,
   type EligibleQuotationOption,
+  type QuotationTypeaheadState,
 } from "@/lib/quotations/sale-conversion-types";
 
 const money = (amount: number, currency: string) =>
@@ -20,27 +22,42 @@ const money = (amount: number, currency: string) =>
 export function QuotationTypeahead() {
   const router = useRouter();
   const listboxId = useId();
+  const requestId = useRef(0);
   const [search, setSearch] = useState("");
-  const [options, setOptions] = useState<EligibleQuotationOption[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [activeIndex, setActiveIndex] = useState(-1);
+  const [typeahead, setTypeahead] = useState<QuotationTypeaheadState>({
+    options: [],
+    activeIndex: -1,
+    loading: false,
+    error: null,
+    requestId: 0,
+  });
 
   useEffect(() => {
     const query = search.trim();
     if (query.length < 2) return;
 
+    const activeRequestId = requestId.current;
     let active = true;
     const timeout = window.setTimeout(async () => {
-      setLoading(true);
+      setTypeahead((current) =>
+        quotationTypeaheadStateTransition(current, {
+          type: "loading",
+          requestId: activeRequestId,
+        }),
+      );
       const result = await searchEligibleQuotationsAction(query).catch(() => ({
         options: [],
         error: "Unable to search quotations right now.",
       }));
       if (!active) return;
-      setOptions(result.options);
-      setError(result.error);
-      setLoading(false);
+      setTypeahead((current) =>
+        quotationTypeaheadStateTransition(current, {
+          type: "response",
+          requestId: activeRequestId,
+          options: result.options,
+          error: result.error,
+        }),
+      );
     }, 250);
     return () => {
       active = false;
@@ -49,16 +66,26 @@ export function QuotationTypeahead() {
   }, [search]);
 
   const showResults = search.trim().length >= 2;
+  const resetTypeahead = (type: "query" | "escape") => {
+    const nextRequestId = requestId.current + 1;
+    requestId.current = nextRequestId;
+    setTypeahead((current) =>
+      quotationTypeaheadStateTransition(current, {
+        type,
+        requestId: nextRequestId,
+      }),
+    );
+  };
   const selectOption = (option: EligibleQuotationOption | undefined) => {
     if (!option) return;
     const destination = quotationSaleDestination(option.quotationId);
     if (destination) router.push(destination);
   };
-  const statusMessage = loading
+  const statusMessage = typeahead.loading
     ? "Searching quotations."
-    : error ?? (showResults && !options.length
+    : typeahead.error ?? (showResults && !typeahead.options.length
       ? "No eligible quotations match this search."
-      : `${options.length} eligible quotation${options.length === 1 ? "" : "s"} available.`);
+      : `${typeahead.options.length} eligible quotation${typeahead.options.length === 1 ? "" : "s"} available.`);
   return (
     <div className="relative max-w-2xl">
       <label className="block text-sm font-semibold" htmlFor="quotation-search">
@@ -69,19 +96,14 @@ export function QuotationTypeahead() {
         value={search}
         onChange={(event) => {
           const nextSearch = event.target.value;
-          if (nextSearch.trim().length < 2) {
-            setOptions([]);
-            setLoading(false);
-            setError(null);
-          }
-          setActiveIndex(-1);
+          resetTypeahead("query");
           setSearch(nextSearch);
         }}
         onKeyDown={(event) => {
           const keyResult = quotationTypeaheadKeyResult(
             event.key,
-            activeIndex,
-            options.length,
+            typeahead.activeIndex,
+            typeahead.options.length,
           );
           if (event.key === "ArrowDown" || event.key === "ArrowUp" || event.key === "Enter" || event.key === "Escape") {
             event.preventDefault();
@@ -89,12 +111,17 @@ export function QuotationTypeahead() {
             return;
           }
           if (keyResult.close) {
-            setActiveIndex(-1);
+            resetTypeahead("escape");
             setSearch("");
             return;
           }
-          setActiveIndex(keyResult.activeIndex);
-          if (keyResult.select) selectOption(options[keyResult.activeIndex]);
+          setTypeahead((current) => ({
+            ...current,
+            activeIndex: keyResult.activeIndex,
+          }));
+          if (keyResult.select) {
+            selectOption(typeahead.options[keyResult.activeIndex]);
+          }
         }}
         placeholder="Reference, customer, company or email"
         className="mt-1 w-full rounded-lg border px-3 py-2"
@@ -104,8 +131,8 @@ export function QuotationTypeahead() {
         aria-expanded={showResults}
         aria-controls={showResults ? listboxId : undefined}
         aria-activedescendant={
-          showResults && activeIndex >= 0
-            ? `${listboxId}-option-${activeIndex}`
+          showResults && typeahead.activeIndex >= 0
+            ? `${listboxId}-option-${typeahead.activeIndex}`
             : undefined
         }
       />
@@ -118,15 +145,15 @@ export function QuotationTypeahead() {
           className="absolute z-30 mt-1 w-full overflow-hidden rounded-xl border bg-white text-slate-950 shadow-xl"
           role="listbox"
         >
-          {options.map((option, index) => (
+          {typeahead.options.map((option, index) => (
             <button
               key={option.quotationId}
               id={`${listboxId}-option-${index}`}
               type="button"
               role="option"
-              aria-selected={activeIndex === index}
+              aria-selected={typeahead.activeIndex === index}
               onClick={() => selectOption(option)}
-              className="block w-full border-b px-3 py-3 text-left last:border-b-0 hover:bg-blue-50"
+              className={`block w-full border-b px-3 py-3 text-left last:border-b-0 hover:bg-blue-50 ${typeahead.activeIndex === index ? "bg-blue-100" : ""}`}
             >
               <b>{option.reference}</b>
               <span className="block text-sm">
@@ -134,15 +161,16 @@ export function QuotationTypeahead() {
                 {option.customerCompany ? ` · ${option.customerCompany}` : ""}
               </span>
               <span className="block text-xs text-slate-500">
-                {option.customerEmail} · {money(option.totalAmount, option.currency)}
+                {option.customerEmail ? `${option.customerEmail} · ` : ""}
+                {money(option.totalAmount, option.currency)}
               </span>
             </button>
           ))}
-          {loading ? (
+          {typeahead.loading ? (
             <p className="px-3 py-3 text-sm text-slate-500">Searching quotations…</p>
           ) : null}
-          {error ? <p className="px-3 py-3 text-sm text-red-700">{error}</p> : null}
-          {!loading && !error && !options.length ? (
+          {typeahead.error ? <p className="px-3 py-3 text-sm text-red-700">{typeahead.error}</p> : null}
+          {!typeahead.loading && !typeahead.error && !typeahead.options.length ? (
             <p className="px-3 py-3 text-sm text-slate-500">
               No eligible quotations match this search.
             </p>

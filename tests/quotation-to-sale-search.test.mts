@@ -131,6 +131,10 @@ test("quotation selection page and typeahead preserve a permission-gated read-on
   assert.match(typeahead, /option\.totalAmount/);
   assert.match(typeahead, /let active = true/);
   assert.match(typeahead, /return \(\) => \{/);
+  assert.match(typeahead, /aria-activedescendant/);
+  assert.match(typeahead, /activeIndex === index/);
+  assert.match(typeahead, /bg-blue-100/);
+  assert.match(typeahead, /option\.customerEmail \? `\$\{option\.customerEmail\} · ` : ""/);
   assert.doesNotMatch(typeahead, /error\.message/);
 });
 
@@ -405,5 +409,116 @@ test("typeahead key behavior wraps active options and exposes selection or close
     activeIndex: -1,
     select: false,
     close: true,
+  });
+});
+
+test("typeahead search transitions clear stale choices and ignore stale responses", () => {
+  const transition = conversionFunction<
+    (state: unknown, event: unknown) => unknown
+  >("quotationTypeaheadStateTransition");
+  const option = {
+    quotationId: validUuid,
+    reference: "QT-EXACT",
+    customerId: customerUuid,
+    customerName: "Amina Rahman",
+    customerCompany: null,
+    customerEmail: "",
+    totalAmount: 12.5,
+    currency: "BDT",
+    expirationDate: "2026-08-31",
+  };
+  const seeded = {
+    options: [option],
+    activeIndex: 0,
+    loading: true,
+    error: "Old search failed.",
+    requestId: 4,
+  };
+
+  const queryReset = transition(seeded, { type: "query", requestId: 5 });
+  assert.deepEqual(queryReset, {
+    options: [],
+    activeIndex: -1,
+    loading: false,
+    error: null,
+    requestId: 5,
+  });
+  const response = transition(queryReset, {
+    type: "response",
+    requestId: 5,
+    options: [option],
+    error: null,
+  });
+  assert.deepEqual(response, {
+    options: [option],
+    activeIndex: -1,
+    loading: false,
+    error: null,
+    requestId: 5,
+  });
+  const escape = transition(response, { type: "escape", requestId: 6 });
+  assert.deepEqual(escape, {
+    options: [],
+    activeIndex: -1,
+    loading: false,
+    error: null,
+    requestId: 6,
+  });
+  assert.deepEqual(
+    transition(escape, {
+      type: "response",
+      requestId: 5,
+      options: [option],
+      error: null,
+    }),
+    escape,
+  );
+});
+
+test("typeahead response replacement resets active state for empty and smaller option sets", () => {
+  const transition = conversionFunction<
+    (state: unknown, event: unknown) => unknown
+  >("quotationTypeaheadStateTransition");
+  const keyResult = conversionFunction<
+    (key: unknown, activeIndex: unknown, optionCount: unknown) => unknown
+  >("quotationTypeaheadKeyResult");
+  const state = {
+    options: Array.from({ length: 3 }, (_, index) => ({
+      quotationId: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      reference: `QT-${index}`,
+      customerId: customerUuid,
+      customerName: "Amina Rahman",
+      customerCompany: null,
+      customerEmail: "",
+      totalAmount: 1,
+      currency: "BDT",
+      expirationDate: null,
+    })),
+    activeIndex: 2,
+    loading: true,
+    error: null,
+    requestId: 8,
+  };
+
+  const one = transition(state, {
+    type: "response",
+    requestId: 8,
+    options: state.options.slice(0, 1),
+    error: null,
+  }) as { activeIndex: number; options: unknown[] };
+  assert.equal(one.activeIndex, -1);
+  assert.equal(one.options.length, 1);
+  const empty = transition(one, {
+    type: "response",
+    requestId: 8,
+    options: [],
+    error: null,
+  }) as { activeIndex: number; options: unknown[] };
+  assert.equal(empty.activeIndex, -1);
+  assert.equal(empty.options.length, 0);
+  assert.deepEqual(keyResult("Enter", 4, 1), {
+    activeIndex: -1,
+    select: false,
+    close: false,
   });
 });
