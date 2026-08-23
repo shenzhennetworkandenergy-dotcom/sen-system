@@ -1,4 +1,8 @@
 import "server-only";
+import {
+  mergeRequiredOrderCreationOptions,
+  type RequiredOrderCreationOptions,
+} from "@/lib/orders/creation-options";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 function fail(context: string, error: { code?: string; message?: string; details?: string } | null) {
@@ -6,7 +10,9 @@ function fail(context: string, error: { code?: string; message?: string; details
   if (error) throw new Error(context);
 }
 
-export async function getOrderCreationOptions() {
+export async function getOrderCreationOptions(
+  required?: RequiredOrderCreationOptions,
+) {
   const db = createSupabaseAdminClient();
   const [customers, products, variations, balances, warehouses, addresses] = await Promise.all([
     db.from("profiles").select("id,email,full_name,phone,company_name,status").eq("role", "customer").eq("status", "active").order("full_name").limit(200),
@@ -17,7 +23,44 @@ export async function getOrderCreationOptions() {
     db.from("customer_addresses").select("*").order("is_default_shipping", { ascending: false }).order("updated_at", { ascending: false }).limit(1000),
   ]);
   for (const [name, result] of Object.entries({ customers, products, variations, balances, warehouses, addresses })) fail(`Unable to load ${name}.`, result.error);
-  return { customers: customers.data ?? [], products: products.data ?? [], variations: variations.data ?? [], balances: balances.data ?? [], warehouses: warehouses.data ?? [], addresses: addresses.data ?? [] };
+  const bounded = { customers: customers.data ?? [], products: products.data ?? [], variations: variations.data ?? [], balances: balances.data ?? [], warehouses: warehouses.data ?? [], addresses: addresses.data ?? [] };
+  if (!required) return bounded;
+
+  const addressIds = [...new Set(required.addressIds)];
+  const productIds = [...new Set(required.lines.map((line) => line.productId))];
+  const variationIds = [...new Set(required.lines
+    .map((line) => line.variationId)
+    .filter((variationId): variationId is string => variationId !== null))];
+  const exactCustomer = await db
+    .from("profiles")
+    .select("id,email,full_name,phone,company_name,status")
+    .eq("id", required.customerId)
+    .eq("role", "customer")
+    .eq("status", "active")
+    .maybeSingle();
+  fail("Unable to load required customer.", exactCustomer.error);
+  const [exactAddresses, exactProducts, exactVariations, exactBalances] = await Promise.all([
+    addressIds.length
+      ? db.from("customer_addresses").select("*").eq("profile_id", required.customerId).in("id", addressIds)
+      : Promise.resolve({ data: [], error: null }),
+    db.from("products").select("id,name,sku,model_number,brand_id,product_type,status,regular_price,sale_price,currency,serial_tracking_required").eq("status", "active").in("id", productIds),
+    variationIds.length
+      ? db.from("product_variations").select("id,product_id,name:combination_key,sku,regular_price,sale_price,status").eq("status", "active").in("id", variationIds)
+      : Promise.resolve({ data: [], error: null }),
+    db.from("inventory_balances").select("product_id,variation_id,warehouse_id,available").in("product_id", productIds),
+  ]);
+  for (const [name, result] of Object.entries({ exactAddresses, exactProducts, exactVariations, exactBalances })) {
+    fail(`Unable to load required ${name}.`, result.error);
+  }
+  const merged = mergeRequiredOrderCreationOptions(bounded, {
+    customers: exactCustomer.data ? [exactCustomer.data] : [],
+    addresses: exactAddresses.data ?? [],
+    products: exactProducts.data ?? [],
+    variations: exactVariations.data ?? [],
+    balances: exactBalances.data ?? [],
+  }, required);
+  if (!merged) throw new Error("Required order creation options are unavailable.");
+  return merged;
 }
 
 export async function getOrders(params: { q?: string; status?: string; customer?: string; page?: string }, customerProfileId?: string) {

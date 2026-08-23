@@ -22,11 +22,13 @@ export function SaleProductPicker({
   selectedProduct,
   onClear,
   onSelect,
+  locked = false,
 }: {
   products: SalePickerProduct[];
   selectedProduct?: SalePickerProduct;
   onClear: () => void;
   onSelect: (product: SalePickerProduct) => void;
+  locked?: boolean;
 }) {
   const listId = useId();
   const [query, setQuery] = useState(selectedProduct?.name ?? "");
@@ -36,6 +38,27 @@ export function SaleProductPicker({
     [products, query],
   );
   const hasSearch = query.trim().length > 0;
+
+  if (locked) {
+    return (
+      <div className="relative text-xs font-semibold">
+        <label htmlFor={`${listId}-input`}>Product</label>
+        <input
+          id={`${listId}-input`}
+          value={selectedProduct?.name ?? ""}
+          readOnly
+          aria-readonly="true"
+          className="mt-1 w-full rounded-lg border bg-[var(--muted-surface)] px-3 py-2"
+        />
+        {selectedProduct ? (
+          <span className="mt-1 block font-normal text-[var(--muted-text)]">
+            SKU {selectedProduct.sku}
+            {selectedProduct.model_number ? ` · Model ${selectedProduct.model_number}` : ""}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
 
   return (
     <div className="relative text-xs font-semibold">

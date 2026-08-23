@@ -44,7 +44,17 @@ export default async function NewSalePage({
     initialQuotation = loadedQuotation;
   }
 
-  const options = await getOrderCreationOptions();
+  const options = await getOrderCreationOptions(initialQuotation ? {
+    customerId: initialQuotation.customerId,
+    addressIds: [
+      initialQuotation.shippingAddressId,
+      initialQuotation.billingAddressId,
+    ].filter((addressId): addressId is string => addressId !== null),
+    lines: initialQuotation.lines.map((line) => ({
+      productId: line.productId,
+      variationId: line.variationId,
+    })),
+  } : undefined);
   if (initialQuotation) {
     const customerAvailable = options.customers.some(
       (customer) => customer.id === initialQuotation.customerId,

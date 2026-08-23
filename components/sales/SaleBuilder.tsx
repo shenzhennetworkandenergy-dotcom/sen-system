@@ -16,6 +16,7 @@ import {
   buildSaleBuilderSubmission,
   createBlankSaleBuilderRow,
   createSaleBuilderInitialState,
+  saleBuilderRowControlState,
   type SaleBuilderRow,
 } from "@/components/sales/sale-builder-state";
 import type { CustomerSearchOption } from "@/lib/customers/search";
@@ -130,10 +131,13 @@ export function SaleBuilder({
 
     <section className="rounded-xl border bg-[var(--surface)] p-4">
       <div><h2 className="font-bold">Products and pricing</h2><p className="text-sm text-[var(--muted-text)]">Search by product name, model or SKU. Product details and price fill automatically.</p></div>
-      <div className="mt-3 space-y-3">{selected.map((row)=><article key={row.key} className="grid gap-2 rounded-xl border p-3 lg:grid-cols-[2fr_1fr_.6fr_.8fr_.7fr_.7fr_auto]">
+      <div className="mt-3 space-y-3">{selected.map((row)=>{
+        const rowControls = saleBuilderRowControlState(row);
+        return <article key={row.key} className="grid gap-2 rounded-xl border p-3 lg:grid-cols-[2fr_1fr_.6fr_.8fr_.7fr_.7fr_auto]">
         <SaleProductPicker
           products={products}
           selectedProduct={row.product}
+          locked={rowControls.productLocked}
           onClear={() => update(row.key, { product_id:"", variation_id:"", unit_price:"0", catalogue_price:0 })}
           onSelect={(product) => {
             const price = roundMoney(Number(product.sale_price ?? product.regular_price ?? 0));
@@ -147,15 +151,15 @@ export function SaleBuilder({
             });
           }}
         />
-        <label className="text-xs font-semibold">Variation<select value={row.variation_id} onChange={(event)=>{const variation=variations.find((item)=>item.id===event.target.value),price=roundMoney(Number(variation?.sale_price??variation?.regular_price??row.catalogue_price));update(row.key,{variation_id:event.target.value,unit_price:String(price),catalogue_price:row.source_quotation_item_id?row.catalogue_price:price,baseline_unit_price:row.source_quotation_item_id?row.baseline_unit_price:price})}} className={field}><option value="">None</option>{variations.filter((item)=>item.product_id===row.product_id).map((item)=><option key={item.id} value={item.id}>{item.name||item.sku}</option>)}</select></label>
+        <label className="text-xs font-semibold">Variation<select value={row.variation_id} disabled={rowControls.variationLocked} onChange={(event)=>{const variation=variations.find((item)=>item.id===event.target.value),price=roundMoney(Number(variation?.sale_price??variation?.regular_price??row.catalogue_price));update(row.key,{variation_id:event.target.value,unit_price:String(price),catalogue_price:row.source_quotation_item_id?row.catalogue_price:price,baseline_unit_price:row.source_quotation_item_id?row.baseline_unit_price:price})}} className={field}><option value="">None</option>{variations.filter((item)=>item.product_id===row.product_id).map((item)=><option key={item.id} value={item.id}>{item.name||item.sku}</option>)}</select></label>
         <label className="text-xs font-semibold">Qty<input type="number" min="1" max={row.available} step="1" value={row.quantity} onChange={(event)=>update(row.key,{quantity:String(Math.max(1,Math.trunc(Number(event.target.value)||1)))})} className={field}/><span className={Number(row.quantity)>row.available?"text-red-700":"text-[var(--muted-text)]"}>Available {row.available}</span></label>
         <label className="text-xs font-semibold">Unit BDT<input type="number" inputMode="decimal" min="0" step=".01" value={row.unit_price} onChange={(event)=>update(row.key,{unit_price:event.target.value})} onBlur={()=>update(row.key,{unit_price:String(roundMoney(Number(row.unit_price)||0))})} className={field}/></label>
         <label className="text-xs font-semibold">Discount %<input type="number" inputMode="decimal" min="0" max="100" step=".01" value={row.discount_percent} onChange={(event)=>update(row.key,{discount_percent:event.target.value})} onBlur={()=>update(row.key,{discount_percent:String(roundMoney(Number(row.discount_percent)||0))})} className={field}/></label>
         <label className="text-xs font-semibold">Fixed discount<input type="number" inputMode="decimal" min="0" step=".01" value={row.line_discount} onChange={(event)=>update(row.key,{line_discount:event.target.value})} onBlur={()=>update(row.key,{line_discount:String(roundMoney(Number(row.line_discount)||0))})} className={field}/><span>Line {row.lineTotal.toFixed(2)}</span></label>
         {initialQuotation ? <label className="text-xs font-semibold">Line tax<input type="number" inputMode="decimal" min="0" step=".01" value={row.line_tax} onChange={(event)=>update(row.key,{line_tax:event.target.value})} onBlur={()=>update(row.key,{line_tax:String(roundMoney(Number(row.line_tax)||0))})} className={field}/></label> : null}
-        <button type="button" disabled={rows.length===1} onClick={()=>setRows((current)=>current.filter((item)=>item.key!==row.key))} className="self-center rounded-lg border px-3 py-2 disabled:opacity-40">Remove</button>
+        <button type="button" disabled={!rowControls.removable || rows.length===1} onClick={()=>setRows((current)=>current.filter((item)=>item.key!==row.key))} className="self-center rounded-lg border px-3 py-2 disabled:opacity-40">Remove</button>
         {(Number(row.unit_price)!==row.baseline_unit_price||row.discount!==row.baseline_line_discount)?<label className="text-xs font-semibold lg:col-span-full">Adjustment reason<input value={row.reason} onChange={(event)=>update(row.key,{reason:event.target.value})} required className={field}/></label>:null}
-      </article>)}</div>
+      </article>})}</div>
       <button type="button" onClick={()=>setRows((current)=>[...current,createBlankSaleBuilderRow(()=>crypto.randomUUID(),defaultQuotationReason)])} className="mt-3 rounded-lg border px-4 py-2 font-semibold">+ Add product</button>
     </section>
     <section className="grid gap-3 rounded-xl border bg-[var(--surface)] p-4 md:grid-cols-3">

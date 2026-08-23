@@ -46,6 +46,17 @@ const money = (value: unknown) => {
 export const approvedQuotationReason = (reference: string) =>
   `Approved quotation ${reference}`;
 
+export function saleBuilderRowControlState(
+  row: Pick<SaleBuilderRow, "source_quotation_item_id">,
+) {
+  const sourced = Boolean(row.source_quotation_item_id);
+  return {
+    productLocked: sourced,
+    variationLocked: sourced,
+    removable: !sourced,
+  };
+}
+
 export function createBlankSaleBuilderRow(
   makeKey: () => string,
   reason = "",
@@ -150,7 +161,8 @@ export function buildSaleBuilderSubmission(
   const defaultReason = initialQuotation
     ? approvedQuotationReason(initialQuotation.reference)
     : "";
-  const selected = rows.filter((row) => validProductIds.has(row.product_id));
+  const selected = rows.filter((row) =>
+    Boolean(row.source_quotation_item_id) || validProductIds.has(row.product_id));
   const items = selected.map((row) => {
     const values = lineValues(row);
     const rawUnitPrice = Number(row.unit_price);
@@ -175,7 +187,9 @@ export function buildSaleBuilderSubmission(
         ? values.unitPrice !== money(row.baseline_unit_price)
         : rawUnitPrice !== row.catalogue_price,
       catalogue_price: initialQuotation ? money(row.catalogue_price) : row.catalogue_price,
-      adjustment_reason: row.reason.trim() || defaultReason,
+      adjustment_reason: initialQuotation
+        ? row.reason.trim() || defaultReason
+        : row.reason,
     };
   });
 
