@@ -11,7 +11,7 @@ import {
 } from "@/lib/customers/create-basic";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
-import { mustRestrictQuotationToCreator } from "@/lib/quotations/access-policy";
+import { resolveQuotationViewScope } from "@/lib/quotations/access-policy";
 import { parseQuotationItems } from "@/lib/quotations/create";
 import { defaultQuotationExpiration } from "@/lib/quotations/validity";
 import { isQuotationImmutable } from "@/lib/quotations/workflow";
@@ -230,12 +230,16 @@ export async function updateQuotationAction(
 ) {
   void _form;
   const { profile, permissions } = await requirePermission("quotations.edit");
+  const scope = resolveQuotationViewScope(profile.role, permissions);
+  if (!scope) {
+    redirect("/admin/quotations?error=Quotation%20access%20denied.");
+  }
   const db = createSupabaseAdminClient();
   let quotationQuery = db
     .from("quotation_requests")
     .select("id,status")
     .eq("id", quotationId);
-  if (mustRestrictQuotationToCreator(profile.role, permissions)) {
+  if (scope === "own") {
     quotationQuery = quotationQuery.eq("created_by", profile.id);
   }
   const { data: quotation } = await quotationQuery.maybeSingle();

@@ -58,8 +58,17 @@ export function isQuotationExpired(
 export function canTransitionQuotation(
   status: string,
   transition: QuotationTransition,
+  expirationDate?: string | null,
+  today?: string,
 ) {
-  return transitionSources[transition].has(status);
+  return (
+    transitionSources[transition].has(status) &&
+    !(
+      transition === "accept" &&
+      today !== undefined &&
+      isQuotationExpired(expirationDate, today)
+    )
+  );
 }
 
 export function isQuotationSaleEligible(

@@ -101,7 +101,12 @@ export function QuotationOperations({
     capabilities.issue && canTransitionQuotation(quotation.status, "issue");
   const canAccept =
     capabilities.recordCustomerOutcome &&
-    canTransitionQuotation(quotation.status, "accept");
+    canTransitionQuotation(
+      quotation.status,
+      "accept",
+      quotation.expiration_date,
+      new Date().toISOString().slice(0, 10),
+    );
   const canDecline =
     capabilities.recordCustomerOutcome &&
     canTransitionQuotation(quotation.status, "decline");

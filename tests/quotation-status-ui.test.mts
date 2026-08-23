@@ -26,5 +26,9 @@ test("operations only offer current outcome transitions and eligible Sale creati
   assert.match(operations, /canTransitionQuotation/);
   assert.match(operations, /isQuotationSaleEligible/);
   assert.match(operations, /\/admin\/sales\/new\?quotation=/);
+  assert.match(
+    operations,
+    /canTransitionQuotation\(\s*quotation\.status,\s*"accept",\s*quotation\.expiration_date,\s*new Date\(\)\.toISOString\(\)\.slice\(0, 10\),\s*\)/,
+  );
   assert.doesNotMatch(operations, />\s*Convert to Sales Invoice\s*</);
 });

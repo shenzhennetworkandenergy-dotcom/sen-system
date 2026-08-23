@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 
 import { writeAuditLog } from "@/lib/audit/log";
 import { requirePermission } from "@/lib/auth/permissions";
-import { mustRestrictQuotationToCreator } from "@/lib/quotations/access-policy";
+import { resolveQuotationViewScope } from "@/lib/quotations/access-policy";
 import { isQuotationImmutable } from "@/lib/quotations/workflow";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { parseMoney } from "@/lib/validation/numbers";
@@ -31,17 +31,19 @@ async function quotationForUpdate(
   profile: { id: string; role: string },
   permissions: ReadonlySet<string>,
 ) {
+  const scope = resolveQuotationViewScope(profile.role, permissions);
+  if (!scope) fail("/admin/quotations", "Quotation access denied.");
   const db = createSupabaseAdminClient();
   let query = db
     .from("quotation_requests")
     .select("id,reference,profile_id,status,assigned_to,created_by")
     .eq("id", id);
-  if (mustRestrictQuotationToCreator(profile.role, permissions)) {
+  if (scope === "own") {
     query = query.eq("created_by", profile.id);
   }
   const { data, error } = await query.maybeSingle();
   if (error || !data) fail("/admin/quotations", "Quotation not found.");
-  return { db, quotation: data };
+  return { db, quotation: data, scope };
 }
 
 export async function updateQuotationDetailsAction(
@@ -59,7 +61,7 @@ export async function updateQuotationDetailsAction(
   } catch (error) {
     fail(path, error instanceof Error ? error.message : "Amounts are invalid.");
   }
-  const { db, quotation } = await quotationForUpdate(
+  const { db, quotation, scope } = await quotationForUpdate(
     quotationId,
     profile,
     permissions,
@@ -67,7 +69,7 @@ export async function updateQuotationDetailsAction(
   if (isQuotationImmutable(quotation.status)) {
     fail(path, "An immutable quotation cannot be edited.");
   }
-  const { error } = await db
+  let updateQuery = db
     .from("quotation_requests")
     .update({
       subject: clean(form.get("subject"), 200),
@@ -89,8 +91,15 @@ export async function updateQuotationDetailsAction(
       updated_by: profile.id,
       updated_at: new Date().toISOString(),
     })
-    .eq("id", quotationId);
-  if (error) fail(path, "Unable to save quotation details.");
+    .eq("id", quotationId)
+    .eq("status", quotation.status);
+  if (scope === "own") {
+    updateQuery = updateQuery.eq("created_by", profile.id);
+  }
+  const { data, error } = await updateQuery.select("id").maybeSingle();
+  if (error || !data) {
+    fail(path, "Quotation changed before its details could be saved.");
+  }
   const { error: totalError } = await db.rpc("refresh_quotation_totals", {
     requested_quotation_id: quotationId,
   });
@@ -117,7 +126,7 @@ export async function assignQuotationAction(
   const { profile, permissions } = await requirePermission("quotations.assign");
   const path = quotationPath(quotationId);
   const assignedTo = String(form.get("assigned_to") ?? "").trim() || null;
-  const { db, quotation } = await quotationForUpdate(
+  const { db, quotation, scope } = await quotationForUpdate(
     quotationId,
     profile,
     permissions,
@@ -135,15 +144,22 @@ export async function assignQuotationAction(
       .maybeSingle();
     if (!assignee) fail(path, "Choose an active administrator or employee.");
   }
-  const { error } = await db
+  let updateQuery = db
     .from("quotation_requests")
     .update({
       assigned_to: assignedTo,
       updated_by: profile.id,
       updated_at: new Date().toISOString(),
     })
-    .eq("id", quotationId);
-  if (error) fail(path, "Unable to assign quotation.");
+    .eq("id", quotationId)
+    .eq("status", quotation.status);
+  if (scope === "own") {
+    updateQuery = updateQuery.eq("created_by", profile.id);
+  }
+  const { data, error } = await updateQuery.select("id").maybeSingle();
+  if (error || !data) {
+    fail(path, "Quotation changed before its assignment could be saved.");
+  }
   await writeAuditLog({
     actorId: profile.id,
     actorRole: profile.role,
@@ -197,7 +213,7 @@ export async function requestQuotationInformationAction(
 ) {
   const { profile, permissions } = await requirePermission("quotations.edit");
   const path = quotationPath(quotationId);
-  const { db, quotation } = await quotationForUpdate(
+  const { db, quotation, scope } = await quotationForUpdate(
     quotationId,
     profile,
     permissions,
@@ -206,7 +222,7 @@ export async function requestQuotationInformationAction(
     fail(path, "An immutable quotation cannot change status.");
   }
   const note = clean(form.get("note"));
-  const { error } = await db
+  let updateQuery = db
     .from("quotation_requests")
     .update({
       status: "additional_info_required",
@@ -214,8 +230,15 @@ export async function requestQuotationInformationAction(
       updated_by: profile.id,
       updated_at: new Date().toISOString(),
     })
-    .eq("id", quotationId);
-  if (error) fail(path, "Unable to request additional information.");
+    .eq("id", quotationId)
+    .eq("status", quotation.status);
+  if (scope === "own") {
+    updateQuery = updateQuery.eq("created_by", profile.id);
+  }
+  const { data, error } = await updateQuery.select("id").maybeSingle();
+  if (error || !data) {
+    fail(path, "Quotation changed before additional information could be requested.");
+  }
   await writeAuditLog({
     actorId: profile.id,
     actorRole: profile.role,
@@ -289,48 +312,5 @@ export async function declineQuotationAction(
     "quotations.record_customer_outcome",
     "decline",
     form,
-  );
-}
-
-export async function convertQuotationToInvoiceAction(
-  quotationId: string,
-  form: FormData,
-) {
-  const { profile, permissions } = await requirePermission(
-    "quotations.convert_to_invoice",
-  );
-  const path = quotationPath(quotationId);
-  const warehouseId = String(form.get("warehouse_id") ?? "").trim();
-  const createCustomer = String(form.get("create_customer") ?? "") === "true";
-  if (!warehouseId) fail(path, "Choose a fulfilment warehouse.");
-  const { db } = await quotationForUpdate(quotationId, profile, permissions);
-  const { data, error } = await db.rpc(
-    "convert_quotation_to_invoice",
-    {
-      actor_profile_id: profile.id,
-      requested_quotation_id: quotationId,
-      requested_warehouse_id: warehouseId,
-      requested_create_customer: createCustomer,
-    },
-  );
-  if (error) {
-    if (error.message.includes("CUSTOMER_CREATION_REQUIRED")) {
-      redirect(`${path}?customerCreation=required`);
-    }
-    fail(path, error.message || "Unable to convert quotation.");
-  }
-  const result = data as {
-    order_id?: string;
-    invoice_id?: string;
-    invoice_number?: string;
-  } | null;
-  if (!result?.order_id || !result.invoice_id) {
-    fail(path, "Invoice conversion did not return a valid document.");
-  }
-  refreshQuotationPaths(quotationId);
-  revalidatePath("/admin/sales");
-  revalidatePath(`/admin/sales/${result.order_id}`);
-  redirect(
-    `/admin/sales/${result.order_id}/documents/${result.invoice_id}?success=${encodeURIComponent(`Quotation converted to ${result.invoice_number ?? "a sales invoice"}.`)}`,
   );
 }
