@@ -6,7 +6,10 @@ import { SaleBuilder } from "@/components/sales/SaleBuilder";
 import { SourceQuotationSummary } from "@/components/sales/SourceQuotationSummary";
 import { requireAllPermissions, requirePermission } from "@/lib/auth/permissions";
 import { getOrderCreationOptions } from "@/lib/orders/data";
-import { loadQuotationSaleInitial } from "@/lib/quotations/sale-conversion";
+import {
+  loadAccessibleConvertedSaleDestination,
+  loadQuotationSaleInitial,
+} from "@/lib/quotations/sale-conversion";
 import {
   QUOTATION_SALE_CONVERSION_PERMISSIONS,
   type QuotationSaleInitial,
@@ -39,6 +42,9 @@ export default async function NewSalePage({
     }
     const loadedQuotation = await loadQuotationSaleInitial(notice.quotation);
     if (!loadedQuotation) {
+      const existingSaleDestination =
+        await loadAccessibleConvertedSaleDestination(notice.quotation);
+      if (existingSaleDestination) redirect(existingSaleDestination);
       redirect("/admin/sales/from-quotation?error=Quotation%20is%20not%20eligible%20or%20accessible.");
     }
     initialQuotation = loadedQuotation;

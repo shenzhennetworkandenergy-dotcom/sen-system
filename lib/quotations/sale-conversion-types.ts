@@ -42,6 +42,12 @@ export type QuotationSaleInitial = {
   lines: QuotationSaleInitialLine[];
 };
 
+export type ConvertedSaleViewer = {
+  role: string;
+  profileId: string;
+  permissions: ReadonlySet<string>;
+};
+
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const datePattern = /^\d{4}-\d{2}-\d{2}$/;
@@ -101,6 +107,30 @@ function normalizableText(value: unknown): string | null {
 function nullableCustomerEmail(value: unknown): string | null {
   if (value === null) return "";
   return typeof value === "string" ? value.trim() : null;
+}
+
+export function accessibleConvertedSaleDestination(
+  linkedSaleId: unknown,
+  saleAccess: unknown,
+  viewer: ConvertedSaleViewer,
+): string | null {
+  if (
+    !isUuid(linkedSaleId) ||
+    !isRecord(saleAccess) ||
+    saleAccess.id !== linkedSaleId ||
+    !isUuid(saleAccess.created_by)
+  ) {
+    return null;
+  }
+  const canView = viewer.role === "admin" ||
+    viewer.permissions.has("sales.view") ||
+    viewer.permissions.has("sales.view_all") ||
+    (viewer.permissions.has("sales.view_own") &&
+      saleAccess.created_by === viewer.profileId);
+  if (!canView) return null;
+  return `/admin/sales/${linkedSaleId}?${new URLSearchParams({
+    success: "Quotation is already linked to this Sale.",
+  })}`;
 }
 
 export function isEligibleQuotationSalePrefill(value: unknown, today: string) {

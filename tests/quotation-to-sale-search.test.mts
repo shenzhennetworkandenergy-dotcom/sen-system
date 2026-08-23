@@ -10,6 +10,9 @@ const customerUuid = "22222222-2222-4222-8222-222222222222";
 const productUuid = "33333333-3333-4333-8333-333333333333";
 const shippingUuid = "44444444-4444-4444-8444-444444444444";
 const billingUuid = "55555555-5555-4555-8555-555555555555";
+const saleUuid = "66666666-6666-4666-8666-666666666666";
+const employeeUuid = "77777777-7777-4777-8777-777777777777";
+const otherEmployeeUuid = "88888888-8888-4888-8888-888888888888";
 
 function conversionFunction<T extends (...args: never[]) => unknown>(name: string) {
   const candidate = (conversion as Record<string, unknown>)[name];
@@ -107,6 +110,83 @@ test("prefill loader is read-only, scope-aware, and only loads accepted unexpire
   assert.match(loader, /customer_addresses/);
   assert.doesNotMatch(loader, /\.insert\(|\.update\(|\.delete\(|\.rpc\(/);
   assert.doesNotMatch(loader, /error\.message/);
+});
+
+test("converted quotation bookmarks reveal the linked Sale only to an authorized Sale viewer", () => {
+  const destination = conversionFunction<
+    (
+      linkedSaleId: unknown,
+      saleAccess: unknown,
+      viewer: { role: string; profileId: string; permissions: ReadonlySet<string> },
+    ) => string | null
+  >("accessibleConvertedSaleDestination");
+  const access = { id: saleUuid, created_by: employeeUuid };
+  const expected =
+    `/admin/sales/${saleUuid}?success=Quotation+is+already+linked+to+this+Sale.`;
+
+  assert.equal(destination(saleUuid, access, {
+    role: "admin",
+    profileId: otherEmployeeUuid,
+    permissions: new Set(),
+  }), expected);
+  assert.equal(destination(saleUuid, access, {
+    role: "employee",
+    profileId: otherEmployeeUuid,
+    permissions: new Set(["sales.view"]),
+  }), expected);
+  assert.equal(destination(saleUuid, access, {
+    role: "employee",
+    profileId: employeeUuid,
+    permissions: new Set(["sales.view_own"]),
+  }), expected);
+
+  for (const [linkedSaleId, saleAccess, viewer] of [
+    [saleUuid, access, {
+      role: "employee",
+      profileId: employeeUuid,
+      permissions: new Set<string>(),
+    }],
+    [saleUuid, access, {
+      role: "employee",
+      profileId: otherEmployeeUuid,
+      permissions: new Set(["sales.view_own"]),
+    }],
+    [saleUuid, { ...access, id: otherEmployeeUuid }, {
+      role: "employee",
+      profileId: otherEmployeeUuid,
+      permissions: new Set(["sales.view_all"]),
+    }],
+    ["not-a-uuid", access, {
+      role: "admin",
+      profileId: employeeUuid,
+      permissions: new Set<string>(),
+    }],
+  ] as const) {
+    assert.equal(destination(linkedSaleId, saleAccess, viewer), null);
+  }
+});
+
+test("the new Sale page resolves an accessible converted link after prefill rejection and before the generic redirect", () => {
+  const loader = source("lib/quotations/sale-conversion.ts");
+  const page = source("app/admin/sales/new/page.tsx");
+
+  assert.match(loader, /export async function loadAccessibleConvertedSaleDestination/);
+  assert.match(loader, /requireAllPermissions\(\[\s*\.\.\.QUOTATION_SALE_CONVERSION_PERMISSIONS/);
+  assert.match(loader, /resolveQuotationViewScope/);
+  assert.match(loader, /\.eq\("status", "converted_to_sale"\)/);
+  assert.match(loader, /\.eq\("created_by", profile\.id\)/);
+  assert.match(loader, /\.from\("sales_orders"\)/);
+  assert.match(loader, /accessibleConvertedSaleDestination/);
+  assert.doesNotMatch(loader, /\.insert\(|\.update\(|\.delete\(|\.rpc\(/);
+
+  const rejectedAt = page.indexOf("if (!loadedQuotation)");
+  const lookupAt = page.indexOf("loadAccessibleConvertedSaleDestination", rejectedAt);
+  const linkedRedirectAt = page.indexOf("redirect(existingSaleDestination)", lookupAt);
+  const genericRedirectAt = page.indexOf("Quotation%20is%20not%20eligible%20or%20accessible", linkedRedirectAt);
+  assert.ok(rejectedAt >= 0, "converted-link resolution must follow prefill rejection");
+  assert.ok(lookupAt > rejectedAt, "converted-link resolution must remain inside quotation mode");
+  assert.ok(linkedRedirectAt > lookupAt, "an accessible existing Sale must be opened");
+  assert.ok(genericRedirectAt > linkedRedirectAt, "inaccessible links must retain the generic response");
 });
 
 test("quotation selection page and typeahead preserve a permission-gated read-only selection flow", () => {

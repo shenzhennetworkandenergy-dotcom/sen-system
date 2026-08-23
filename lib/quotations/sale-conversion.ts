@@ -4,6 +4,7 @@ import { requireAllPermissions } from "@/lib/auth/permissions";
 import { resolveQuotationViewScope } from "@/lib/quotations/access-policy";
 import {
   QUOTATION_SALE_CONVERSION_PERMISSIONS,
+  accessibleConvertedSaleDestination,
   isEligibleQuotationSalePrefill,
   normalizeQuotationSaleInitial,
   type QuotationSaleInitial,
@@ -12,6 +13,48 @@ import {
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 const todayDate = () => new Date().toISOString().slice(0, 10);
+
+export async function loadAccessibleConvertedSaleDestination(
+  quotationId: string,
+): Promise<string | null> {
+  const { profile, permissions } = await requireAllPermissions([
+    ...QUOTATION_SALE_CONVERSION_PERMISSIONS,
+  ]);
+  const scope = resolveQuotationViewScope(profile.role, permissions);
+  if (!scope) return null;
+
+  const db = createSupabaseAdminClient();
+  let quotationQuery = db
+    .from("quotation_requests")
+    .select("converted_order_id")
+    .eq("id", quotationId)
+    .eq("status", "converted_to_sale")
+    .not("converted_order_id", "is", null);
+  if (scope === "own") {
+    quotationQuery = quotationQuery.eq("created_by", profile.id);
+  }
+  const { data: quotation, error: quotationError } =
+    await quotationQuery.maybeSingle();
+  if (quotationError || !quotation) {
+    if (quotationError) console.error("Unable to load converted quotation Sale link.");
+    return null;
+  }
+
+  const { data: saleAccess, error: saleAccessError } = await db
+    .from("sales_orders")
+    .select("id,created_by")
+    .eq("id", quotation.converted_order_id)
+    .maybeSingle();
+  if (saleAccessError || !saleAccess) {
+    if (saleAccessError) console.error("Unable to verify converted quotation Sale access.");
+    return null;
+  }
+  return accessibleConvertedSaleDestination(
+    quotation.converted_order_id,
+    saleAccess,
+    { role: profile.role, profileId: profile.id, permissions },
+  );
+}
 
 export async function loadQuotationSaleInitial(
   quotationId: string,
