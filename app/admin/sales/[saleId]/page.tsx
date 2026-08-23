@@ -5,6 +5,7 @@ import Link from "next/link";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { SaleLineEditor } from "@/components/sales/SaleLineEditor";
+import { SalePaymentMethodFields } from "@/components/sales/SalePaymentMethodFields";
 import { requireAnyPermission } from "@/lib/auth/permissions";
 import { dateTime, label, money } from "@/lib/orders/types";
 import { getSale } from "@/lib/sales/data";
@@ -59,6 +60,7 @@ export default async function SaleDetail({
     stockOutRequest,
   } = data;
   const invoiceOperationId = randomUUID();
+  const paymentOperationId = randomUUID();
   const customer = order.customer as {
     full_name: string | null;
     email: string;
@@ -264,17 +266,13 @@ export default async function SaleDetail({
 
           <article className="rounded-xl border bg-[var(--surface)] p-4">
             <h2 className="font-bold">Payments</h2>
-            <form action={recordPaymentAction.bind(null, saleId)} className="mt-3 grid gap-2 md:grid-cols-3 xl:grid-cols-6">
+            <form action={recordPaymentAction.bind(null, saleId)} className="mt-3 grid gap-2 md:grid-cols-3 xl:grid-cols-7">
+              <input type="hidden" name="operation_id" value={paymentOperationId} />
               <input name="amount" type="number" min=".01" step=".01" max={outstanding || undefined} placeholder="Amount" required className={field} />
               <input name="payment_date" type="date" defaultValue={new Date().toISOString().slice(0, 10)} required className={field} />
-              <select name="method" className={field}>
-                {["cash", "bank_transfer", "cheque", "mobile_banking", "card", "credit_sale", "advance_payment", "cash_on_delivery", "other"].map((method) => (
-                  <option key={method} value={method}>{label(method)}</option>
-                ))}
-              </select>
+              <SalePaymentMethodFields fieldClass={field} />
               <input name="reference_number" placeholder="Reference" className={field} />
               <input name="internal_note" placeholder="Internal note" className={field} />
-              <button className="rounded-lg bg-slate-900 px-3 py-2 font-semibold text-white">Record payment</button>
             </form>
             <div className="mt-3 overflow-x-auto">
               <table className="w-full min-w-[600px] text-left text-sm">
