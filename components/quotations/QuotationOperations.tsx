@@ -67,6 +67,7 @@ type Audit = {
   created_at: string;
   actor: { full_name: string | null; email: string | null } | null;
 };
+type LinkedSale = { id: string; order_number: string } | null;
 
 const money = (value: number, currency = "BDT") =>
   `${currency} ${Number(value ?? 0).toLocaleString("en-BD", {
@@ -79,6 +80,7 @@ export function QuotationOperations({
   customer,
   staff,
   audits,
+  linkedSale,
   capabilities,
   success,
   error,
@@ -87,6 +89,7 @@ export function QuotationOperations({
   customer: Person;
   staff: Person[];
   audits: Audit[];
+  linkedSale: LinkedSale;
   capabilities: Capabilities;
   success?: string;
   error?: string;
@@ -408,6 +411,18 @@ export function QuotationOperations({
             className="mt-4 inline-flex rounded-xl bg-indigo-700 px-5 py-3 font-black text-white"
           >
             Create Sale from quotation
+          </Link>
+        </div>
+      ) : null}
+
+      {quotation.status === "converted_to_sale" && linkedSale ? (
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-emerald-950">
+          <span className="font-bold">Converted Sale:</span>{" "}
+          <Link
+            href={`/admin/sales/${linkedSale.id}`}
+            className="font-bold underline"
+          >
+            {linkedSale.order_number}
           </Link>
         </div>
       ) : null}

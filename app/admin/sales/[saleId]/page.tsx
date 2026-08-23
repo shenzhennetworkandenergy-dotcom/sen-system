@@ -7,6 +7,10 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { SaleLineEditor } from "@/components/sales/SaleLineEditor";
 import { SalePaymentMethodFields } from "@/components/sales/SalePaymentMethodFields";
 import { requireAnyPermission } from "@/lib/auth/permissions";
+import {
+  buildQuotationTraceabilityLookup,
+  resolveQuotationViewScope,
+} from "@/lib/quotations/access-policy";
 import { dateTime, label, money } from "@/lib/orders/types";
 import { getSale } from "@/lib/sales/data";
 import { getAuthorizedPhysicalReturnLinks } from "@/lib/inventory/rma-return-data";
@@ -35,7 +39,12 @@ export default async function SaleDetail({
   ]);
   const { saleId } = await params;
   const notice = await searchParams;
-  const data = await getSale(saleId);
+  const quotationLookup = buildQuotationTraceabilityLookup(
+    saleId,
+    resolveQuotationViewScope(profile.role, permissions),
+    profile.id,
+  );
+  const data = await getSale(saleId, quotationLookup);
   if (!data) notFound();
   if (
     profile.role === "employee" &&
@@ -58,6 +67,7 @@ export default async function SaleDetail({
     events,
     audit,
     stockOutRequest,
+    sourceQuotation,
   } = data;
   const invoiceOperationId = randomUUID();
   const paymentOperationId = randomUUID();
@@ -109,6 +119,18 @@ export default async function SaleDetail({
       {notice.error ? (
         <p className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-red-900">
           {notice.error}
+        </p>
+      ) : null}
+
+      {sourceQuotation ? (
+        <p className="mb-3 text-sm text-[var(--muted-text)]">
+          Source Quotation:{" "}
+          <Link
+            href={`/admin/quotations/${sourceQuotation.id}/manage`}
+            className="font-semibold text-[var(--primary)] underline"
+          >
+            {sourceQuotation.reference}
+          </Link>
         </p>
       ) : null}
 

@@ -35,6 +35,13 @@ export default async function ManageQuotationPage({
   }
   const { data: quotation, error } = await quotationQuery.maybeSingle();
   if (error || !quotation) notFound();
+  const { data: linkedSale } = quotation.converted_order_id
+    ? await db
+      .from("sales_orders")
+      .select("id,order_number")
+      .eq("id", quotation.converted_order_id)
+      .maybeSingle()
+    : { data: null };
   const customer = quotation.profiles as unknown as {
     id: string;
     full_name: string | null;
@@ -84,6 +91,7 @@ export default async function ManageQuotationPage({
         customer={customer}
         staff={staff ?? []}
         audits={audits}
+        linkedSale={linkedSale}
         capabilities={{
           edit: can("quotations.edit"),
           assign: can("quotations.assign"),
