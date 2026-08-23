@@ -2,7 +2,36 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 
+import * as conversion from "../lib/quotations/sale-conversion-types.ts";
+
 const source = (path: string) => readFileSync(path, "utf8");
+const validUuid = "11111111-1111-4111-8111-111111111111";
+const customerUuid = "22222222-2222-4222-8222-222222222222";
+const productUuid = "33333333-3333-4333-8333-333333333333";
+const shippingUuid = "44444444-4444-4444-8444-444444444444";
+const billingUuid = "55555555-5555-4555-8555-555555555555";
+
+function conversionFunction<T extends (...args: never[]) => unknown>(name: string) {
+  const candidate = (conversion as Record<string, unknown>)[name];
+  assert.equal(typeof candidate, "function", `${name} must be exported`);
+  return candidate as T;
+}
+
+const quotationFixture = {
+  id: validUuid,
+  reference: "QT-20260823-ABCD",
+  profile_id: customerUuid,
+  billing_address_id: billingUuid,
+  shipping_address_id: shippingUuid,
+  required_by: "2026-08-31",
+  discount_amount: "4.25",
+  tax_amount: "1.75",
+  customer_notes: "Customer note",
+  internal_notes: "Internal note",
+  payment_terms: "Net 30",
+  delivery_information: "Weekday delivery",
+  terms_and_conditions: "Terms",
+};
 
 test("quotation sale search and prefill modules expose only the approved safe contract", () => {
   const typesPath = "lib/quotations/sale-conversion-types.ts";
@@ -66,9 +95,16 @@ test("prefill loader is read-only, scope-aware, and only loads accepted unexpire
   assert.match(loader, /\.is\("converted_order_id", null\)/);
   assert.match(loader, /expiration_date\.gte/);
   assert.match(loader, /\.eq\("created_by", profile\.id\)/);
-  assert.match(loader, /profiles!inner\(id,status\)/);
+  assert.match(
+    loader,
+    /profiles!quotation_requests_profile_id_fkey!inner\(id,role,status\)/,
+  );
+  assert.doesNotMatch(loader, /profiles!inner/);
+  assert.match(loader, /\.eq\("profiles\.role", "customer"\)/);
   assert.match(loader, /\.eq\("profiles\.status", "active"\)/);
   assert.match(loader, /quotation_request_items/);
+  assert.match(loader, /target_price/);
+  assert.match(loader, /customer_addresses/);
   assert.doesNotMatch(loader, /\.insert\(|\.update\(|\.delete\(|\.rpc\(/);
   assert.doesNotMatch(loader, /error\.message/);
 });
@@ -88,7 +124,7 @@ test("quotation selection page and typeahead preserve a permission-gated read-on
   assert.match(typeahead, /setTimeout\(/);
   assert.match(typeahead, /250/);
   assert.match(typeahead, /query\.length < 2/);
-  assert.match(typeahead, /router\.push\(`\/admin\/sales\/new\?quotation=\$\{option\.quotationId\}`\)/);
+  assert.match(typeahead, /quotationSaleDestination\(option\.quotationId\)/);
   assert.match(typeahead, /option\.reference/);
   assert.match(typeahead, /option\.customerName/);
   assert.match(typeahead, /option\.customerCompany/);
@@ -96,4 +132,191 @@ test("quotation selection page and typeahead preserve a permission-gated read-on
   assert.match(typeahead, /let active = true/);
   assert.match(typeahead, /return \(\) => \{/);
   assert.doesNotMatch(typeahead, /error\.message/);
+});
+
+test("prefill eligibility requires an active customer and respects the date-only expiry boundary", () => {
+  const isEligible = conversionFunction<
+    (value: unknown, today: string) => boolean
+  >("isEligibleQuotationSalePrefill");
+
+  assert.equal(
+    isEligible(
+      {
+        status: "accepted",
+        expirationDate: "2026-08-23",
+        convertedOrderId: null,
+        customerRole: "customer",
+        customerStatus: "active",
+      },
+      "2026-08-23",
+    ),
+    true,
+  );
+  assert.equal(
+    isEligible(
+      {
+        status: "accepted",
+        expirationDate: "2026-08-22",
+        convertedOrderId: null,
+        customerRole: "customer",
+        customerStatus: "active",
+      },
+      "2026-08-23",
+    ),
+    false,
+  );
+  assert.equal(
+    isEligible(
+      {
+        status: "accepted",
+        expirationDate: null,
+        convertedOrderId: null,
+        customerRole: "employee",
+        customerStatus: "active",
+      },
+      "2026-08-23",
+    ),
+    false,
+  );
+  assert.equal(
+    isEligible(
+      {
+        status: "accepted",
+        expirationDate: null,
+        convertedOrderId: null,
+        customerRole: "customer",
+        customerStatus: "inactive",
+      },
+      "2026-08-23",
+    ),
+    false,
+  );
+});
+
+test("prefill mapping preserves the quoted unit price and only falls back to target price when unit price is null", () => {
+  const normalizeInitial = conversionFunction<
+    (quotation: unknown, items: unknown) => unknown
+  >("normalizeQuotationSaleInitial");
+
+  const initial = normalizeInitial(quotationFixture, [
+    {
+      id: "66666666-6666-4666-8666-666666666666",
+      product_id: productUuid,
+      variation_id: null,
+      quantity: "2",
+      unit_price: "40.00",
+      target_price: "30.00",
+      discount_amount: "3.00",
+      tax_amount: "1.50",
+    },
+    {
+      id: "77777777-7777-4777-8777-777777777777",
+      product_id: productUuid,
+      variation_id: null,
+      quantity: 1,
+      unit_price: null,
+      target_price: "37.50",
+      discount_amount: null,
+      tax_amount: null,
+    },
+  ]) as { lines: Array<{ unitPrice: number; lineDiscount: number; lineTax: number }> };
+
+  assert.deepEqual(initial.lines.map(({ unitPrice, lineDiscount, lineTax }) => ({
+    unitPrice,
+    lineDiscount,
+    lineTax,
+  })), [
+    { unitPrice: 40, lineDiscount: 3, lineTax: 1.5 },
+    { unitPrice: 37.5, lineDiscount: 0, lineTax: 0 },
+  ]);
+  assert.equal(
+    normalizeInitial(quotationFixture, [
+      {
+        id: "66666666-6666-4666-8666-666666666666",
+        product_id: productUuid,
+        variation_id: null,
+        quantity: 1,
+        unit_price: 0,
+        target_price: 37.5,
+        discount_amount: 0,
+        tax_amount: 0,
+      },
+    ]),
+    null,
+  );
+});
+
+test("prefill address ownership rejects foreign shipping or billing IDs and retains null addresses", () => {
+  const normalizeInitial = conversionFunction<
+    (quotation: unknown, items: unknown) => unknown
+  >("normalizeQuotationSaleInitial");
+  const validateAddresses = conversionFunction<
+    (initial: unknown, ownedAddressIds: unknown) => unknown
+  >("validateQuotationSaleAddresses");
+  const items = [{
+    id: "66666666-6666-4666-8666-666666666666",
+    product_id: productUuid,
+    variation_id: null,
+    quantity: 1,
+    unit_price: 1,
+    target_price: null,
+    discount_amount: 0,
+    tax_amount: 0,
+  }];
+  const initial = normalizeInitial(quotationFixture, items);
+
+  assert.notEqual(validateAddresses(initial, [shippingUuid, billingUuid]), null);
+  assert.equal(validateAddresses(initial, [shippingUuid]), null);
+  assert.equal(validateAddresses(initial, [billingUuid]), null);
+  const noAddresses = normalizeInitial(
+    { ...quotationFixture, billing_address_id: null, shipping_address_id: null },
+    items,
+  );
+  assert.notEqual(validateAddresses(noAddresses, []), null);
+});
+
+test("RPC normalization rejects malformed rows, caps valid results, and builds only safe destinations", () => {
+  const normalizeOptions = conversionFunction<(payload: unknown) => unknown>(
+    "normalizeEligibleQuotationOptions",
+  );
+  const destination = conversionFunction<(quotationId: unknown) => unknown>(
+    "quotationSaleDestination",
+  );
+  const validRow = {
+    quotation_id: validUuid,
+    reference: "QT-EXACT",
+    customer_id: customerUuid,
+    customer_name: "Amina Rahman",
+    customer_company: "SEN Test",
+    customer_email: "amina@example.com",
+    total_amount: "12.50",
+    currency: "BDT",
+    expiration_date: "2026-08-31",
+  };
+  const options = normalizeOptions([
+    validRow,
+    null,
+    { ...validRow, quotation_id: "not-a-uuid" },
+    { ...validRow, total_amount: "not-money" },
+    ...Array.from({ length: 22 }, (_, index) => ({
+      ...validRow,
+      quotation_id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+      reference: `QT-${index}`,
+    })),
+  ]) as Array<{ quotationId: string; totalAmount: number }>;
+
+  assert.equal(options.length, 20);
+  assert.deepEqual(options[0], {
+    quotationId: validUuid,
+    reference: "QT-EXACT",
+    customerId: customerUuid,
+    customerName: "Amina Rahman",
+    customerCompany: "SEN Test",
+    customerEmail: "amina@example.com",
+    totalAmount: 12.5,
+    currency: "BDT",
+    expirationDate: "2026-08-31",
+  });
+  assert.equal(destination(validUuid), `/admin/sales/new?quotation=${validUuid}`);
+  assert.equal(destination("not-a-uuid"), null);
 });

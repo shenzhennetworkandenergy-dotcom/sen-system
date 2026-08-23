@@ -4,6 +4,7 @@ import { requireAllPermissions } from "@/lib/auth/permissions";
 import { resolveQuotationViewScope } from "@/lib/quotations/access-policy";
 import {
   QUOTATION_SALE_CONVERSION_PERMISSIONS,
+  normalizeEligibleQuotationOptions,
   type EligibleQuotationOption,
 } from "@/lib/quotations/sale-conversion-types";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -11,23 +12,6 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 export type EligibleQuotationSearchResult = {
   options: EligibleQuotationOption[];
   error: string | null;
-};
-
-type EligibleQuotationRpcRow = {
-  quotation_id: string;
-  reference: string;
-  customer_id: string;
-  customer_name: string | null;
-  customer_company: string | null;
-  customer_email: string | null;
-  total_amount: number | string | null;
-  currency: string | null;
-  expiration_date: string | null;
-};
-
-const asNumber = (value: unknown) => {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : 0;
 };
 
 export async function searchEligibleQuotationsAction(
@@ -59,17 +43,7 @@ export async function searchEligibleQuotationsAction(
   }
 
   return {
-    options: ((data ?? []) as EligibleQuotationRpcRow[]).map((row) => ({
-      quotationId: row.quotation_id,
-      reference: row.reference,
-      customerId: row.customer_id,
-      customerName: row.customer_name || row.customer_email || "Customer",
-      customerCompany: row.customer_company,
-      customerEmail: row.customer_email || "",
-      totalAmount: asNumber(row.total_amount),
-      currency: row.currency || "BDT",
-      expirationDate: row.expiration_date,
-    })),
+    options: normalizeEligibleQuotationOptions(data),
     error: null,
   };
 }

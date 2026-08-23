@@ -4,14 +4,12 @@ import { requireAllPermissions } from "@/lib/auth/permissions";
 import { resolveQuotationViewScope } from "@/lib/quotations/access-policy";
 import {
   QUOTATION_SALE_CONVERSION_PERMISSIONS,
+  isEligibleQuotationSalePrefill,
+  normalizeQuotationSaleInitial,
   type QuotationSaleInitial,
+  validateQuotationSaleAddresses,
 } from "@/lib/quotations/sale-conversion-types";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-
-const asNumber = (value: unknown) => {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : 0;
-};
 
 const todayDate = () => new Date().toISOString().slice(0, 10);
 
@@ -29,12 +27,13 @@ export async function loadQuotationSaleInitial(
   let quotationQuery = db
     .from("quotation_requests")
     .select(
-      "id,reference,profile_id,billing_address_id,shipping_address_id,required_by,discount_amount,tax_amount,customer_notes,internal_notes,payment_terms,delivery_information,terms_and_conditions,profiles!inner(id,status)",
+      "id,reference,profile_id,status,expiration_date,converted_order_id,billing_address_id,shipping_address_id,required_by,discount_amount,tax_amount,customer_notes,internal_notes,payment_terms,delivery_information,terms_and_conditions,profiles!quotation_requests_profile_id_fkey!inner(id,role,status)",
     )
     .eq("id", quotationId)
     .eq("status", "accepted")
     .is("converted_order_id", null)
     .or(`expiration_date.is.null,expiration_date.gte.${today}`)
+    .eq("profiles.role", "customer")
     .eq("profiles.status", "active");
   if (scope === "own") {
     quotationQuery = quotationQuery.eq("created_by", profile.id);
@@ -48,7 +47,9 @@ export async function loadQuotationSaleInitial(
 
   const { data: items, error: itemsError } = await db
     .from("quotation_request_items")
-    .select("id,product_id,variation_id,quantity,unit_price,discount_amount,tax_amount")
+    .select(
+      "id,product_id,variation_id,quantity,unit_price,target_price,discount_amount,tax_amount",
+    )
     .eq("quotation_id", quotation.id)
     .order("created_at");
   if (itemsError || !items?.length) {
@@ -56,31 +57,45 @@ export async function loadQuotationSaleInitial(
     return null;
   }
 
-  const lines = items.map((item) => ({
-    quotationItemId: item.id,
-    productId: item.product_id,
-    variationId: item.variation_id,
-    quantity: asNumber(item.quantity),
-    unitPrice: asNumber(item.unit_price),
-    lineDiscount: asNumber(item.discount_amount),
-    lineTax: asNumber(item.tax_amount),
-  }));
-  if (lines.some((line) => !line.productId || line.quantity <= 0)) return null;
+  const customer = Array.isArray(quotation.profiles)
+    ? quotation.profiles[0]
+    : quotation.profiles;
+  if (
+    !isEligibleQuotationSalePrefill(
+      {
+        status: quotation.status,
+        expirationDate: quotation.expiration_date,
+        convertedOrderId: quotation.converted_order_id,
+        customerRole: customer?.role,
+        customerStatus: customer?.status,
+      },
+      today,
+    )
+  ) {
+    return null;
+  }
+  const initial = normalizeQuotationSaleInitial(quotation, items);
+  if (!initial) return null;
 
-  return {
-    quotationId: quotation.id,
-    reference: quotation.reference,
-    customerId: quotation.profile_id,
-    billingAddressId: quotation.billing_address_id,
-    shippingAddressId: quotation.shipping_address_id,
-    expectedDeliveryDate: quotation.required_by,
-    discountAmount: asNumber(quotation.discount_amount),
-    taxAmount: asNumber(quotation.tax_amount),
-    customerNotes: quotation.customer_notes,
-    internalNotes: quotation.internal_notes,
-    paymentTerms: quotation.payment_terms,
-    deliveryInformation: quotation.delivery_information,
-    termsAndConditions: quotation.terms_and_conditions,
-    lines,
-  };
+  const requestedAddressIds = [
+    initial.shippingAddressId,
+    initial.billingAddressId,
+  ].filter((addressId): addressId is string => addressId !== null);
+  if (!requestedAddressIds.length) {
+    return validateQuotationSaleAddresses(initial, []);
+  }
+  const { data: addresses, error: addressesError } = await db
+    .from("customer_addresses")
+    .select("id")
+    .eq("profile_id", initial.customerId)
+    .in("id", requestedAddressIds)
+    .limit(2);
+  if (addressesError) {
+    console.error("Unable to validate quotation sale addresses.");
+    return null;
+  }
+  return validateQuotationSaleAddresses(
+    initial,
+    (addresses ?? []).map((address) => address.id),
+  );
 }

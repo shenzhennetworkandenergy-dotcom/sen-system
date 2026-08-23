@@ -4,7 +4,10 @@ import { useEffect, useId, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { searchEligibleQuotationsAction } from "@/app/admin/sales/from-quotation/actions";
-import type { EligibleQuotationOption } from "@/lib/quotations/sale-conversion-types";
+import {
+  quotationSaleDestination,
+  type EligibleQuotationOption,
+} from "@/lib/quotations/sale-conversion-types";
 
 const money = (amount: number, currency: string) =>
   new Intl.NumberFormat("en-BD", {
@@ -81,9 +84,10 @@ export function QuotationTypeahead() {
               type="button"
               role="option"
               aria-selected="false"
-              onClick={() =>
-                router.push(`/admin/sales/new?quotation=${option.quotationId}`)
-              }
+              onClick={() => {
+                const destination = quotationSaleDestination(option.quotationId);
+                if (destination) router.push(destination);
+              }}
               className="block w-full border-b px-3 py-3 text-left last:border-b-0 hover:bg-blue-50"
             >
               <b>{option.reference}</b>
