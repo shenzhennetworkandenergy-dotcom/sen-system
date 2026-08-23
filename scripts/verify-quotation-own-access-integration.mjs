@@ -33,6 +33,16 @@ assert.ok(supabaseUrl, "Local Supabase URL is required.");
 assert.ok(publishableKey, "Local Supabase publishable key is required.");
 assert.ok(adminKey, "Local Supabase server credential is required.");
 
+const localHosts = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+assert.ok(
+  localHosts.has(new URL(supabaseUrl).hostname),
+  "Quotation ownership integration tests may only use a local Supabase instance.",
+);
+assert.ok(
+  localHosts.has(new URL(appUrl).hostname),
+  "Quotation ownership integration tests may only use a local application.",
+);
+
 const admin = createClient(supabaseUrl, adminKey, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
@@ -119,25 +129,45 @@ function isNotFound(response, html) {
 
 async function cleanup() {
   if (quotationIds.length) {
-    await admin.from("quotation_requests").delete().in("id", quotationIds);
+    const { error: notificationError } = await admin
+      .from("customer_notifications")
+      .delete()
+      .in("entity_id", quotationIds);
+    assert.ifError(notificationError);
+
+    const { error: quotationError } = await admin
+      .from("quotation_requests")
+      .delete()
+      .in("id", quotationIds);
+    assert.ifError(quotationError);
   }
   if (createdProfileIds.length) {
-    await admin
+    const { error: auditError } = await admin
       .from("audit_logs")
       .delete()
       .or(
         `actor_id.in.(${createdProfileIds.join(",")}),target_profile_id.in.(${createdProfileIds.join(",")})`,
       );
-    await admin
+    assert.ifError(auditError);
+
+    const { error: overrideError } = await admin
       .from("profile_permission_overrides")
       .delete()
       .in("profile_id", createdProfileIds);
-    await admin
+    assert.ifError(overrideError);
+
+    const { error: templateError } = await admin
       .from("profile_permission_templates")
       .delete()
       .in("profile_id", createdProfileIds);
+    assert.ifError(templateError);
+
     for (const profileId of createdProfileIds.toReversed()) {
-      await admin.auth.admin.deleteUser(profileId, false);
+      const { error: deleteUserError } = await admin.auth.admin.deleteUser(
+        profileId,
+        false,
+      );
+      assert.ifError(deleteUserError);
     }
   }
 }
