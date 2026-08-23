@@ -42,6 +42,19 @@ export function buildQuotationTraceabilityLookup(
   return { convertedOrderId: saleId, createdBy: profileId };
 }
 
+export function buildSaleSourceQuotationLookup(
+  saleId: string,
+  role: string,
+  permissions: ReadonlySet<string>,
+  profileId: string,
+) {
+  return buildQuotationTraceabilityLookup(
+    saleId,
+    resolveQuotationViewScope(role, permissions),
+    profileId,
+  );
+}
+
 export function canOpenQuotationDocument(
   role: string,
   permissions: ReadonlySet<string>,

@@ -15,6 +15,10 @@ import {
   isQuotationImmutable,
   isQuotationSaleEligible,
 } from "@/lib/quotations/workflow";
+import {
+  getConvertedSaleLink,
+  getLegacyInvoiceConversion,
+} from "@/lib/quotations/traceability";
 
 type Quotation = {
   id: string;
@@ -95,7 +99,12 @@ export function QuotationOperations({
   error?: string;
 }) {
   const immutable = isQuotationImmutable(quotation.status);
-  const legacyInvoiceConverted = quotation.status === "converted_to_invoice";
+  const convertedSaleLink = getConvertedSaleLink(quotation.status, linkedSale);
+  const legacyInvoiceConversion = getLegacyInvoiceConversion(
+    quotation.status,
+    quotation.converted_order_id,
+    quotation.converted_invoice_id,
+  );
   const canApprove =
     capabilities.approve && canTransitionQuotation(quotation.status, "approve");
   const canReject =
@@ -415,41 +424,41 @@ export function QuotationOperations({
         </div>
       ) : null}
 
-      {quotation.status === "converted_to_sale" && linkedSale ? (
+      {convertedSaleLink ? (
         <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-emerald-950">
-          <span className="font-bold">Converted Sale:</span>{" "}
+          <span className="font-bold">{convertedSaleLink.label}:</span>{" "}
           <Link
-            href={`/admin/sales/${linkedSale.id}`}
+            href={convertedSaleLink.href}
             className="font-bold underline"
           >
-            {linkedSale.orderNumber}
+            {convertedSaleLink.number}
           </Link>
         </div>
       ) : null}
 
-      {legacyInvoiceConverted ? (
+      {legacyInvoiceConversion ? (
         <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
           <h2 className="text-xl font-black text-emerald-950">
-            Converted to Invoice
+            {legacyInvoiceConversion.title}
           </h2>
           <p className="mt-1 text-emerald-900">
-            This quotation is locked and linked to its sales records.
+            {legacyInvoiceConversion.description}
           </p>
           <div className="mt-4 flex flex-wrap gap-3">
-            {quotation.converted_order_id ? (
+            {legacyInvoiceConversion.saleLink ? (
               <Link
-                href={`/admin/sales/${quotation.converted_order_id}`}
+                href={legacyInvoiceConversion.saleLink.href}
                 className="rounded-xl border border-emerald-300 bg-white px-4 py-2.5 font-bold"
               >
-                Open sales order
+                {legacyInvoiceConversion.saleLink.label}
               </Link>
             ) : null}
-            {quotation.converted_order_id && quotation.converted_invoice_id ? (
+            {legacyInvoiceConversion.invoiceLink ? (
               <Link
-                href={`/admin/sales/${quotation.converted_order_id}/documents/${quotation.converted_invoice_id}`}
+                href={legacyInvoiceConversion.invoiceLink.href}
                 className="rounded-xl bg-emerald-700 px-4 py-2.5 font-bold text-white"
               >
-                Open sales invoice
+                {legacyInvoiceConversion.invoiceLink.label}
               </Link>
             ) : null}
           </div>

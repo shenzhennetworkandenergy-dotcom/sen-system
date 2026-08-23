@@ -50,6 +50,17 @@ export async function getSalesDashboard(filters: SalesFilters) {
   return { sales: list.data ?? [], count: list.count ?? 0, page, size, metrics, customers: customers.data ?? [], employees: employees.data ?? [] };
 }
 
+export async function getSaleAccessOwner(saleId: string) {
+  const db = createSupabaseAdminClient();
+  const result = await db
+    .from("sales_orders")
+    .select("created_by")
+    .eq("id", saleId)
+    .maybeSingle();
+  assertResult("Unable to load sale access.", result.error);
+  return result.data ? { createdBy: result.data.created_by } : null;
+}
+
 export async function getSale(
   saleId: string,
   lookup: QuotationTraceabilityLookup | null = null,

@@ -7,12 +7,10 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { SaleLineEditor } from "@/components/sales/SaleLineEditor";
 import { SalePaymentMethodFields } from "@/components/sales/SalePaymentMethodFields";
 import { requireAnyPermission } from "@/lib/auth/permissions";
-import {
-  buildQuotationTraceabilityLookup,
-  resolveQuotationViewScope,
-} from "@/lib/quotations/access-policy";
+import { buildSaleSourceQuotationLookup } from "@/lib/quotations/access-policy";
+import { getSaleSourceQuotationLink } from "@/lib/quotations/traceability";
 import { dateTime, label, money } from "@/lib/orders/types";
-import { getSale } from "@/lib/sales/data";
+import { getSale, getSaleAccessOwner } from "@/lib/sales/data";
 import { getAuthorizedPhysicalReturnLinks } from "@/lib/inventory/rma-return-data";
 import {
   cancelSaleAction,
@@ -39,21 +37,24 @@ export default async function SaleDetail({
   ]);
   const { saleId } = await params;
   const notice = await searchParams;
-  const quotationLookup = buildQuotationTraceabilityLookup(
-    saleId,
-    resolveQuotationViewScope(profile.role, permissions),
-    profile.id,
-  );
-  const data = await getSale(saleId, quotationLookup);
-  if (!data) notFound();
+  const saleAccess = await getSaleAccessOwner(saleId);
+  if (!saleAccess) notFound();
   if (
     profile.role === "employee" &&
     !permissions.has("sales.view") &&
     !permissions.has("sales.view_all") &&
-    data.order.created_by !== profile.id
+    saleAccess.createdBy !== profile.id
   ) {
     notFound();
   }
+  const quotationLookup = buildSaleSourceQuotationLookup(
+    saleId,
+    profile.role,
+    permissions,
+    profile.id,
+  );
+  const data = await getSale(saleId, quotationLookup);
+  if (!data) notFound();
 
   const {
     order,
@@ -69,6 +70,7 @@ export default async function SaleDetail({
     stockOutRequest,
     sourceQuotation,
   } = data;
+  const sourceQuotationLink = getSaleSourceQuotationLink(sourceQuotation);
   const invoiceOperationId = randomUUID();
   const paymentOperationId = randomUUID();
   const customer = order.customer as {
@@ -122,14 +124,14 @@ export default async function SaleDetail({
         </p>
       ) : null}
 
-      {sourceQuotation ? (
+      {sourceQuotationLink ? (
         <p className="mb-3 text-sm text-[var(--muted-text)]">
-          Source Quotation:{" "}
+          {sourceQuotationLink.label}:{" "}
           <Link
-            href={`/admin/quotations/${sourceQuotation.id}/manage`}
+            href={sourceQuotationLink.href}
             className="font-semibold text-[var(--primary)] underline"
           >
-            {sourceQuotation.reference}
+            {sourceQuotationLink.reference}
           </Link>
         </p>
       ) : null}
