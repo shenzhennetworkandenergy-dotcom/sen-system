@@ -74,3 +74,67 @@ test("identifies only ambiguous received methods as requiring an explicit channe
   assert.equal(requiresExplicitReceiptChannel?.("bank_transfer"), false);
   assert.equal(requiresExplicitReceiptChannel?.("credit_sale"), false);
 });
+
+test("builds the atomic record_sale_payment RPC payload with operation and channel", () => {
+  const buildSalePaymentRpcArguments = (
+    paymentAccounting as unknown as {
+      buildSalePaymentRpcArguments?: (input: Record<string, unknown>) => Record<string, unknown>;
+    }
+  ).buildSalePaymentRpcArguments;
+
+  assert.equal(typeof buildSalePaymentRpcArguments, "function");
+  assert.deepEqual(buildSalePaymentRpcArguments?.({
+    actorProfileId: "10000000-0000-4000-8000-000000000001",
+    saleId: "20000000-0000-4000-8000-000000000002",
+    amount: 20000,
+    paymentDate: "2026-08-23",
+    method: "bank_transfer",
+    receiptChannel: null,
+    reference: "RAL BRAC",
+    note: "Partial payment",
+    operationId: "30000000-0000-4000-8000-000000000003",
+  }), {
+    actor_profile_id: "10000000-0000-4000-8000-000000000001",
+    requested_order_id: "20000000-0000-4000-8000-000000000002",
+    requested_amount: 20000,
+    requested_date: "2026-08-23",
+    requested_method: "bank_transfer",
+    requested_reference: "RAL BRAC",
+    requested_note: "Partial payment",
+    requested_operation_id: "30000000-0000-4000-8000-000000000003",
+    requested_receipt_channel: "bank",
+  });
+});
+
+test("normalizes the linked Cash Book and journal identity for Sales history", () => {
+  const normalizeSalePaymentAccountingLink = (
+    paymentAccounting as unknown as {
+      normalizeSalePaymentAccountingLink?: (input: unknown) => unknown;
+    }
+  ).normalizeSalePaymentAccountingLink;
+
+  assert.equal(typeof normalizeSalePaymentAccountingLink, "function");
+  assert.deepEqual(normalizeSalePaymentAccountingLink?.({
+    id: "40000000-0000-4000-8000-000000000004",
+    journal_entry_id: "50000000-0000-4000-8000-000000000005",
+    journal_entries: [{ entry_number: "JE-2026-000123" }],
+  }), {
+    cashbookEntryId: "40000000-0000-4000-8000-000000000004",
+    journalEntryId: "50000000-0000-4000-8000-000000000005",
+    journalEntryNumber: "JE-2026-000123",
+  });
+  assert.equal(normalizeSalePaymentAccountingLink?.(null), null);
+});
+
+test("formats the exact Sales method separately from its ledger channel", () => {
+  const formatReceiptMethodForAccounting = (
+    paymentAccounting as unknown as {
+      formatReceiptMethodForAccounting?: (exactMethod: unknown, channel: unknown) => string;
+    }
+  ).formatReceiptMethodForAccounting;
+
+  assert.equal(typeof formatReceiptMethodForAccounting, "function");
+  assert.equal(formatReceiptMethodForAccounting?.("bank_transfer", "bank"), "Bank Transfer (Bank)");
+  assert.equal(formatReceiptMethodForAccounting?.("mobile_banking", "mfs"), "Mobile Banking (MFS)");
+  assert.equal(formatReceiptMethodForAccounting?.(null, "cash"), "Cash");
+});

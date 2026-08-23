@@ -275,8 +275,8 @@ export default async function SaleDetail({
               <input name="internal_note" placeholder="Internal note" className={field} />
             </form>
             <div className="mt-3 overflow-x-auto">
-              <table className="w-full min-w-[600px] text-left text-sm">
-                <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Received by</th></tr></thead>
+              <table className="w-full min-w-[760px] text-left text-sm">
+                <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Received by</th><th>Accounting</th></tr></thead>
                 <tbody>
                   {payments.map((payment) => {
                     const receiver = payment.profiles as { full_name: string | null; email: string };
@@ -287,6 +287,16 @@ export default async function SaleDetail({
                         <td>{label(payment.method)}</td>
                         <td>{payment.reference_number || "—"}</td>
                         <td>{receiver?.full_name || receiver?.email}</td>
+                        <td>
+                          {payment.accounting ? (
+                            <span className="block text-xs">
+                              <strong className="block text-emerald-700">{payment.accounting.journalEntryNumber || "Posted journal"}</strong>
+                              Cash Book {payment.accounting.cashbookEntryId.slice(0, 8)}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-[var(--muted-text)]">Historical payment · not backfilled</span>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}

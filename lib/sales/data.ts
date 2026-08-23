@@ -1,5 +1,6 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { normalizeSalePaymentAccountingLink } from "@/lib/sales/payment-accounting";
 
 type SalesFilters = { q?: string; customer?: string; employee?: string; status?: string; payment?: string; date?: string; page?: string; ownProfileId?: string };
 
@@ -65,7 +66,36 @@ export async function getSale(saleId: string) {
     db.from("sales_stock_out_requests").select("id,request_number,status,required_quantity,released_quantity,remaining_quantity,invoice_revision_pending,current_revision_number,version").eq("sales_order_id", saleId).maybeSingle(),
   ]);
   for (const [name, result] of Object.entries({ items, reservations, allocations, payments, adjustments, documents, shipments, events, audit, stockOutRequest })) assertResult(`Unable to load sale ${name}.`, result.error);
-  return { order: order.data, items: items.data ?? [], reservations: reservations.data ?? [], allocations: allocations.data ?? [], payments: payments.data ?? [], adjustments: adjustments.data ?? [], documents: documents.data ?? [], shipments: shipments.data ?? [], events: events.data ?? [], audit: audit.data ?? [], stockOutRequest: stockOutRequest.data ?? null };
+  const paymentRows = payments.data ?? [];
+  const paymentIds = paymentRows.map((payment) => payment.id);
+  const accountingLinks = paymentIds.length
+    ? await db.from("cashbook_entries")
+      .select("id,sale_payment_id,journal_entry_id,journal_entries!cashbook_entries_journal_entry_id_fkey(entry_number)")
+      .in("sale_payment_id", paymentIds)
+    : { data: [], error: null };
+  assertResult("Unable to load sale payment Accounting links.", accountingLinks.error);
+  const accountingByPayment = new Map(
+    (accountingLinks.data ?? []).map((entry) => [
+      entry.sale_payment_id,
+      normalizeSalePaymentAccountingLink(entry),
+    ]),
+  );
+  return {
+    order: order.data,
+    items: items.data ?? [],
+    reservations: reservations.data ?? [],
+    allocations: allocations.data ?? [],
+    payments: paymentRows.map((payment) => ({
+      ...payment,
+      accounting: accountingByPayment.get(payment.id) ?? null,
+    })),
+    adjustments: adjustments.data ?? [],
+    documents: documents.data ?? [],
+    shipments: shipments.data ?? [],
+    events: events.data ?? [],
+    audit: audit.data ?? [],
+    stockOutRequest: stockOutRequest.data ?? null,
+  };
 }
 
 export async function getCustomerSalesHistory(profileId: string) {

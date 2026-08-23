@@ -7,6 +7,7 @@ import {
   createCashbookEntryAction,
   setCashbookOpeningBalanceAction,
 } from "@/app/admin/accounting/actions";
+import { formatReceiptMethodForAccounting } from "@/lib/sales/payment-accounting";
 
 type TransactionType = "income" | "expense";
 type PaymentMethod = "cash" | "bank" | "mfs";
@@ -19,6 +20,9 @@ type Entry = {
   transactionAt: string;
   description: string;
   remark: string;
+  sourcePaymentMethod: string | null;
+  salePaymentId: string | null;
+  journalEntryNumber: string | null;
 };
 
 const field = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-blue-600 focus:ring-2 focus:ring-blue-100";
@@ -239,7 +243,7 @@ function StatementTable({ title, entries, emptyLabel }: { title: string; entries
       <table className="w-full text-xs">
         <thead><tr className="border-t bg-slate-50"><th className="p-2 text-left">খাত / বিবরণ</th><th className="text-left">মেথড</th><th className="pr-2 text-right">পরিমাণ (৳)</th></tr></thead>
         <tbody>
-          {entries.map((entry) => <tr key={entry.id} className="border-t"><td className="p-2"><strong>{entry.description}</strong><span className="ml-2 text-[10px] text-slate-500">{dhakaTime(entry.transactionAt)}</span>{entry.remark ? <p className="mt-1 text-[11px] text-slate-600">{entry.remark}</p> : null}</td><td>{paymentLabels[entry.paymentMethod]}</td><td className="pr-2 text-right font-bold">{money(entry.amount)}</td></tr>)}
+          {entries.map((entry) => <tr key={entry.id} className="border-t"><td className="p-2"><strong>{entry.description}</strong><span className="ml-2 text-[10px] text-slate-500">{dhakaTime(entry.transactionAt)}</span>{entry.remark ? <p className="mt-1 text-[11px] text-slate-600">{entry.remark}</p> : null}{entry.salePaymentId ? <p className="mt-1 text-[10px] font-semibold text-emerald-700">Auto Sales · {entry.journalEntryNumber || "Posted journal"} · Payment {entry.salePaymentId.slice(0, 8)}</p> : null}</td><td>{formatReceiptMethodForAccounting(entry.sourcePaymentMethod, entry.paymentMethod)}</td><td className="pr-2 text-right font-bold">{money(entry.amount)}</td></tr>)}
           {!entries.length ? <tr className="border-t"><td colSpan={3} className="p-3 text-center text-slate-500">{emptyLabel}</td></tr> : null}
         </tbody>
         <tfoot><tr className="border-t bg-slate-50 font-black"><td colSpan={2} className="p-2">Total</td><td className="pr-2 text-right">{money(total)}</td></tr></tfoot>

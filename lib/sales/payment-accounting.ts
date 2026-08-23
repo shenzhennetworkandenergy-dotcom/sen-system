@@ -48,3 +48,63 @@ export function normalizeSalePaymentReceipt(methodValue: unknown, channelValue: 
     receiptChannel: receiptChannel as CashbookReceiptChannel,
   };
 }
+
+export function buildSalePaymentRpcArguments(input: {
+  actorProfileId: string;
+  saleId: string;
+  amount: number;
+  paymentDate: string;
+  method: unknown;
+  receiptChannel: unknown;
+  reference: string | null;
+  note: string | null;
+  operationId: string;
+}) {
+  const receipt = normalizeSalePaymentReceipt(input.method, input.receiptChannel);
+  return {
+    actor_profile_id: input.actorProfileId,
+    requested_order_id: input.saleId,
+    requested_amount: input.amount,
+    requested_date: input.paymentDate,
+    requested_method: receipt.method,
+    requested_reference: input.reference,
+    requested_note: input.note,
+    requested_operation_id: input.operationId,
+    requested_receipt_channel: receipt.receiptChannel,
+  };
+}
+
+export function normalizeSalePaymentAccountingLink(input: unknown) {
+  if (!input || typeof input !== "object") return null;
+  const row = input as {
+    id?: unknown;
+    journal_entry_id?: unknown;
+    journal_entries?: { entry_number?: unknown } | { entry_number?: unknown }[] | null;
+  };
+  const cashbookEntryId = String(row.id ?? "").trim();
+  const journalEntryId = String(row.journal_entry_id ?? "").trim();
+  if (!cashbookEntryId || !journalEntryId) return null;
+  const relatedJournal = Array.isArray(row.journal_entries)
+    ? row.journal_entries[0]
+    : row.journal_entries;
+  return {
+    cashbookEntryId,
+    journalEntryId,
+    journalEntryNumber: String(relatedJournal?.entry_number ?? "").trim() || null,
+  };
+}
+
+export function formatReceiptMethodForAccounting(exactMethodValue: unknown, channelValue: unknown) {
+  const exactMethod = String(exactMethodValue ?? "").trim().toLowerCase();
+  const channel = String(channelValue ?? "").trim().toLowerCase();
+  const channelLabel = channel === "mfs"
+    ? "MFS"
+    : channel ? channel[0].toUpperCase() + channel.slice(1) : "Unclassified";
+  if (!exactMethod || exactMethod === channel) return channelLabel;
+  const exactLabel = exactMethod
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join(" ");
+  return `${exactLabel} (${channelLabel})`;
+}

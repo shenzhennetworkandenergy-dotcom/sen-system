@@ -7,9 +7,10 @@ import { writeAuditLog } from "@/lib/audit/log";
 import { addressFromForm, jsonArray, optionalString, uuid } from "@/lib/orders/validation";
 import { moneyFromForm, parseMoney, parseWholeNumber } from "@/lib/validation/numbers";
 import { normalizeSaleLineEdit } from "@/lib/sales/line-editing";
+import { buildSalePaymentRpcArguments } from "@/lib/sales/payment-accounting";
 
 const target = (id: string, kind: "success" | "error", message: string) => `/admin/sales/${id}?${kind}=${encodeURIComponent(message)}`;
-const safe = (message: string | undefined, fallback: string) => message && /sale|invoice|revision|release|payment|amount|method|stock|draft|serial|document|permission|eligible/i.test(message) ? message : fallback;
+const safe = (message: string | undefined, fallback: string) => message && /sale|invoice|revision|release|payment|amount|method|stock|draft|serial|document|permission|eligible|accounting|cashbook|closed|received|channel|retry|operation/i.test(message) ? message : fallback;
 
 export async function updateSaleLinesAction(saleId: string, form: FormData) {
   const { profile } = await requirePermission("sales.edit");
@@ -132,13 +133,29 @@ export async function cancelSaleAction(saleId: string, form: FormData) {
 
 export async function recordPaymentAction(saleId: string, form: FormData) {
   const { profile } = await requirePermission("sales.record_payment"), db = createSupabaseAdminClient();
-  let amount: number;
-  try { amount = moneyFromForm(form, "amount", "Payment amount", { required: true, minimum: 0.01 })!; }
+  let rpcArguments: ReturnType<typeof buildSalePaymentRpcArguments>;
+  try {
+    const amount = moneyFromForm(form, "amount", "Payment amount", { required: true, minimum: 0.01 })!;
+    rpcArguments = buildSalePaymentRpcArguments({
+      actorProfileId: profile.id,
+      saleId,
+      amount,
+      paymentDate: String(form.get("payment_date") || new Date().toISOString().slice(0, 10)),
+      method: form.get("method"),
+      receiptChannel: form.get("receipt_channel"),
+      reference: optionalString(form, "reference_number", 200),
+      note: optionalString(form, "internal_note", 1000),
+      operationId: uuid(form.get("operation_id"), "Payment operation"),
+    });
+  }
   catch (error) { redirect(target(saleId, "error", error instanceof Error ? error.message : "Payment amount is invalid.")); }
-  const result = await db.rpc("record_sale_payment", { actor_profile_id: profile.id, requested_order_id: saleId, requested_amount: amount, requested_date: String(form.get("payment_date") || new Date().toISOString().slice(0, 10)), requested_method: String(form.get("method")), requested_reference: optionalString(form, "reference_number", 200), requested_note: optionalString(form, "internal_note", 1000) });
+  const result = await db.rpc("record_sale_payment", rpcArguments);
   if (result.error) redirect(target(saleId, "error", safe(result.error.message, "Unable to record payment.")));
-  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "sale.payment_recorded", module: "sales", entityType: "sales_order", entityId: saleId, description: "Customer payment recorded.", newValues: { amount, method: String(form.get("method")) } });
-  revalidatePath("/admin/sales"); revalidatePath(`/admin/sales/${saleId}`); redirect(target(saleId, "success", "Payment recorded."));
+  revalidatePath("/admin/sales");
+  revalidatePath(`/admin/sales/${saleId}`);
+  revalidatePath("/account/sales");
+  revalidatePath("/admin/accounting");
+  redirect(target(saleId, "success", "Payment recorded and posted to Accounting."));
 }
 
 export async function generateSaleDocumentAction(saleId: string, type: "invoice" | "delivery_challan", form: FormData) {

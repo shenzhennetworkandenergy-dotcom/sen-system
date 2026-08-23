@@ -18,7 +18,7 @@ export async function getAccountingDashboard(selectedDate: string, options: { in
       .limit(1),
     db.from("cashbook_descriptions").select("id,name,transaction_type,is_active").eq("is_active", true).order("transaction_type").order("name"),
     db.from("cashbook_entries")
-      .select("id,transaction_type,amount,payment_method,transaction_at,business_date,journal_entry_id,remark,cashbook_descriptions(name)")
+      .select("id,transaction_type,amount,payment_method,transaction_at,business_date,journal_entry_id,remark,sale_payment_id,source_payment_method,cashbook_descriptions(name),journal_entries!cashbook_entries_journal_entry_id_fkey(entry_number)")
       .eq("business_date", selectedDate)
       .order("transaction_at", { ascending: false }),
   ]);
@@ -33,6 +33,7 @@ export async function getAccountingDashboard(selectedDate: string, options: { in
   }
   const dailyEntries = (cashbookEntries.data ?? []).map((entry) => {
     const relatedDescription = entry.cashbook_descriptions as unknown as { name: string } | { name: string }[] | null;
+    const relatedJournal = entry.journal_entries as unknown as { entry_number: string } | { entry_number: string }[] | null;
     return {
       id: entry.id,
       transactionType: entry.transaction_type as "income" | "expense",
@@ -42,6 +43,11 @@ export async function getAccountingDashboard(selectedDate: string, options: { in
       remark: entry.remark ?? "",
       businessDate: entry.business_date,
       journalEntryId: entry.journal_entry_id,
+      journalEntryNumber: Array.isArray(relatedJournal)
+        ? relatedJournal[0]?.entry_number ?? null
+        : relatedJournal?.entry_number ?? null,
+      salePaymentId: entry.sale_payment_id ?? null,
+      sourcePaymentMethod: entry.source_payment_method ?? null,
       description: Array.isArray(relatedDescription)
         ? relatedDescription[0]?.name ?? ""
         : relatedDescription?.name ?? "",
