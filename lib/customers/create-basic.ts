@@ -11,6 +11,18 @@ export type CreatedBasicCustomer = {
   phone: string;
 };
 
+async function removeIncompleteCustomer(customerId: string) {
+  const { error } = await createSupabaseAdminClient().auth.admin.deleteUser(
+    customerId,
+  );
+  if (error) {
+    console.error("Unable to remove incomplete customer", {
+      customerId,
+      message: error.message,
+    });
+  }
+}
+
 export async function createBasicCustomerRecord(
   input: BasicCustomerInput,
 ): Promise<CreatedBasicCustomer> {
@@ -28,7 +40,14 @@ export async function createBasicCustomerRecord(
   });
 
   if (created.error || !created.data.user) {
-    throw new Error(created.error?.message || "Unable to add customer.");
+    console.error("Basic customer authentication creation failed", {
+      message: created.error?.message,
+    });
+    throw new Error(
+      /already|registered|exists/i.test(created.error?.message ?? "")
+        ? "A customer with this email already exists."
+        : "Unable to add customer.",
+    );
   }
 
   const customerId = created.data.user.id;
@@ -44,7 +63,11 @@ export async function createBasicCustomerRecord(
     .eq("id", customerId);
 
   if (profileError) {
-    await db.auth.admin.deleteUser(customerId);
+    console.error("Basic customer profile creation failed", {
+      customerId,
+      message: profileError.message,
+    });
+    await removeIncompleteCustomer(customerId);
     throw new Error("Unable to save the customer profile.");
   }
 
@@ -59,7 +82,11 @@ export async function createBasicCustomerRecord(
   });
 
   if (addressError) {
-    await db.auth.admin.deleteUser(customerId);
+    console.error("Basic customer address creation failed", {
+      customerId,
+      message: addressError.message,
+    });
+    await removeIncompleteCustomer(customerId);
     throw new Error("Unable to save the customer address.");
   }
 

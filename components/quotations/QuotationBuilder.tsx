@@ -57,12 +57,20 @@ export function QuotationBuilder({
   defaultExpiration: string;
 }) {
   const [customerId, setCustomerId] = useState("");
+  const [customerOptions, setCustomerOptions] =
+    useState<CustomerSearchOption[]>(customers);
   const createAndSelectCustomer = async (
     previousState: QuotationCustomerActionState,
     form: FormData,
   ) => {
     const nextState = await createQuotationCustomerAction(previousState, form);
-    if (nextState.customer) setCustomerId(nextState.customer.id);
+    if (nextState.customer) {
+      setCustomerOptions((current) => [
+        nextState.customer!,
+        ...current.filter((item) => item.id !== nextState.customer!.id),
+      ]);
+      setCustomerId(nextState.customer.id);
+    }
     return nextState;
   };
   const [customerState, customerFormAction, customerPending] = useActionState(
@@ -74,18 +82,6 @@ export function QuotationBuilder({
     } satisfies QuotationCustomerActionState,
   );
   const [rows, setRows] = useState<Row[]>([emptyRow()]);
-  const customerOptions = useMemo(
-    () =>
-      customerState.customer
-        ? [
-            customerState.customer,
-            ...customers.filter(
-              (customer) => customer.id !== customerState.customer!.id,
-            ),
-          ]
-        : customers,
-    [customerState.customer, customers],
-  );
   const searchableProducts = useMemo(
     () =>
       products.map((product) => ({

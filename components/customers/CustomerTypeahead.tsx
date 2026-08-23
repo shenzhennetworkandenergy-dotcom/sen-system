@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 
 import {
   customerOptionLabel,
@@ -22,6 +22,7 @@ export function CustomerTypeahead({
   labelClassName?: string;
 }) {
   const [search, setSearch] = useState("");
+  const listboxId = useId();
   const selectedCustomer = useMemo(
     () => customers.find((customer) => customer.id === selectedCustomerId),
     [customers, selectedCustomerId],
@@ -31,17 +32,16 @@ export function CustomerTypeahead({
     [customers, search],
   );
   const open = Boolean(search.trim() && !selectedCustomerId);
-
-  useEffect(() => {
-    if (selectedCustomer) setSearch(customerOptionLabel(selectedCustomer));
-  }, [selectedCustomer]);
+  const displayedValue = selectedCustomer
+    ? customerOptionLabel(selectedCustomer)
+    : search;
 
   return (
     <div className={`relative ${labelClassName}`}>
       Customer
       <input type="hidden" name="customer_id" value={selectedCustomerId} />
       <input
-        value={search}
+        value={displayedValue}
         onChange={(event) => {
           setSearch(event.target.value);
           onSelectionChange(null);
@@ -52,10 +52,12 @@ export function CustomerTypeahead({
         role="combobox"
         aria-autocomplete="list"
         aria-expanded={open}
+        aria-controls={open ? listboxId : undefined}
         required
       />
       {open ? (
         <div
+          id={listboxId}
           className="absolute z-30 mt-1 max-h-60 w-full overflow-auto rounded-xl border bg-white p-1 text-slate-950 shadow-xl"
           role="listbox"
         >
