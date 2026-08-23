@@ -4,6 +4,7 @@ import { connection } from "next/server";
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { QuotationOperations } from "@/components/quotations/QuotationOperations";
 import { requireQuotationView } from "@/lib/quotations/access";
+import { resolveLinkedSale } from "@/lib/quotations/traceability";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -35,13 +36,14 @@ export default async function ManageQuotationPage({
   }
   const { data: quotation, error } = await quotationQuery.maybeSingle();
   if (error || !quotation) notFound();
-  const { data: linkedSale } = quotation.converted_order_id
-    ? await db
+  const linkedSale = await resolveLinkedSale(
+    quotation.converted_order_id,
+    (saleId) => db
       .from("sales_orders")
       .select("id,order_number")
-      .eq("id", quotation.converted_order_id)
-      .maybeSingle()
-    : { data: null };
+      .eq("id", saleId)
+      .maybeSingle(),
+  );
   const customer = quotation.profiles as unknown as {
     id: string;
     full_name: string | null;

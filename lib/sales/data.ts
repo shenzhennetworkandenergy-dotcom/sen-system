@@ -2,6 +2,7 @@ import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { normalizeSalePaymentAccountingLink } from "@/lib/sales/payment-accounting";
 import type { QuotationTraceabilityLookup } from "@/lib/quotations/access-policy";
+import { resolveSourceQuotation } from "@/lib/quotations/traceability";
 
 type SalesFilters = { q?: string; customer?: string; employee?: string; status?: string; payment?: string; date?: string; page?: string; ownProfileId?: string };
 
@@ -57,19 +58,17 @@ export async function getSale(
   const order = await db.from("sales_orders").select("*,customer:profiles!sales_orders_customer_profile_id_fkey(id,full_name,email,phone,company_name),employee:profiles!sales_orders_created_by_fkey(id,full_name,email),warehouses(id,code,name)").eq("id", saleId).maybeSingle();
   assertResult("Unable to load sale.", order.error);
   if (!order.data) return null;
-  const sourceQuotation = lookup
-    ? (() => {
+  const sourceQuotation = resolveSourceQuotation(lookup, async (sourceLookup) => {
       let query = db
         .from("quotation_requests")
         .select("id,reference")
-        .eq("converted_order_id", lookup.convertedOrderId);
-      if (lookup.createdBy) {
-        query = query.eq("created_by", lookup.createdBy);
+        .eq("converted_order_id", sourceLookup.convertedOrderId);
+      if (sourceLookup.createdBy) {
+        query = query.eq("created_by", sourceLookup.createdBy);
       }
       return query.maybeSingle();
-    })()
-    : Promise.resolve({ data: null, error: null });
-  const [items, reservations, allocations, payments, adjustments, documents, shipments, events, audit, stockOutRequest, sourceQuotationResult] = await Promise.all([
+    });
+  const [items, reservations, allocations, payments, adjustments, documents, shipments, events, audit, stockOutRequest, resolvedSourceQuotation] = await Promise.all([
     db.from("sales_order_items").select("*").eq("order_id", saleId).order("created_at"),
     db.from("inventory_reservations").select("*").eq("order_id", saleId).order("created_at"),
     db.from("order_serial_allocations").select("*,serial_numbers(id,sen_serial,manufacturer_serial,status,condition)").eq("order_id", saleId).order("allocated_at"),
@@ -82,7 +81,7 @@ export async function getSale(
     db.from("sales_stock_out_requests").select("id,request_number,status,required_quantity,released_quantity,remaining_quantity,invoice_revision_pending,current_revision_number,version").eq("sales_order_id", saleId).maybeSingle(),
     sourceQuotation,
   ]);
-  for (const [name, result] of Object.entries({ items, reservations, allocations, payments, adjustments, documents, shipments, events, audit, stockOutRequest, sourceQuotation: sourceQuotationResult })) assertResult(`Unable to load sale ${name}.`, result.error);
+  for (const [name, result] of Object.entries({ items, reservations, allocations, payments, adjustments, documents, shipments, events, audit, stockOutRequest })) assertResult(`Unable to load sale ${name}.`, result.error);
   const paymentRows = payments.data ?? [];
   const paymentIds = paymentRows.map((payment) => payment.id);
   const accountingLinks = paymentIds.length
@@ -112,7 +111,7 @@ export async function getSale(
     events: events.data ?? [],
     audit: audit.data ?? [],
     stockOutRequest: stockOutRequest.data ?? null,
-    sourceQuotation: sourceQuotationResult.data ?? null,
+    sourceQuotation: resolvedSourceQuotation,
   };
 }
 

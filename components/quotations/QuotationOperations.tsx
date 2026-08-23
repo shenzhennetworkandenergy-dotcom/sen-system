@@ -67,7 +67,7 @@ type Audit = {
   created_at: string;
   actor: { full_name: string | null; email: string | null } | null;
 };
-type LinkedSale = { id: string; order_number: string } | null;
+type LinkedSale = { id: string; orderNumber: string } | null;
 
 const money = (value: number, currency = "BDT") =>
   `${currency} ${Number(value ?? 0).toLocaleString("en-BD", {
@@ -422,7 +422,7 @@ export function QuotationOperations({
             href={`/admin/sales/${linkedSale.id}`}
             className="font-bold underline"
           >
-            {linkedSale.order_number}
+            {linkedSale.orderNumber}
           </Link>
         </div>
       ) : null}
