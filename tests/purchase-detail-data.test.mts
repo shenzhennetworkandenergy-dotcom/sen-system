@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import * as nodeModule from "node:module";
 import { resolve } from "node:path";
 import test from "node:test";
@@ -43,8 +43,17 @@ const hasLocalDatabase =
   /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(databaseUrl) &&
   Boolean(process.env.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY);
 
+test("purchase detail loader targets the deployed carrier status schema", () => {
+  const source = readFileSync(resolve(process.cwd(), "lib/purchasing/data.ts"), "utf8");
+  assert.match(
+    source,
+    /from\("purchase_carriers"\)\.select\("id,name"\)\.eq\("status",\s*"active"\)/,
+  );
+  assert.doesNotMatch(source, /purchase_carriers[\s\S]{0,160}\.eq\("is_active"/);
+});
+
 test(
-  "purchase detail loader uses the status-based carrier schema",
+  "purchase detail loader executes against the local status-based carrier schema",
   { skip: !hasLocalDatabase },
   async () => {
     const { getPurchaseOrder } = await import("../lib/purchasing/data.ts");
