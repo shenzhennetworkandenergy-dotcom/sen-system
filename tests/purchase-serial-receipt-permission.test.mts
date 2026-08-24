@@ -13,9 +13,38 @@ test("purchase stock receipt requires the dedicated employee permission", async 
   const actions = await readFile("app/admin/purchasing/actions.ts", "utf8");
   const page = await readFile("app/admin/purchasing/[id]/receive/page.tsx", "utf8");
   const detail = await readFile("app/admin/purchasing/[id]/page.tsx", "utf8");
-  assert.match(actions, /receivePurchaseOrderAction[\s\S]*requireAllPermissions\(\["purchasing\.receive", "inventory\.receive_new_stock"\]\)/);
-  assert.match(page, /requireAllPermissions\(\["purchasing\.receive","inventory\.receive_new_stock"\]\)/);
+  assert.match(
+    actions,
+    /receivePurchaseOrderAction[\s\S]*requirePermission\("inventory\.receive_new_stock"\)/,
+  );
+  assert.match(
+    page,
+    /requirePermission\([\s\S]*"inventory\.receive_new_stock"/,
+  );
+  assert.doesNotMatch(
+    actions,
+    /receivePurchaseOrderAction[\s\S]*requireAllPermissions\(\["purchasing\.receive", "inventory\.receive_new_stock"\]\)/,
+  );
+  assert.doesNotMatch(
+    page,
+    /requireAllPermissions\(\["purchasing\.receive","inventory\.receive_new_stock"\]\)/,
+  );
+  assert.match(actions, /getEmployeePrimaryWarehouseId\(profile\.id\)/);
+  assert.match(page, /getEmployeePrimaryWarehouseId\(profile\.id\)/);
+  assert.match(actions, /destination_warehouse_id/);
+  assert.match(page, /data\.order\.destination_warehouse_id/);
+  assert.match(actions, /\/employee\/inventory\/receive\?/);
   assert.match(detail, /permissions\.has\("purchasing\.receive"\) && permissions\.has\("inventory\.receive_new_stock"\)/);
+});
+
+test("the physical receipt page keeps the serial-print continuation for eligible units", async () => {
+  const page = await readFile("app/admin/purchasing/[id]/receive/page.tsx", "utf8");
+  assert.match(
+    page,
+    /data\.serials\.filter\([\s\S]*\(serial\) => serial\.status === "expected"/,
+  );
+  assert.match(page, /\/admin\/serials\/print\?ids=/);
+  assert.match(page, /Print label/);
 });
 
 test("purchase receipt keeps automatic atomic SEN serial generation visible", async () => {
