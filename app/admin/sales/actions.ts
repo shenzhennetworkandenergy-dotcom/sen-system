@@ -1,13 +1,21 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requirePermission } from "@/lib/auth/permissions";
+import { requireAllPermissions, requirePermission } from "@/lib/auth/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
 import { normalizeBasicCustomerInput } from "@/lib/customers/basic";
 import { createBasicCustomerRecord } from "@/lib/customers/create-basic";
-import { addressFromForm, jsonArray, optionalString, uuid } from "@/lib/orders/validation";
-import { moneyFromForm, parseMoney, parseWholeNumber } from "@/lib/validation/numbers";
+import { optionalString, uuid } from "@/lib/orders/validation";
+import { resolveQuotationViewScope } from "@/lib/quotations/access-policy";
+import { QUOTATION_SALE_CONVERSION_PERMISSIONS } from "@/lib/quotations/sale-conversion-types";
+import {
+  buildManualSaleRpcArguments,
+  buildQuotationSaleRpcArguments,
+  normalizeConversionSaleResult,
+  parseDraftSaleInput,
+} from "@/lib/sales/create-draft-input";
+import { moneyFromForm, parseWholeNumber } from "@/lib/validation/numbers";
 import { normalizeSaleLineEdit } from "@/lib/sales/line-editing";
 import { buildSalePaymentRpcArguments } from "@/lib/sales/payment-accounting";
 
@@ -64,57 +72,83 @@ export async function updateSaleLinesAction(saleId: string, form: FormData) {
 
 export async function createSaleAction(form: FormData) {
   const { profile, permissions } = await requirePermission("sales.create");
-  const db = createSupabaseAdminClient(), customerId = uuid(form.get("customer_id"), "Customer"), warehouseId = uuid(form.get("warehouse_id"), "Warehouse");
-  const addressId = String(form.get("address_id") ?? "").trim();
-  let items;
+  let input;
   try {
-    items = jsonArray(form, "items").map((item, index) => ({
-      ...item,
-      quantity: parseWholeNumber(item.quantity, `Item ${index + 1} quantity`, { required: true, minimum: 1 }),
-      unit_price: parseMoney(item.unit_price, `Item ${index + 1} unit price`, { required: true }),
-      catalogue_price: parseMoney(item.catalogue_price ?? item.unit_price, `Item ${index + 1} catalogue price`, { required: true }),
-      line_discount: parseMoney(item.line_discount ?? 0, `Item ${index + 1} discount`, { required: true }),
-    }));
+    input = parseDraftSaleInput(form, { mode: "manual" });
   } catch (error) {
     redirect(`/admin/sales/new?error=${encodeURIComponent(error instanceof Error ? error.message : "Sale items are invalid.")}`);
   }
-  if (!items.length) redirect("/admin/sales/new?error=At%20least%20one%20product%20is%20required.");
-  const hasPriceOverride = items.some((item) => Boolean(item.price_overridden));
-  const hasDiscount = items.some((item) => Number(item.line_discount) > 0) || Number(form.get("discount_amount")) > 0;
-  if (profile.role !== "admin" && hasPriceOverride && !permissions.has("sales.change_price")) redirect("/admin/sales/new?error=Price%20override%20permission%20is%20required.");
-  if (profile.role !== "admin" && hasDiscount && !permissions.has("sales.apply_discount")) redirect("/admin/sales/new?error=Discount%20permission%20is%20required.");
-  const address = addressId ? {} : addressFromForm(form);
-  let serviceAmount: number, discountAmount: number, shippingAmount: number, taxAmount: number;
-  try {
-    serviceAmount = moneyFromForm(form, "service_amount", "Installation / service") ?? 0;
-    discountAmount = moneyFromForm(form, "discount_amount", "Order discount") ?? 0;
-    shippingAmount = moneyFromForm(form, "shipping_amount", "Shipping charge") ?? 0;
-    taxAmount = moneyFromForm(form, "tax_amount", "VAT / tax") ?? 0;
-  } catch (error) {
-    redirect(`/admin/sales/new?error=${encodeURIComponent(error instanceof Error ? error.message : "Sale totals are invalid.")}`);
-  }
-  const adjustments = items.filter((item) => item.price_overridden || Number(item.line_discount) > 0).map((item) => ({
-    order_item_id: null, adjustment_type: item.price_overridden ? "manual_unit_price" : "fixed_line_discount",
-    previous_value: Number(item.catalogue_price ?? 0), new_value: item.price_overridden ? Number(item.unit_price) : Number(item.line_discount),
-    reason: String(item.adjustment_reason || "Sales price adjustment").slice(0, 500),
-  }));
-  if (discountAmount > 0) adjustments.push({ order_item_id: null, adjustment_type: "order_discount", previous_value: 0, new_value: discountAmount, reason: String(form.get("discount_reason") || "Order discount").slice(0, 500) });
-  if (serviceAmount > 0) adjustments.push({ order_item_id: null, adjustment_type: "service_charge", previous_value: 0, new_value: serviceAmount, reason: "Installation or service charge" });
-  const billingId = String(form.get("billing_address_id") ?? "").trim();
-  const result = await db.rpc("create_minimal_sale", {
-    actor_profile_id: profile.id, requested_customer_id: customerId, requested_address_id: addressId || null, requested_address: address,
-    requested_billing_address_id: billingId || null, requested_billing_address: addressId ? null : address,
-    requested_warehouse_id: warehouseId, requested_source: String(form.get("sales_source") ?? "direct_office"),
-    requested_expected_delivery_date: String(form.get("expected_delivery_date") ?? "") || null,
-    requested_discount: discountAmount,
-    requested_shipping: shippingAmount, requested_tax: taxAmount,
-    requested_service: serviceAmount, requested_internal_notes: optionalString(form, "internal_notes", 2000),
-    requested_customer_notes: optionalString(form, "customer_notes", 2000), requested_items: items, requested_adjustments: adjustments,
-  });
+  if (profile.role !== "admin" && input.hasPriceOverride && !permissions.has("sales.change_price")) redirect("/admin/sales/new?error=Price%20override%20permission%20is%20required.");
+  if (profile.role !== "admin" && input.hasDiscount && !permissions.has("sales.apply_discount")) redirect("/admin/sales/new?error=Discount%20permission%20is%20required.");
+  const db = createSupabaseAdminClient();
+  const result = await db.rpc(
+    "create_minimal_sale",
+    buildManualSaleRpcArguments(profile.id, input),
+  );
   if (result.error || !result.data) redirect(`/admin/sales/new?error=${encodeURIComponent(safe(result.error?.message, "Unable to create sale."))}`);
   const saleId = String(result.data);
-  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "sale.created", module: "sales", entityType: "sales_order", entityId: saleId, targetProfileId: customerId, description: "Sale created.", newValues: { source: String(form.get("sales_source")), item_count: items.length } });
+  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "sale.created", module: "sales", entityType: "sales_order", entityId: saleId, targetProfileId: input.customerId, description: "Sale created.", newValues: { source: input.source, item_count: input.items.length } });
   revalidatePath("/admin/sales"); redirect(target(saleId, "success", "Draft sale created."));
+}
+
+export async function createSaleFromQuotationAction(form: FormData) {
+  const { profile, permissions } = await requireAllPermissions([
+    ...QUOTATION_SALE_CONVERSION_PERMISSIONS,
+  ]);
+  const scope = resolveQuotationViewScope(profile.role, permissions);
+  if (!scope) {
+    redirect("/admin/sales/new?error=Quotation%20access%20is%20not%20available.");
+  }
+
+  let quotationId: string;
+  try {
+    quotationId = uuid(form.get("quotation_id"), "Quotation");
+  } catch (error) {
+    redirect(`/admin/sales/new?error=${encodeURIComponent(error instanceof Error ? error.message : "Quotation is invalid.")}`);
+  }
+  const formTarget = `/admin/sales/new?quotation=${quotationId}`;
+  let input;
+  try {
+    input = parseDraftSaleInput(form, { mode: "quotation" });
+  } catch (error) {
+    redirect(`${formTarget}&error=${encodeURIComponent(error instanceof Error ? error.message : "Sale details are invalid.")}`);
+  }
+
+  const db = createSupabaseAdminClient();
+  let quotationQuery = db
+    .from("quotation_requests")
+    .select("id,status,expiration_date,converted_order_id")
+    .eq("id", quotationId);
+  if (scope === "own") {
+    quotationQuery = quotationQuery.eq("created_by", profile.id);
+  }
+  const { data: quotation, error: quotationError } = await quotationQuery.maybeSingle();
+  if (quotationError) {
+    console.error("Unable to verify quotation Sale conversion access.");
+    redirect(`${formTarget}&error=${encodeURIComponent("Unable to verify the quotation right now.")}`);
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const eligible = quotation?.status === "accepted" &&
+    quotation.converted_order_id === null &&
+    (quotation.expiration_date === null || quotation.expiration_date >= today);
+  const retry = quotation?.status === "converted_to_sale" &&
+    typeof quotation.converted_order_id === "string";
+  if (!eligible && !retry) {
+    redirect(`${formTarget}&error=${encodeURIComponent("Quotation is not eligible for Sale conversion.")}`);
+  }
+
+  const result = await db.rpc(
+    "create_sale_from_quotation",
+    buildQuotationSaleRpcArguments(profile.id, quotationId, input),
+  );
+  const sale = normalizeConversionSaleResult(result.data);
+  if (result.error || !sale) {
+    console.error("Unable to create a draft Sale from the quotation.");
+    redirect(`${formTarget}&error=${encodeURIComponent("Unable to convert the quotation to a Sale.")}`);
+  }
+  revalidatePath("/admin/sales");
+  revalidatePath(`/admin/quotations/${quotationId}/manage`);
+  redirect(target(sale.saleId, "success", "Draft sale created from quotation."));
 }
 
 export async function confirmSaleAction(saleId: string) {

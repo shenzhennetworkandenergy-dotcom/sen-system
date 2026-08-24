@@ -14,12 +14,14 @@ export function CustomerTypeahead({
   onSelectionChange,
   fieldClassName,
   labelClassName = "text-sm font-semibold",
+  locked = false,
 }: {
   customers: CustomerSearchOption[];
   selectedCustomerId: string;
   onSelectionChange: (customer: CustomerSearchOption | null) => void;
   fieldClassName: string;
   labelClassName?: string;
+  locked?: boolean;
 }) {
   const [search, setSearch] = useState("");
   const listboxId = useId();
@@ -28,13 +30,28 @@ export function CustomerTypeahead({
     [customers, selectedCustomerId],
   );
   const choices = useMemo(
-    () => filterCustomerOptions(customers, search),
-    [customers, search],
+    () => locked ? [] : filterCustomerOptions(customers, search),
+    [customers, locked, search],
   );
   const open = Boolean(search.trim() && !selectedCustomerId);
   const displayedValue = selectedCustomer
     ? customerOptionLabel(selectedCustomer)
     : search;
+
+  if (locked) {
+    return (
+      <label className={`relative block ${labelClassName}`}>
+        Customer
+        <input type="hidden" name="customer_id" value={selectedCustomerId} />
+        <input
+          value={selectedCustomer ? customerOptionLabel(selectedCustomer) : selectedCustomerId}
+          className={fieldClassName}
+          readOnly
+          aria-readonly="true"
+        />
+      </label>
+    );
+  }
 
   return (
     <div className={`relative ${labelClassName}`}>

@@ -6,6 +6,11 @@ export const QUOTATION_VIEW_PERMISSIONS = [
 
 export type QuotationViewScope = "own" | "all";
 
+export type QuotationTraceabilityLookup = {
+  convertedOrderId: string;
+  createdBy?: string;
+};
+
 export function resolveQuotationViewScope(
   role: string,
   permissions: ReadonlySet<string>,
@@ -25,6 +30,29 @@ export function mustRestrictQuotationToCreator(
   permissions: ReadonlySet<string>,
 ) {
   return resolveQuotationViewScope(role, permissions) === "own";
+}
+
+export function buildQuotationTraceabilityLookup(
+  saleId: string,
+  scope: QuotationViewScope | null,
+  profileId: string,
+): QuotationTraceabilityLookup | null {
+  if (!scope) return null;
+  if (scope === "all") return { convertedOrderId: saleId };
+  return { convertedOrderId: saleId, createdBy: profileId };
+}
+
+export function buildSaleSourceQuotationLookup(
+  saleId: string,
+  role: string,
+  permissions: ReadonlySet<string>,
+  profileId: string,
+) {
+  return buildQuotationTraceabilityLookup(
+    saleId,
+    resolveQuotationViewScope(role, permissions),
+    profileId,
+  );
 }
 
 export function canOpenQuotationDocument(

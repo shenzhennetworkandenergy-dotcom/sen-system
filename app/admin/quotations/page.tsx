@@ -2,6 +2,7 @@ import Link from "next/link";
 import { connection } from "next/server";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
+import { QuotationStatusBadge } from "@/components/quotations/QuotationStatusBadge";
 import { requireQuotationView } from "@/lib/quotations/access";
 import { canOpenQuotationDocument } from "@/lib/quotations/access-policy";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -9,6 +10,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 export const dynamic = "force-dynamic";
 
 const statuses = [
+  "draft",
   "submitted",
   "reviewing",
   "quoted",
@@ -18,6 +20,7 @@ const statuses = [
   "approved",
   "rejected",
   "expired",
+  "converted_to_sale",
   "converted_to_invoice",
   "closed",
 ];
@@ -122,9 +125,7 @@ export default async function AdminQuotationsPage({
                     {customer?.phone ?? "No phone"}
                   </p>
                 </div>
-                <span className="rounded-full bg-[var(--muted-surface)] px-3 py-1.5 text-sm font-semibold capitalize">
-                  {quotation.status.replaceAll("_", " ")}
-                </span>
+                <QuotationStatusBadge status={quotation.status} />
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 <a href={`/admin/quotations/${quotation.id}/manage`} className="inline-flex rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-semibold text-[var(--primary-foreground)]">Manage quotation</a>

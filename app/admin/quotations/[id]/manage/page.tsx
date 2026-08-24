@@ -4,6 +4,7 @@ import { connection } from "next/server";
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { QuotationOperations } from "@/components/quotations/QuotationOperations";
 import { requireQuotationView } from "@/lib/quotations/access";
+import { resolveLinkedSale } from "@/lib/quotations/traceability";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -16,7 +17,6 @@ export default async function ManageQuotationPage({
   searchParams: Promise<{
     success?: string;
     error?: string;
-    customerCreation?: string;
   }>;
 }) {
   await connection();
@@ -36,13 +36,21 @@ export default async function ManageQuotationPage({
   }
   const { data: quotation, error } = await quotationQuery.maybeSingle();
   if (error || !quotation) notFound();
+  const linkedSale = await resolveLinkedSale(
+    quotation.converted_order_id,
+    (saleId) => db
+      .from("sales_orders")
+      .select("id,order_number")
+      .eq("id", saleId)
+      .maybeSingle(),
+  );
   const customer = quotation.profiles as unknown as {
     id: string;
     full_name: string | null;
     email: string | null;
     role: string;
   };
-  const [{ data: staff }, { data: warehouses }, { data: contacts }, { data: auditRows }] =
+  const [{ data: staff }, { data: auditRows }] =
     await Promise.all([
       db
         .from("profiles")
@@ -50,16 +58,6 @@ export default async function ManageQuotationPage({
         .in("role", ["admin", "employee"])
         .eq("status", "active")
         .order("full_name"),
-      db
-        .from("warehouses")
-        .select("id,code,name")
-        .eq("is_active", true)
-        .order("name"),
-      db
-        .from("crm_contacts")
-        .select("id")
-        .eq("profile_id", quotation.profile_id)
-        .limit(1),
       db
         .from("audit_logs")
         .select("id,action,description,created_at,actor_id")
@@ -94,19 +92,17 @@ export default async function ManageQuotationPage({
         quotation={quotation}
         customer={customer}
         staff={staff ?? []}
-        warehouses={warehouses ?? []}
         audits={audits}
-        customerExists={Boolean(contacts?.length)}
-        customerCreationRequired={notice.customerCreation === "required"}
+        linkedSale={linkedSale}
         capabilities={{
           edit: can("quotations.edit"),
           assign: can("quotations.assign"),
-          requestInformation: can("quotations.edit"),
           approve: can("quotations.approve"),
           reject: can("quotations.reject"),
+          issue: can("quotations.send"),
+          recordCustomerOutcome: can("quotations.record_customer_outcome"),
           print: can("quotations.print"),
-          convert: can("quotations.convert_to_invoice"),
-          createCustomer: can("quotations.create_customer"),
+          convertToSale: can("quotations.convert_to_sale") && can("sales.create"),
           viewHistory: can("quotations.view_history"),
         }}
         success={notice.success}

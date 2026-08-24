@@ -11,23 +11,10 @@ import {
 } from "@/lib/customers/create-basic";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
-import { mustRestrictQuotationToCreator } from "@/lib/quotations/access-policy";
+import { resolveQuotationViewScope } from "@/lib/quotations/access-policy";
 import { parseQuotationItems } from "@/lib/quotations/create";
 import { defaultQuotationExpiration } from "@/lib/quotations/validity";
-
-const statuses = new Set([
-  "submitted",
-  "reviewing",
-  "additional_info_required",
-  "quoted",
-  "approved",
-  "rejected",
-  "accepted",
-  "declined",
-  "closed",
-  "expired",
-  "converted_to_invoice",
-]);
+import { isQuotationImmutable } from "@/lib/quotations/workflow";
 
 export type QuotationCustomerActionState = {
   status: "idle" | "success" | "error";
@@ -164,7 +151,7 @@ export async function createQuotationAction(form: FormData) {
   const { data: quotation, error } = await db.from("quotation_requests").insert({
     reference,
     profile_id: customer.id,
-    status: "quoted",
+    status: "draft",
     subject: String(
       form.get("subject") ||
         `Quotation for ${productMap.get(requestedItems[0].productId)?.name ?? "products"}`,
@@ -239,48 +226,28 @@ export async function createQuotationAction(form: FormData) {
 
 export async function updateQuotationAction(
   quotationId: string,
-  form: FormData,
+  _form: FormData,
 ) {
+  void _form;
   const { profile, permissions } = await requirePermission("quotations.edit");
-  const status = String(form.get("status") ?? "");
-  if (!statuses.has(status)) {
-    redirect("/admin/quotations?error=Invalid%20quotation%20status.");
+  const scope = resolveQuotationViewScope(profile.role, permissions);
+  if (!scope) {
+    redirect("/admin/quotations?error=Quotation%20access%20denied.");
   }
-
   const db = createSupabaseAdminClient();
   let quotationQuery = db
     .from("quotation_requests")
-    .select("id")
+    .select("id,status")
     .eq("id", quotationId);
-  if (mustRestrictQuotationToCreator(profile.role, permissions)) {
+  if (scope === "own") {
     quotationQuery = quotationQuery.eq("created_by", profile.id);
   }
   const { data: quotation } = await quotationQuery.maybeSingle();
   if (!quotation) {
     redirect("/admin/quotations?error=Quotation%20not%20found.");
   }
-  const { error } = await db
-    .from("quotation_requests")
-    .update({
-      status,
-      assigned_to: profile.id,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", quotationId);
-  if (error) {
-    redirect("/admin/quotations?error=Unable%20to%20update%20quotation.");
+  if (isQuotationImmutable(quotation.status)) {
+    redirect("/admin/quotations?error=An%20immutable%20quotation%20cannot%20be%20updated.");
   }
-
-  await writeAuditLog({
-    actorId: profile.id,
-    actorRole: profile.role,
-    action: "quotation.status_updated",
-    module: "quotations",
-    entityType: "quotation_request",
-    entityId: quotationId,
-    description: `Quotation status changed to ${status}.`,
-    newValues: { status },
-  });
-  revalidatePath("/admin/quotations");
-  redirect("/admin/quotations?success=Quotation%20updated.");
+  redirect("/admin/quotations?error=Use%20a%20dedicated%20quotation%20workflow%20action.");
 }

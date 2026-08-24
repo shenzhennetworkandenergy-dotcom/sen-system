@@ -29,6 +29,7 @@
     "test:product-media-upload": "node scripts/verify-product-media-upload.mjs",
     "test:sale-product-search": "node scripts/verify-sale-product-search.mjs",
     "test:quotation-document": "node scripts/verify-quotation-document.mjs",
+    "test:native": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/stock-out-migration.test.mts tests/stock-out-native-schema.test.mts tests/quotation-to-sale-native-schema.test.mts",
     "test:standalone": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/*.mts",
     "test:crm": "node scripts/verify-crm.mjs",
     "test:variable-products": "node scripts/verify-variable-products.mjs",
@@ -52,7 +53,8 @@
     "products:stage-woocommerce": "node scripts/import-woocommerce-products.mjs --stage",
     "products:import-woocommerce": "node scripts/import-woocommerce-products.mjs --import",
     "products:verify-woocommerce": "node scripts/import-woocommerce-products.mjs --verify",
-    "test:stock-out": "node --env-file=.env.local --env-file-if-exists=.env.stock-out.local scripts/verify-stock-out-database.mjs"
+    "test:stock-out": "node --env-file=.env.local --env-file-if-exists=.env.stock-out.local scripts/verify-stock-out-database.mjs",
+    "test:quotation-to-sale-database": "node scripts/verify-quotation-to-sale-database.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

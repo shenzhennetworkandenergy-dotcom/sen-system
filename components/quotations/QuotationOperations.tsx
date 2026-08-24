@@ -1,13 +1,24 @@
 import Link from "next/link";
 
 import {
+  acceptQuotationAction,
   approveQuotationAction,
   assignQuotationAction,
-  convertQuotationToInvoiceAction,
+  declineQuotationAction,
+  issueQuotationAction,
   rejectQuotationAction,
-  requestQuotationInformationAction,
   updateQuotationDetailsAction,
 } from "@/app/admin/quotations/workflow-actions";
+import { QuotationStatusBadge } from "@/components/quotations/QuotationStatusBadge";
+import {
+  canTransitionQuotation,
+  isQuotationImmutable,
+  isQuotationSaleEligible,
+} from "@/lib/quotations/workflow";
+import {
+  getConvertedSaleLink,
+  getLegacyInvoiceConversion,
+} from "@/lib/quotations/traceability";
 
 type Quotation = {
   id: string;
@@ -42,16 +53,15 @@ type Person = {
   role: string;
 };
 
-type Warehouse = { id: string; code: string; name: string };
 type Capabilities = {
   edit: boolean;
   assign: boolean;
-  requestInformation: boolean;
   approve: boolean;
   reject: boolean;
+  issue: boolean;
+  recordCustomerOutcome: boolean;
   print: boolean;
-  convert: boolean;
-  createCustomer: boolean;
+  convertToSale: boolean;
   viewHistory: boolean;
 };
 type Audit = {
@@ -61,9 +71,8 @@ type Audit = {
   created_at: string;
   actor: { full_name: string | null; email: string | null } | null;
 };
+type LinkedSale = { id: string; orderNumber: string } | null;
 
-const statusLabel = (status: string) =>
-  status.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 const money = (value: number, currency = "BDT") =>
   `${currency} ${Number(value ?? 0).toLocaleString("en-BD", {
     minimumFractionDigits: 2,
@@ -74,10 +83,8 @@ export function QuotationOperations({
   quotation,
   customer,
   staff,
-  warehouses,
   audits,
-  customerExists,
-  customerCreationRequired,
+  linkedSale,
   capabilities,
   success,
   error,
@@ -85,17 +92,46 @@ export function QuotationOperations({
   quotation: Quotation;
   customer: Person;
   staff: Person[];
-  warehouses: Warehouse[];
   audits: Audit[];
-  customerExists: boolean;
-  customerCreationRequired: boolean;
+  linkedSale: LinkedSale;
   capabilities: Capabilities;
   success?: string;
   error?: string;
 }) {
-  const converted = quotation.status === "converted_to_invoice";
-  const approved = ["approved", "accepted"].includes(quotation.status);
-  const convertAction = convertQuotationToInvoiceAction.bind(null, quotation.id);
+  const immutable = isQuotationImmutable(quotation.status);
+  const convertedSaleLink = getConvertedSaleLink(quotation.status, linkedSale);
+  const legacyInvoiceConversion = getLegacyInvoiceConversion(
+    quotation.status,
+    quotation.converted_order_id,
+    quotation.converted_invoice_id,
+  );
+  const canApprove =
+    capabilities.approve && canTransitionQuotation(quotation.status, "approve");
+  const canReject =
+    capabilities.reject && canTransitionQuotation(quotation.status, "reject");
+  const canIssue =
+    capabilities.issue && canTransitionQuotation(quotation.status, "issue");
+  const canAccept =
+    capabilities.recordCustomerOutcome &&
+    canTransitionQuotation(
+      quotation.status,
+      "accept",
+      quotation.expiration_date,
+      new Date().toISOString().slice(0, 10),
+    );
+  const canDecline =
+    capabilities.recordCustomerOutcome &&
+    canTransitionQuotation(quotation.status, "decline");
+  const canCreateSale =
+    capabilities.convertToSale &&
+    isQuotationSaleEligible(
+      {
+        status: quotation.status,
+        expirationDate: quotation.expiration_date,
+        convertedOrderId: quotation.converted_order_id,
+      },
+      new Date().toISOString().slice(0, 10),
+    );
 
   return (
     <section className="mx-auto mb-6 max-w-6xl space-y-5 print:hidden">
@@ -112,9 +148,7 @@ export function QuotationOperations({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-full bg-indigo-50 px-4 py-2 text-sm font-bold text-indigo-800">
-            {statusLabel(quotation.status)}
-          </span>
+          <QuotationStatusBadge status={quotation.status} />
           {capabilities.print ? (
             <Link
               href={`/admin/quotations/${quotation.id}`}
@@ -155,12 +189,14 @@ export function QuotationOperations({
         ))}
       </div>
 
-      {!converted &&
+      {!immutable &&
       (capabilities.edit ||
         capabilities.assign ||
-        capabilities.requestInformation ||
-        capabilities.approve ||
-        capabilities.reject) ? (
+        canApprove ||
+        canReject ||
+        canIssue ||
+        canAccept ||
+        canDecline) ? (
         <div className="grid gap-5 lg:grid-cols-[1.6fr_1fr]">
           {capabilities.edit ? (
             <form
@@ -293,36 +329,14 @@ export function QuotationOperations({
               </form>
             ) : null}
 
-            {capabilities.requestInformation ||
-            capabilities.approve ||
-            capabilities.reject ? (
+            {canApprove || canReject || canIssue || canAccept || canDecline ? (
               <div className="rounded-2xl border bg-white p-5 shadow-sm">
-              <h2 className="text-lg font-black">Review decision</h2>
+              <h2 className="text-lg font-black">Quotation workflow</h2>
               <p className="mt-1 text-sm text-slate-600">
-                Request clarification, approve, or reject with an internal note.
+                Record only the next valid internal or customer outcome.
               </p>
-              {capabilities.requestInformation ? (
-                <form
-                  action={requestQuotationInformationAction.bind(
-                    null,
-                    quotation.id,
-                  )}
-                  className="mt-3"
-                >
-                <textarea
-                  name="note"
-                  required
-                  rows={2}
-                  placeholder="Information needed from customer"
-                  className="w-full rounded-xl border px-3 py-2.5"
-                />
-                <button className="mt-2 w-full rounded-xl border border-amber-300 bg-amber-50 px-4 py-2.5 font-bold text-amber-900">
-                  Request additional information
-                </button>
-                </form>
-              ) : null}
               <div className="mt-3 flex flex-wrap gap-2">
-                {capabilities.approve ? (
+                {canApprove ? (
                   <form
                     action={approveQuotationAction.bind(null, quotation.id)}
                     className="min-w-32 flex-1"
@@ -333,7 +347,7 @@ export function QuotationOperations({
                   </button>
                   </form>
                 ) : null}
-                {capabilities.reject ? (
+                {canReject ? (
                   <form
                     action={rejectQuotationAction.bind(null, quotation.id)}
                     className="min-w-32 flex-1"
@@ -344,84 +358,107 @@ export function QuotationOperations({
                   </button>
                   </form>
                 ) : null}
+                {canIssue ? (
+                  <form
+                    action={issueQuotationAction.bind(null, quotation.id)}
+                    className="min-w-32 flex-1"
+                  >
+                    <input type="hidden" name="note" value="Issued to customer." />
+                    <button className="w-full rounded-xl bg-sky-600 px-4 py-2.5 font-bold text-white">
+                      Issue to customer
+                    </button>
+                  </form>
+                ) : null}
+                {canAccept ? (
+                  <form
+                    action={acceptQuotationAction.bind(null, quotation.id)}
+                    className="min-w-32 flex-1"
+                  >
+                    <button className="w-full rounded-xl bg-emerald-600 px-4 py-2.5 font-bold text-white">
+                      Record customer acceptance
+                    </button>
+                  </form>
+                ) : null}
               </div>
+              {canDecline ? (
+                <form
+                  action={declineQuotationAction.bind(null, quotation.id)}
+                  className="mt-3"
+                >
+                  <label className="text-sm font-bold">
+                    Customer decline reason
+                    <textarea
+                      name="reason"
+                      required
+                      minLength={1}
+                      maxLength={2000}
+                      rows={2}
+                      className="mt-1 w-full rounded-xl border px-3 py-2.5 font-normal"
+                    />
+                  </label>
+                  <button className="mt-2 w-full rounded-xl bg-red-600 px-4 py-2.5 font-bold text-white">
+                    Record customer decline
+                  </button>
+                </form>
+              ) : null}
               </div>
             ) : null}
           </div>
         </div>
       ) : null}
 
-      {approved &&
-      capabilities.convert &&
-      (customerExists || capabilities.createCustomer) ? (
+      {canCreateSale ? (
         <div className="rounded-2xl border border-indigo-200 bg-indigo-50 p-5">
           <h2 className="text-xl font-black text-indigo-950">
-            Convert to Sales Invoice
+            Create Sale
           </h2>
           <p className="mt-1 text-sm text-indigo-900">
-            The invoice, sales order, products, prices, discounts, tax, notes,
-            and address snapshots are created together in one database
-            transaction.
+            Start a draft Sale from this accepted, current quotation.
           </p>
-          {!customerExists || customerCreationRequired ? (
-            <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-amber-950">
-              <b>This customer does not currently exist in the CRM customer database.</b>
-              <p className="mt-1 text-sm">
-                Create a linked customer from the website profile and quotation
-                information, then convert the quotation.
-              </p>
-            </div>
-          ) : null}
-          <form action={convertAction} className="mt-4 flex flex-wrap gap-3">
-            <select
-              name="warehouse_id"
-              required
-              className="min-w-72 flex-1 rounded-xl border px-4 py-3"
-            >
-              <option value="">Choose fulfilment warehouse</option>
-              {warehouses.map((warehouse) => (
-                <option key={warehouse.id} value={warehouse.id}>
-                  {warehouse.code} · {warehouse.name}
-                </option>
-              ))}
-            </select>
-            <input
-              type="hidden"
-              name="create_customer"
-              value={!customerExists || customerCreationRequired ? "true" : "false"}
-            />
-            <button className="rounded-xl bg-indigo-700 px-5 py-3 font-black text-white">
-              {!customerExists || customerCreationRequired
-                ? "Create Customer and Convert"
-                : "Convert to Sales Invoice"}
-            </button>
-          </form>
+          <Link
+            href={`/admin/sales/new?quotation=${quotation.id}`}
+            className="mt-4 inline-flex rounded-xl bg-indigo-700 px-5 py-3 font-black text-white"
+          >
+            Create Sale from quotation
+          </Link>
         </div>
       ) : null}
 
-      {converted ? (
+      {convertedSaleLink ? (
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-emerald-950">
+          <span className="font-bold">{convertedSaleLink.label}:</span>{" "}
+          <Link
+            href={convertedSaleLink.href}
+            className="font-bold underline"
+          >
+            {convertedSaleLink.number}
+          </Link>
+        </div>
+      ) : null}
+
+      {legacyInvoiceConversion ? (
         <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
           <h2 className="text-xl font-black text-emerald-950">
-            Converted to Invoice
+            {legacyInvoiceConversion.title}
           </h2>
           <p className="mt-1 text-emerald-900">
-            This quotation is locked and linked to its sales records.
+            {legacyInvoiceConversion.description}
           </p>
           <div className="mt-4 flex flex-wrap gap-3">
-            {quotation.converted_order_id ? (
+            {legacyInvoiceConversion.saleLink ? (
               <Link
-                href={`/admin/sales/${quotation.converted_order_id}`}
+                href={legacyInvoiceConversion.saleLink.href}
                 className="rounded-xl border border-emerald-300 bg-white px-4 py-2.5 font-bold"
               >
-                Open sales order
+                {legacyInvoiceConversion.saleLink.label}
               </Link>
             ) : null}
-            {quotation.converted_order_id && quotation.converted_invoice_id ? (
+            {legacyInvoiceConversion.invoiceLink ? (
               <Link
-                href={`/admin/sales/${quotation.converted_order_id}/documents/${quotation.converted_invoice_id}`}
+                href={legacyInvoiceConversion.invoiceLink.href}
                 className="rounded-xl bg-emerald-700 px-4 py-2.5 font-bold text-white"
               >
-                Open sales invoice
+                {legacyInvoiceConversion.invoiceLink.label}
               </Link>
             ) : null}
           </div>
@@ -435,7 +472,7 @@ export function QuotationOperations({
           {audits.map((audit) => (
             <div key={audit.id} className="grid gap-1 py-3 sm:grid-cols-[1fr_auto]">
               <div>
-                <b>{statusLabel(audit.action.replace("quotation.", ""))}</b>
+                <b>{audit.action.replace("quotation.", "").replaceAll("_", " ")}</b>
                 <p className="text-sm text-slate-600">
                   {audit.description || "Quotation activity recorded."}
                 </p>
