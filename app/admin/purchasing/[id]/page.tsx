@@ -65,15 +65,6 @@ export default async function PurchaseOrderPage({
     ? data.allCarriers.filter((carrier) =>
         carrier.status === "active" || carrier.id === inbound.carrier_id)
     : [];
-  const serialsByItem = new Map<string, typeof data.serials>();
-  for (const serial of data.serials) {
-    const itemSerials = serialsByItem.get(serial.purchase_order_item_id) ?? [];
-    itemSerials.push(serial);
-    serialsByItem.set(serial.purchase_order_item_id, itemSerials);
-  }
-  const serialGenerationExpected = !["draft", "pending_approval", "approved", "cancelled"].includes(
-    order.status,
-  );
 
   return (
     <DashboardShell
