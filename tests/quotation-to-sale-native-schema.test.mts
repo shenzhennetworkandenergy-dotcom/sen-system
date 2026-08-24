@@ -11,6 +11,9 @@ const viewOwnMigration = normalizeNewlines(
 const quotationToSaleMigration = normalizeNewlines(
   await readFile("supabase/migrations/202608230004_quotation_to_sale.sql", "utf8"),
 ).trim();
+const stockOutReleaseQuantityMigration = normalizeNewlines(
+  await readFile("supabase/migrations/202608240001_stock_out_authoritative_release_quantity.sql", "utf8"),
+).trim();
 
 const expectedMigrationOrder = [
   "202608190001_purchase_carrier_management.sql",
@@ -18,6 +21,7 @@ const expectedMigrationOrder = [
   "202608220001_employee_stock_out_product_release.sql",
   "202608230003_quotation_view_own.sql",
   "202608230004_quotation_to_sale.sql",
+  "202608240001_stock_out_authoritative_release_quantity.sql",
 ];
 
 function normalizeNewlines(value: string) {
@@ -59,22 +63,24 @@ test("native builder reads and applies every established migration in exact orde
   assert.deepEqual(applyOrder, expectedMigrationOrder);
 });
 
-test("native schema is the exact ordered quotation migration bodies before native grants", () => {
+test("native schema keeps quotation migrations together before the later Stock Out hotfix", () => {
   const viewOwnPosition = schema.indexOf(viewOwnMigration);
   const conversionPosition = schema.indexOf(quotationToSaleMigration);
+  const stockOutHotfixPosition = schema.indexOf(stockOutReleaseQuantityMigration);
   const nativeGrantsPosition = schema.indexOf(
     "-- Native application service access. Browser users never receive this role.",
   );
 
   assert.ok(viewOwnPosition >= 0, "native schema must contain the complete View Own migration");
   assert.ok(conversionPosition > viewOwnPosition, "conversion must follow View Own");
-  assert.ok(nativeGrantsPosition > conversionPosition, "native grants must follow both migrations");
+  assert.ok(stockOutHotfixPosition > conversionPosition, "the later Stock Out hotfix must follow quotation conversion");
+  assert.ok(nativeGrantsPosition > stockOutHotfixPosition, "native grants must follow every migration");
   assert.equal(countMatches(schema, /alter table public\.quotation_requests\n  add column if not exists created_by uuid/g), 1);
   assert.equal(countMatches(schema, /create or replace function public\.create_sale_from_quotation\(/g), 1);
-  assert.equal(schema.slice(viewOwnPosition, nativeGrantsPosition), `${viewOwnMigration}\n\n${quotationToSaleMigration}\n\n`);
+  assert.equal(schema.slice(viewOwnPosition, stockOutHotfixPosition), `${viewOwnMigration}\n\n${quotationToSaleMigration}\n\n`);
 
   assert.doesNotMatch(
-    schema.slice(viewOwnPosition, nativeGrantsPosition),
+    schema.slice(viewOwnPosition, stockOutHotfixPosition),
     /\b(?:purchase|inventory|accounting|shipment|stock[ _-]?out|hr)\b/i,
   );
 });

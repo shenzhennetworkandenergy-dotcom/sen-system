@@ -163,12 +163,12 @@ export function StockOutReleaseForm({
   const [quantities, setQuantities] = useState<Record<string, number>>(() =>
     Object.fromEntries(items.map((item) => [
       item.requestItemId,
-      Math.max(0, Math.min(item.remainingQuantity, item.packedRemainingQuantity)),
+      Math.max(0, item.remainingQuantity),
     ])),
   );
   const [selectedSerials, setSelectedSerials] = useState<Record<string, string[]>>(() =>
     Object.fromEntries(items.map((item) => {
-      const quantity = Math.max(0, Math.min(item.remainingQuantity, item.packedRemainingQuantity));
+      const quantity = Math.max(0, item.remainingQuantity);
       return [item.requestItemId, item.preassignedSerials.slice(0, quantity).map((serial) => serial.id)];
     })),
   );
@@ -222,7 +222,7 @@ export function StockOutReleaseForm({
                 <input
                   type="number"
                   min={0}
-                  max={Math.min(item.remainingQuantity, item.packedRemainingQuantity)}
+                  max={item.remainingQuantity}
                   step={1}
                   value={quantities[item.requestItemId] ?? 0}
                   onChange={(event) => {

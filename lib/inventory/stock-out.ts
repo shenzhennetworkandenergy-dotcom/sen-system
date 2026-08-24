@@ -11,7 +11,6 @@ export type StockOutQuantity = {
 
 export type ReleaseQuantityValidation = {
   remaining: number;
-  packedRemaining: number;
   reserved: number;
   onHand: number;
   quantity: number;
@@ -85,7 +84,6 @@ export function isRevisionQuantityValid(required: number, released: number) {
 
 export function validateReleaseQuantity({
   remaining,
-  packedRemaining,
   reserved,
   onHand,
   quantity,
@@ -96,9 +94,6 @@ export function validateReleaseQuantity({
   }
   if (releaseQuantity > finiteQuantity(remaining)) {
     return "Release quantity exceeds the request's remaining quantity.";
-  }
-  if (releaseQuantity > finiteQuantity(packedRemaining)) {
-    return "Release quantity exceeds the quantity that has been packed.";
   }
   if (releaseQuantity > finiteQuantity(reserved)) {
     return "Release quantity exceeds the reserved quantity.";

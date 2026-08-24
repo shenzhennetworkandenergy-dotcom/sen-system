@@ -1,6 +1,25 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import pg from "pg";
+
+const baselineMigration = await readFile(
+  new URL("../supabase/migrations/202608220001_employee_stock_out_product_release.sql", import.meta.url),
+  "utf8",
+);
+const releaseQuantityMigration = await readFile(
+  new URL("../supabase/migrations/202608240001_stock_out_authoritative_release_quantity.sql", import.meta.url),
+  "utf8",
+);
+const confirmationFunctionStart = baselineMigration.indexOf(
+  "create or replace function public.confirm_sales_stock_out(",
+);
+const confirmationFunctionEnd = baselineMigration.indexOf("\nend $$;", confirmationFunctionStart);
+assert.ok(confirmationFunctionStart >= 0 && confirmationFunctionEnd > confirmationFunctionStart);
+const baselineConfirmationFunction = baselineMigration.slice(
+  confirmationFunctionStart,
+  confirmationFunctionEnd + "\nend $$;".length,
+);
 
 const databaseUrl = process.env.STOCK_OUT_DATABASE_URL ?? process.env.DATABASE_URL;
 if (!databaseUrl) {
@@ -42,6 +61,24 @@ try {
     "Apply the additive Stock Out migration before running this verification.");
 
   await query("begin");
+  await query(baselineConfirmationFunction);
+  const productionBaselineDefinition = (await one(`select pg_get_functiondef(
+    'public.confirm_sales_stock_out(uuid,uuid,uuid,jsonb)'::regprocedure
+  ) function_definition`)).function_definition;
+  assert.match(
+    productionBaselineDefinition,
+    /packed_quantity\s*:=/i,
+    "The production baseline must reproduce the obsolete packed-quantity guard.",
+  );
+  await query(releaseQuantityMigration);
+  const correctedDefinition = (await one(`select pg_get_functiondef(
+    'public.confirm_sales_stock_out(uuid,uuid,uuid,jsonb)'::regprocedure
+  ) function_definition`)).function_definition;
+  assert.doesNotMatch(
+    correctedDefinition,
+    /packed_quantity\s*:=/i,
+    "The hotfix migration must remove only the obsolete packed-quantity guard.",
+  );
   await query("select set_config('sen.actor_role','service_role',true)");
   const fixture = {
     admin: id(), employee: id(), customer: id(), warehouse: id(), product: id(),
@@ -99,7 +136,7 @@ try {
     id,order_id,product_id,fulfillment_warehouse_id,quantity,packed_quantity,
     unit_price,line_subtotal,line_total,currency,serial_tracking_required_snapshot,
     product_name_snapshot,sku_snapshot
-  ) values($1,$2,$3,$4,3,3,100,300,300,'BDT',false,$5,$6)`, [
+  ) values($1,$2,$3,$4,3,0,100,300,300,'BDT',false,$5,$6)`, [
     fixture.orderItem, fixture.order, fixture.product, fixture.warehouse,
     "Rollback Stock Out Product", `RB-STO-${stamp}`,
   ]);
@@ -133,6 +170,21 @@ try {
   assert.equal(Number((await one("select count(*) count from public.sales_stock_out_requests where id=$1 and status in('pending_release','partially_released')", [request.id])).count), 1,
     "One pending invoice must count as one badge request, not three units.");
   const requestItem = await one("select * from public.sales_stock_out_request_items where request_id=$1", [request.id]);
+
+  await expectDatabaseError(() => query(
+    "select public.confirm_sales_stock_out($1,$2,$3,$4::jsonb)",
+    [fixture.employee, request.id, id(), JSON.stringify({
+      request_version: Number(request.version),
+      items: [{ request_item_id: requestItem.id, quantity: 0, serial_ids: [] }],
+    })],
+  ), /positive whole number|greater than zero|at least one product/i);
+  await expectDatabaseError(() => query(
+    "select public.confirm_sales_stock_out($1,$2,$3,$4::jsonb)",
+    [fixture.employee, request.id, id(), JSON.stringify({
+      request_version: Number(request.version),
+      items: [{ request_item_id: requestItem.id, quantity: 4, serial_ids: [] }],
+    })],
+  ), /remaining quantity/i);
 
   const firstReleaseToken = id();
   const firstPayload = { request_version: Number(request.version), items: [{
@@ -344,7 +396,7 @@ try {
     id,order_id,product_id,fulfillment_warehouse_id,quantity,allocated_quantity,packed_quantity,
     unit_price,line_subtotal,line_total,currency,serial_tracking_required_snapshot,
     product_name_snapshot,sku_snapshot
-  ) values($1,$2,$3,$4,2,2,2,100,200,200,'BDT',true,$5,$6)`, [
+  ) values($1,$2,$3,$4,2,2,0,100,200,200,'BDT',true,$5,$6)`, [
     serialItem, serialOrder, serialProduct, fixture.warehouse,
     "Rollback Serialized Product", `RB-SER-${stamp}`,
   ]);

@@ -17119,7 +17119,8 @@ ALTER TABLE public.work_locations ENABLE ROW LEVEL SECURITY;
 
 begin;
 
--- Extend the existing carrier master without changing historical shipment text.
+-- Additive-only carrier master fields. Existing rows and historical carrier
+-- name snapshots remain unchanged.
 alter table public.purchase_carriers
   add column if not exists phone_number text,
   add column if not exists address text,
@@ -17143,27 +17144,8 @@ end $$;
 create index if not exists purchase_inbound_shipments_carrier_id_idx
   on public.purchase_inbound_shipments(carrier_id) where carrier_id is not null;
 
--- Preserve unmatched legacy names as inactive master records, then link every
--- historical shipment that can be linked. carrier_name remains as its snapshot.
-insert into public.purchase_carriers(name,status)
-select distinct trim(shipment.carrier_name),'inactive'
-from public.purchase_inbound_shipments shipment
-where nullif(trim(shipment.carrier_name),'') is not null
-  and not exists (
-    select 1 from public.purchase_carriers carrier
-    where lower(trim(carrier.name))=lower(trim(shipment.carrier_name))
-  )
-on conflict do nothing;
-
-update public.purchase_inbound_shipments shipment
-set carrier_id=carrier.id
-from public.purchase_carriers carrier
-where shipment.carrier_id is null
-  and nullif(trim(shipment.carrier_name),'') is not null
-  and lower(trim(carrier.name))=lower(trim(shipment.carrier_name));
-
--- New application calls use a carrier ID. The established transition remains
--- available for old history/clients while this wrapper snapshots the carrier name.
+-- New application calls use a carrier ID while the established transition
+-- and every historical carrier_name snapshot remain available unchanged.
 create or replace function public.transition_purchase_inbound_shipment_with_carrier(
   actor_profile_id uuid,
   requested_order_id uuid,
@@ -20571,6 +20553,91 @@ grant execute on function public.create_sale_from_quotation(
 ) to service_role;
 
 commit;
+
+-- Stock Out is the physical warehouse release point. Packing is preparation
+-- only, so it must not cap an otherwise valid request's release quantity.
+--
+-- Replace only the obsolete packed-quantity guard in the existing atomic
+-- confirmation function. Every permission, warehouse, remaining, reservation,
+-- physical-stock, serial, concurrency, idempotency, movement, and audit check
+-- remains in the original function definition.
+do $migration$
+declare
+  function_signature regprocedure:=to_regprocedure(
+    'public.confirm_sales_stock_out(uuid,uuid,uuid,jsonb)'
+  );
+  function_definition text;
+  updated_definition text;
+  packed_guard_start integer;
+  physical_balance_start integer;
+begin
+  if function_signature is null then
+    raise exception 'confirm_sales_stock_out(uuid,uuid,uuid,jsonb) is required';
+  end if;
+
+  select pg_catalog.pg_get_functiondef(function_signature::oid)
+  into function_definition;
+
+  packed_guard_start:=pg_catalog.strpos(
+    lower(function_definition),
+    'packed_quantity:='
+  );
+  if packed_guard_start=0 then
+    packed_guard_start:=pg_catalog.strpos(
+      lower(function_definition),
+      'packed_quantity :='
+    );
+  end if;
+  physical_balance_start:=pg_catalog.strpos(
+    lower(function_definition),
+    'select * into balance'
+  );
+
+  -- Reapplying the migration is safe when the same correction is already in
+  -- place, provided the authoritative safety checks are still present.
+  if packed_guard_start=0 then
+    if pg_catalog.strpos(lower(function_definition),'request_item.remaining_quantity')=0
+      or pg_catalog.strpos(lower(function_definition),'balance.reserved')=0
+      or pg_catalog.strpos(lower(function_definition),'balance.on_hand')=0
+      or pg_catalog.strpos(lower(function_definition),'array_length(selected_serial_ids')=0
+    then
+      raise exception 'The Stock Out function is missing a required safety validation';
+    end if;
+    return;
+  end if;
+
+  if physical_balance_start=0 or physical_balance_start<=packed_guard_start then
+    raise exception 'The expected packed-quantity Stock Out guard was not found';
+  end if;
+
+  updated_definition:=
+    substring(function_definition from 1 for packed_guard_start-1)
+    || E'\n    '
+    || substring(function_definition from physical_balance_start);
+
+  if pg_catalog.strpos(lower(updated_definition),'packed_quantity:=')>0
+    or pg_catalog.strpos(lower(updated_definition),'packed_quantity :=')>0
+  then
+    raise exception 'The obsolete packed-quantity Stock Out guard was not removed';
+  end if;
+  if pg_catalog.strpos(lower(updated_definition),'request_item.remaining_quantity')=0 then
+    raise exception 'The authoritative request remaining-quantity guard is missing';
+  end if;
+  if pg_catalog.strpos(lower(updated_definition),'balance.reserved')=0
+    or pg_catalog.strpos(lower(updated_definition),'balance.on_hand')=0
+    or pg_catalog.strpos(lower(updated_definition),'array_length(selected_serial_ids')=0
+  then
+    raise exception 'A required Stock Out safety validation is missing';
+  end if;
+
+  execute updated_definition;
+end
+$migration$;
+
+revoke all on function public.confirm_sales_stock_out(uuid,uuid,uuid,jsonb)
+  from public,anon,authenticated;
+grant execute on function public.confirm_sales_stock_out(uuid,uuid,uuid,jsonb)
+  to service_role;
 
 -- Native application service access. Browser users never receive this role.
 grant usage on schema public to service_role;
