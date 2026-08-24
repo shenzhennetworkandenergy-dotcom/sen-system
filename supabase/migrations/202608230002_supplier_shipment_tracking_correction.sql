@@ -134,4 +134,3 @@ grant execute on function public.correct_purchase_inbound_shipment_tracking(
 notify pgrst, 'reload schema';
 
 commit;
-
