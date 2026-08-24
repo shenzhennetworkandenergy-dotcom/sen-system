@@ -6,6 +6,7 @@ import { requireAllPermissions, requirePermission } from "@/lib/auth/permissions
 import { writeAuditLog } from "@/lib/audit/log";
 import { normalizeCurrencyCode } from "@/lib/currency/currencies";
 import { normalizePurchaseCarrier } from "@/lib/purchasing/carriers";
+import { normalizeSupplierShipmentTrackingCorrection } from "@/lib/purchasing/shipment-tracking-correction";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { jsonArray, optionalString, requiredString, uuid } from "@/lib/orders/validation";
 import { moneyFromForm, parseMoney, parseWholeNumber, wholeNumberFromForm } from "@/lib/validation/numbers";
@@ -14,7 +15,7 @@ const purchasingPath = "/admin/purchasing";
 const target = (id: string | null, kind: "success" | "error", message: string) =>
   `${id ? `${purchasingPath}/${id}` : purchasingPath}?${kind}=${encodeURIComponent(message)}`;
 const safeMessage = (message: string | undefined, fallback: string) =>
-  message && /purchase|supplier|warehouse|product|variation|quantity|cost|amount|date|draft|approval|ordered|receive|serial|permission|stock|carrier/i.test(message)
+  message && /purchase|supplier|shipment|warehouse|product|variation|quantity|cost|amount|date|draft|approval|ordered|receive|serial|permission|stock|carrier|tracking|cancelled|correct/i.test(message)
     ? message
     : fallback;
 
@@ -290,6 +291,59 @@ export async function receivePurchaseOrderAction(purchaseId: string, form: FormD
   revalidatePath("/admin/products");
   revalidatePath("/admin/serials");
   redirect(target(purchaseId, "success", "Purchase receipt confirmed, inventory updated, and unique SEN serials generated for serialized units."));
+}
+
+export async function correctPurchaseInboundShipmentTrackingAction(
+  purchaseId: string,
+  shipmentId: string,
+  form: FormData,
+) {
+  const { profile } = await requireAllPermissions(["purchasing.edit", "shipments.create"]);
+  const db = createSupabaseAdminClient();
+  const current = await db
+    .from("purchase_inbound_shipments")
+    .select("tracking_number")
+    .eq("id", shipmentId)
+    .eq("purchase_order_id", purchaseId)
+    .maybeSingle();
+
+  if (current.error || !current.data) {
+    redirect(target(purchaseId, "error", "Supplier inbound shipment was not found."));
+  }
+
+  let correction: ReturnType<typeof normalizeSupplierShipmentTrackingCorrection>;
+  try {
+    correction = normalizeSupplierShipmentTrackingCorrection(form, current.data.tracking_number);
+    purchaseId = uuid(purchaseId, "Purchase order");
+    shipmentId = uuid(shipmentId, "Supplier shipment");
+  } catch (error) {
+    redirect(target(
+      purchaseId,
+      "error",
+      error instanceof Error ? error.message : "Carrier or tracking information is invalid.",
+    ));
+  }
+
+  const result = await db.rpc("correct_purchase_inbound_shipment_tracking", {
+    actor_profile_id: profile.id,
+    requested_purchase_order_id: purchaseId,
+    requested_shipment_id: shipmentId,
+    requested_carrier_id: correction.carrierId,
+    requested_tracking_number: correction.trackingNumber,
+    requested_reason: correction.reason,
+  });
+
+  if (result.error) {
+    redirect(target(
+      purchaseId,
+      "error",
+      safeMessage(result.error.message, "Unable to correct supplier shipment tracking."),
+    ));
+  }
+
+  revalidatePath(`${purchasingPath}/${purchaseId}`);
+  revalidatePath("/admin/shipments");
+  redirect(target(purchaseId, "success", "Supplier carrier and tracking information updated."));
 }
 
 export async function createSupplierAction(form: FormData) {

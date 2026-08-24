@@ -5,7 +5,9 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { PurchaseCarrierManager } from "@/components/purchasing/PurchaseCarrierManager";
 import { requirePermission } from "@/lib/auth/permissions";
 import { getPurchaseOrder } from "@/lib/purchasing/data";
+import { canCorrectSupplierShipmentTracking } from "@/lib/purchasing/shipment-tracking-correction";
 import {
+  correctPurchaseInboundShipmentTrackingAction,
   transitionPurchaseInboundShipmentAction,
   transitionPurchaseOrderAction,
 } from "../actions";
@@ -59,6 +61,10 @@ export default async function PurchaseOrderPage({
   const canManageCarriers = profile.role === "admin" || (
     permissions.has("purchasing.edit") && permissions.has("shipments.create")
   );
+  const correctionCarriers = inbound
+    ? data.allCarriers.filter((carrier) =>
+        carrier.status === "active" || carrier.id === inbound.carrier_id)
+    : [];
   const serialsByItem = new Map<string, typeof data.serials>();
   for (const serial of data.serials) {
     const itemSerials = serialsByItem.get(serial.purchase_order_item_id) ?? [];
@@ -322,6 +328,57 @@ export default async function PurchaseOrderPage({
               <dd>{dateTime(inbound.shipped_at)}</dd>
             </div>
           </dl>
+          {canManageCarriers && canCorrectSupplierShipmentTracking(inbound.status) ? (
+            <details className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-3">
+              <summary className="cursor-pointer font-semibold text-blue-900">
+                Edit Carrier / Tracking
+              </summary>
+              <form
+                action={correctPurchaseInboundShipmentTrackingAction.bind(null, id, inbound.id)}
+                className="mt-3 grid gap-3 md:grid-cols-2"
+              >
+                <label className="text-sm font-semibold text-blue-950">
+                  Carrier
+                  <select
+                    name="carrier_id"
+                    required
+                    defaultValue={inbound.carrier_id ?? ""}
+                    className="mt-1 block w-full rounded-xl border bg-white px-3 py-2.5 text-[var(--foreground)]"
+                  >
+                    <option value="" disabled>Select carrier</option>
+                    {correctionCarriers.map((carrier) => (
+                      <option key={carrier.id} value={carrier.id}>{carrier.name}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-sm font-semibold text-blue-950">
+                  Tracking number
+                  <input
+                    name="tracking_number"
+                    required={Boolean(inbound.tracking_number?.trim())}
+                    maxLength={200}
+                    defaultValue={inbound.tracking_number ?? ""}
+                    className="mt-1 block w-full rounded-xl border bg-white px-3 py-2.5 text-[var(--foreground)]"
+                  />
+                </label>
+                <label className="text-sm font-semibold text-blue-950 md:col-span-2">
+                  Correction reason (optional)
+                  <textarea
+                    name="correction_reason"
+                    maxLength={1000}
+                    rows={2}
+                    placeholder="Why was the carrier or tracking information corrected?"
+                    className="mt-1 block w-full rounded-xl border bg-white px-3 py-2.5 text-[var(--foreground)]"
+                  />
+                </label>
+                <div className="md:col-span-2">
+                  <button className="rounded-xl bg-blue-700 px-4 py-2.5 font-bold text-white">
+                    Save Carrier / Tracking
+                  </button>
+                </div>
+              </form>
+            </details>
+          ) : null}
         </section>
       ) : null}
 
