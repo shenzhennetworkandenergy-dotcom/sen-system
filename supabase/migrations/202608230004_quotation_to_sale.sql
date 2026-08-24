@@ -29,11 +29,11 @@ alter table public.customer_notifications
 alter table public.customer_notifications
   add constraint customer_notifications_notification_type_check check (
     notification_type in (
-      'order_status','support_reply','system','quotation_status','quotation_expiry',
+      'order_status','support_reply','support_new','system','quotation_status','quotation_expiry',
       'quotation_submitted','quotation_staff_new','quotation_assigned',
-      'quotation_additional_info_required','quotation_approved',
+      'quotation_additional_info_required','quotation_information_required','quotation_approved',
       'quotation_rejected','quotation_expired','quotation_converted_to_invoice',
-      'quotation_updated','quotation_expiring','quotation_issued',
+      'quotation_converted','quotation_updated','quotation_expiring','rma_status','rma_new','quotation_issued',
       'quotation_accepted','quotation_declined','quotation_converted_to_sale'
     )
   );
