@@ -52,7 +52,11 @@ test("legacy commercial details RPC is locked to an expected current Draft", () 
   assert.match(body, /quotations\.view_own/i);
   assert.match(body, /quotations\.view_all/i);
   assert.match(body, /coalesce\s*\(\s*quotation\.created_by\s*=\s*actor_profile_id\s*,\s*false\s*\)/i);
-  assert.match(body, /requested_expected_status\s*<>\s*'draft'/i);
+  assert.match(
+    body,
+    /requested_expected_status\s+is\s+distinct\s+from\s+'draft'/i,
+    "a null expected status must be rejected rather than bypassing Draft-only protection",
+  );
   assert.match(body, /quotation\.status\s+is\s+distinct\s+from\s+'draft'/i);
   assert.match(body, /perform\s+public\.refresh_quotation_totals\s*\(\s*quotation\.id\s*\)/i);
 });
@@ -86,6 +90,11 @@ test("Draft update RPC atomically authorizes, locks, validates, replaces lines, 
   assert.match(body, /item_unit_price\s*<\s*0[\s\S]{0,180}item_line_discount\s*>\s*round\s*\(\s*item_quantity\s*\*\s*item_unit_price\s*,\s*2\s*\)/i);
   assert.match(body, /public\.products[\s\S]{0,120}status\s*=\s*'active'/i);
   assert.match(body, /public\.product_variations[\s\S]{0,200}pv\.product_id\s*=\s*requested_product_id[\s\S]{0,100}status\s*=\s*'active'/i);
+  assert.match(
+    body,
+    /requested_variation_id\s+is\s+not\s+null[\s\S]{0,500}public\.product_variations[\s\S]{0,180}pv\.id\s*=\s*requested_variation_id[\s\S]{0,180}pv\.product_id\s*=\s*requested_product_id[\s\S]{0,260}requested_line_key\s*<>\s*all/i,
+    "every submitted variation must belong to its product before the legacy-inactive exception is considered",
+  );
   assert.match(body, /existing_line_keys/i, "legacy inactive catalogue lines may remain");
   assert.match(body, /requested_line_key\s*<>\s*all\s*\(\s*existing_line_keys\s*\)/i);
   assert.match(body, /update\s+public\.quotation_requests\s+set/i);
@@ -110,12 +119,15 @@ test("Draft update RPC atomically authorizes, locks, validates, replaces lines, 
     "unit_price",
     "discount_amount",
     "tax_amount",
-    "line_subtotal",
-    "line_total",
     "currency",
   ]) {
     assert.match(body, new RegExp(`\\b${column}\\b`, "i"), column);
   }
+  assert.doesNotMatch(
+    body,
+    /item_total|['"]line_total['"]\s*,\s*item_/i,
+    "the Draft RPC must leave persisted line-total calculation to refresh_quotation_totals",
+  );
   assert.match(body, /return\s+quotation\.id/i);
   assert.doesNotMatch(
     body,

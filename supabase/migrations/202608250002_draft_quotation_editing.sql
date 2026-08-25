@@ -50,7 +50,7 @@ begin
     raise exception 'Quotation access denied';
   end if;
 
-  if requested_expected_status<>'draft'
+  if requested_expected_status is distinct from 'draft'
     or quotation.status is distinct from 'draft'
   then
     raise exception 'Draft quotation changed before its details could be saved';
@@ -117,8 +117,6 @@ declare
   item_unit_price numeric;
   item_line_discount numeric;
   item_line_tax numeric;
-  item_subtotal numeric;
-  item_total numeric;
   item_product_name text;
   item_sku text;
   item_currency text;
@@ -205,8 +203,14 @@ begin
     then
       raise exception 'Quotation item commercial values are invalid';
     end if;
-    item_subtotal:=round(item_quantity*item_unit_price,2);
-    item_total:=round(item_subtotal-item_line_discount+item_line_tax,2);
+    if requested_variation_id is not null then
+      select * into variation_row from public.product_variations pv
+      where pv.id=requested_variation_id
+        and pv.product_id=requested_product_id;
+      if variation_row.id is null then
+        raise exception 'Quotation variation does not belong to the submitted product';
+      end if;
+    end if;
 
     if requested_line_key<>all(existing_line_keys) then
       select * into product_row from public.products p
@@ -243,8 +247,6 @@ begin
       'unit_price',item_unit_price,
       'discount_amount',item_line_discount,
       'tax_amount',item_line_tax,
-      'line_subtotal',item_subtotal,
-      'line_total',item_total,
       'currency',item_currency
     );
     normalized_items:=normalized_items||jsonb_build_array(entry);
@@ -275,7 +277,7 @@ begin
   loop
     insert into public.quotation_request_items(
       quotation_id,product_id,variation_id,product_name_snapshot,sku_snapshot,
-      quantity,target_price,unit_price,discount_amount,tax_amount,line_subtotal,line_total,currency
+      quantity,target_price,unit_price,discount_amount,tax_amount,currency
     ) values (
       quotation.id,
       (entry->>'product_id')::uuid,
@@ -287,8 +289,6 @@ begin
       (entry->>'unit_price')::numeric,
       (entry->>'discount_amount')::numeric,
       (entry->>'tax_amount')::numeric,
-      (entry->>'line_subtotal')::numeric,
-      (entry->>'line_total')::numeric,
       entry->>'currency'
     );
   end loop;
