@@ -9,6 +9,9 @@ const migration = normalize(
 const phase2Migration = normalize(
   await readFile("supabase/migrations/202608250002_customer_receivables_phase2.sql", "utf8"),
 ).trim();
+const phase3Migration = normalize(
+  await readFile("supabase/migrations/202608250004_non_sales_receivables_phase3.sql", "utf8"),
+).trim();
 const schema = normalize(await readFile("database/native/schema.sql", "utf8"));
 
 function normalize(value: string) {
@@ -23,16 +26,69 @@ test("native builder appends the complete Receivables migration after the curren
   const stockOutHotfix = builder.indexOf("stockOutReleaseQuantityMigration.trim()");
   const receivables = builder.indexOf("receivablesMigration.trim()");
   const customerReceivables = builder.indexOf("customerReceivablesMigration.trim()");
+  const draftQuotationEditing = builder.indexOf("draftQuotationEditingMigration.trim()");
+  const nonSalesReceivables = builder.indexOf("nonSalesReceivablesMigration.trim()");
 
   assert.match(builder, /202608250001_receivables_phase1\.sql/);
   assert.match(builder, /202608250002_customer_receivables_phase2\.sql/);
+  assert.match(builder, /202608250004_non_sales_receivables_phase3\.sql/);
   assert.ok(
     stockOutHotfix >= 0 &&
       receivables > stockOutHotfix &&
-      customerReceivables > receivables,
+      customerReceivables > receivables &&
+      draftQuotationEditing > customerReceivables &&
+      nonSalesReceivables > draftQuotationEditing,
   );
   assert.equal(occurrences(schema, migration), 1);
   assert.equal(occurrences(schema, phase2Migration), 1);
+  assert.equal(occurrences(schema, phase3Migration), 1);
+});
+
+test("native schema exposes the Phase 3 operational Receivables contract exactly once", () => {
+  assert.equal(
+    occurrences(schema.toLowerCase(), "create table public.receivable_installments"),
+    1,
+  );
+  for (const rpc of [
+    "transition_receivable_account",
+    "set_receivable_installment_schedule",
+    "confirm_receivable_disbursement",
+    "record_receivable_repayment",
+    "record_receivable_adjustment",
+    "reverse_receivable_transaction",
+  ]) {
+    assert.equal(
+      occurrences(schema.toLowerCase(), `create or replace function public.${rpc}(`),
+      1,
+    );
+  }
+  for (const permission of [
+    "receivables.approve",
+    "receivables.disburse",
+    "receivables.record_repayment",
+    "receivables.adjust",
+  ]) {
+    assert.equal(
+      occurrences(phase3Migration, `('${permission}',`),
+      1,
+      `${permission} must be added to the permission catalogue once`,
+    );
+  }
+  for (const view of [
+    "non_sales_receivable_details_v",
+    "receivable_installment_status_v",
+    "non_sales_receivable_metrics_v",
+  ]) {
+    assert.equal(
+      occurrences(schema.toLowerCase(), `create or replace view public.${view}`),
+      1,
+      `${view} must contain one Phase 3 definition`,
+    );
+  }
+  assert.doesNotMatch(
+    phase3Migration,
+    /permission_template_items[\s\S]{0,1000}receivables\.(?:approve|disburse|record_repayment|adjust)/i,
+  );
 });
 
 test("native schema exposes the Phase 2 Sales terms and derived read contract exactly once", () => {
@@ -77,8 +133,8 @@ test("native schema exposes the Phase 1 Receivables contract exactly once", () =
 
   for (const [view, expectedDefinitions] of [
     ["customer_receivables_v", 2],
-    ["non_sales_receivables_v", 1],
-    ["receivables_overview_v", 2],
+    ["non_sales_receivables_v", 2],
+    ["receivables_overview_v", 3],
   ] as const) {
     assert.equal(
       occurrences(schema.toLowerCase(), `create or replace view public.${view}`),

@@ -34,6 +34,7 @@ const expectedMigrationOrder = [
   "202608250001_receivables_phase1.sql",
   "202608250002_customer_receivables_phase2.sql",
   "202608250003_draft_quotation_editing.sql",
+  "202608250004_non_sales_receivables_phase3.sql",
 ];
 
 function normalizeNewlines(value: string) {

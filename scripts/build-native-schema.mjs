@@ -37,6 +37,10 @@ const draftQuotationEditingMigrationUrl = new URL(
   "../supabase/migrations/202608250003_draft_quotation_editing.sql",
   import.meta.url,
 );
+const nonSalesReceivablesMigrationUrl = new URL(
+  "../supabase/migrations/202608250004_non_sales_receivables_phase3.sql",
+  import.meta.url,
+);
 const outputUrl = new URL("../database/native/schema.sql", import.meta.url);
 const [
   raw,
@@ -49,6 +53,7 @@ const [
   receivablesMigration,
   customerReceivablesMigration,
   draftQuotationEditingMigration,
+  nonSalesReceivablesMigration,
 ] = await Promise.all([
   readFile(rawUrl, "utf8"),
   readFile(purchaseCarrierMigrationUrl, "utf8"),
@@ -60,6 +65,7 @@ const [
   readFile(receivablesMigrationUrl, "utf8"),
   readFile(customerReceivablesMigrationUrl, "utf8"),
   readFile(draftQuotationEditingMigrationUrl, "utf8"),
+  readFile(nonSalesReceivablesMigrationUrl, "utf8"),
 ]);
 
 const withoutAuthForeignKey = raw.replace(
@@ -87,7 +93,7 @@ const grants = `\n-- Native application service access. Browser users never rece
 
 await writeFile(
   outputUrl,
-  `${bootstrapWithExtensions}${nativeSchema.trim()}\n\n${purchaseCarrierMigration.trim()}\n\n${dailyClosingMigration.trim()}\n\n${stockOutMigration.trim()}\n\n${quotationViewOwnMigration.trim()}\n\n${quotationToSaleMigration.trim()}\n\n${stockOutReleaseQuantityMigration.trim()}\n\n${receivablesMigration.trim()}\n\n${customerReceivablesMigration.trim()}\n\n${draftQuotationEditingMigration.trim()}\n${grants}`,
+  `${bootstrapWithExtensions}${nativeSchema.trim()}\n\n${purchaseCarrierMigration.trim()}\n\n${dailyClosingMigration.trim()}\n\n${stockOutMigration.trim()}\n\n${quotationViewOwnMigration.trim()}\n\n${quotationToSaleMigration.trim()}\n\n${stockOutReleaseQuantityMigration.trim()}\n\n${receivablesMigration.trim()}\n\n${customerReceivablesMigration.trim()}\n\n${draftQuotationEditingMigration.trim()}\n\n${nonSalesReceivablesMigration.trim()}\n${grants}`,
   "utf8",
 );
 console.log("Native PostgreSQL schema generated without the Supabase Auth foreign key.");

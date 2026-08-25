@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Start from production commit `2f3639fa5d123dde69d83e4b97ed24c1264fab22` in isolated branch `codex/receivables-phase3`.
-- Use only additive migration `202608250003_non_sales_receivables_phase3.sql`.
+- Use only additive migration `202608250004_non_sales_receivables_phase3.sql`, after the deployed Draft quotation migration.
 - Do not modify Sales, Customer Receivables Phase 2, `record_sale_payment()`, Accounting, Cash Book, Payroll, HR, Purchase, Inventory, Stock Out, Shipment, Quotations, or public website business logic.
 - No dependency upgrades, historical backfill, sample data, Accounting posting, Cash Book entry, or Payroll deduction.
 - Each new behavior starts with a failing test and must preserve immutable transaction history, authorization, idempotency, and currency isolation.
@@ -41,7 +41,7 @@
 ### Task 2: Additive database, RLS, idempotency, and immutable operations
 
 **Files:**
-- Create: `supabase/migrations/202608250003_non_sales_receivables_phase3.sql`
+- Create: `supabase/migrations/202608250004_non_sales_receivables_phase3.sql`
 - Create: `tests/receivables-phase3-migration.test.mts`
 - Modify: `scripts/verify-receivables-database.mjs`
 

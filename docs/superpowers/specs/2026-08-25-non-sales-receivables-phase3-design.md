@@ -27,7 +27,7 @@ Reuse Phase 1 permissions and add `receivables.approve`, `receivables.disburse`,
 
 ## Database boundary
 
-Migration `202608250003_non_sales_receivables_phase3.sql` is additive. It adds missing categories, lifecycle metadata, installments, a one-reversal index, validation helpers, controlled RPCs, non-Sales detail/installment/metric views, permissions, RLS, and grants. It performs no historical backfill and modifies no Sales, payment, journal, Cash Book, Payroll, Purchase, or inventory data.
+Migration `202608250004_non_sales_receivables_phase3.sql` is additive and follows the already-deployed Draft quotation migration. It adds missing categories, lifecycle metadata, installments, a one-reversal index, validation helpers, controlled RPCs, non-Sales detail/installment/metric views, permissions, RLS, and grants. It performs no historical backfill and modifies no Sales, payment, journal, Cash Book, Payroll, Purchase, or inventory data.
 
 ## User interface
 
