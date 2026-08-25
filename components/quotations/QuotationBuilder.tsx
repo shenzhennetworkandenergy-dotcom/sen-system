@@ -14,6 +14,12 @@ import {
   type SalePickerProduct,
 } from "@/components/sales/SaleProductPicker";
 import type { CustomerSearchOption } from "@/lib/customers/search";
+import {
+  calculateDraftQuotationLine,
+  calculateDraftQuotationTotals,
+  catalogueForDraftEditRow,
+  type DraftQuotationValues,
+} from "@/lib/quotations/draft-editing";
 import { roundMoney } from "@/lib/validation/numbers";
 
 type Variation = {
@@ -26,6 +32,7 @@ type Variation = {
 };
 type Row = {
   key: string;
+  retained: boolean;
   product_id: string;
   variation_id: string;
   quantity: string;
@@ -33,36 +40,13 @@ type Row = {
   discount_amount: string;
   tax_amount: string;
 };
-export type DraftQuotationValues = {
-  id: string;
-  reference: string;
-  updatedAt: string;
-  subject: string;
-  companyName: string;
-  customerTaxIdentificationNumber: string;
-  requiredBy: string;
-  expirationDate: string;
-  discountAmount: number;
-  taxAmount: number;
-  paymentTerms: string;
-  deliveryInformation: string;
-  termsAndConditions: string;
-  customerNotes: string;
-  internalNotes: string;
-  items: Array<{
-    productId: string;
-    variationId: string | null;
-    quantity: number | string;
-    unitPrice: number | string;
-    discountAmount: number | string;
-    taxAmount: number | string;
-  }>;
-};
+export type { DraftQuotationValues } from "@/lib/quotations/draft-editing";
 
 const field =
   "mt-1 w-full rounded-xl border bg-[var(--surface)] px-3 py-3";
 const emptyRow = (): Row => ({
   key: crypto.randomUUID(),
+  retained: false,
   product_id: "",
   variation_id: "",
   quantity: "1",
@@ -75,6 +59,8 @@ export function QuotationBuilder({
   customers,
   products,
   variations,
+  retainedProducts = [],
+  retainedVariations = [],
   defaultExpiration,
   mode = "create",
   fixedCustomer,
@@ -83,6 +69,8 @@ export function QuotationBuilder({
   customers: CustomerSearchOption[];
   products: SalePickerProduct[];
   variations: Variation[];
+  retainedProducts?: SalePickerProduct[];
+  retainedVariations?: Variation[];
   defaultExpiration: string;
   mode?: "create" | "edit";
   fixedCustomer?: CustomerSearchOption;
@@ -117,6 +105,7 @@ export function QuotationBuilder({
     initialDraft?.items.length
       ? initialDraft.items.map((item) => ({
           key: crypto.randomUUID(),
+          retained: true,
           product_id: item.productId,
           variation_id: item.variationId ?? "",
           quantity: String(item.quantity),
@@ -125,6 +114,12 @@ export function QuotationBuilder({
           tax_amount: String(item.taxAmount),
         }))
       : [emptyRow()],
+  );
+  const [headerDiscount, setHeaderDiscount] = useState(
+    String(initialDraft?.discountAmount ?? 0),
+  );
+  const [headerTax, setHeaderTax] = useState(
+    String(initialDraft?.taxAmount ?? 0),
   );
   const searchableProducts = useMemo(
     () =>
@@ -140,18 +135,31 @@ export function QuotationBuilder({
   const selected = useMemo(
     () =>
       rows.map((row) => {
-        const product = products.find((item) => item.id === row.product_id);
-        const variation = variations.find(
+        const product = catalogueForDraftEditRow(
+          products,
+          retainedProducts.find((item) => item.id === row.product_id),
+          row.retained,
+        ).find((item) => item.id === row.product_id);
+        const variation = catalogueForDraftEditRow(
+          variations,
+          retainedVariations.find((item) => item.id === row.variation_id),
+          row.retained,
+        ).find(
           (item) => item.id === row.variation_id,
         );
         const quantity = Math.max(1, Math.trunc(Number(row.quantity) || 1));
         const unitPrice = Math.max(0, Number(row.unit_price) || 0);
-        const lineSubtotal = roundMoney(quantity * unitPrice);
         const discountAmount = Math.min(
-          lineSubtotal,
+          roundMoney(quantity * unitPrice),
           Math.max(0, Number(row.discount_amount) || 0),
         );
         const taxAmount = Math.max(0, Number(row.tax_amount) || 0);
+        const calculated = calculateDraftQuotationLine({
+          quantity,
+          unitPrice,
+          discountAmount,
+          taxAmount,
+        });
         return {
           ...row,
           product,
@@ -160,11 +168,11 @@ export function QuotationBuilder({
           unitPrice,
           discountAmount,
           taxAmount,
-          lineSubtotal,
-          lineTotal: roundMoney(lineSubtotal - discountAmount + taxAmount),
+          lineSubtotal: calculated.subtotal,
+          lineTotal: calculated.total,
         };
       }),
-    [products, rows, variations],
+    [products, retainedProducts, retainedVariations, rows, variations],
   );
   const update = (key: string, patch: Partial<Row>) =>
     setRows((current) =>
@@ -180,17 +188,18 @@ export function QuotationBuilder({
       discount_amount: row.discountAmount,
       tax_amount: row.taxAmount,
     }));
-  const totals = selected.reduce(
-    (result, row) => ({
-      subtotal: result.subtotal + row.lineSubtotal,
-      discount: result.discount + row.discountAmount,
-      tax: result.tax + row.taxAmount,
-      total: result.total + row.lineTotal,
-    }),
-    { subtotal: 0, discount: 0, tax: 0, total: 0 },
+  const editing = mode === "edit";
+  const totals = calculateDraftQuotationTotals(
+    selected.map((row) => ({
+      quantity: row.quantity,
+      unitPrice: row.unitPrice,
+      discountAmount: row.discountAmount,
+      taxAmount: row.taxAmount,
+    })),
+    editing ? Math.max(0, Number(headerDiscount) || 0) : 0,
+    editing ? Math.max(0, Number(headerTax) || 0) : 0,
   );
   const hasIncompleteRow = selected.some((row) => !row.product);
-  const editing = mode === "edit";
   const quotationAction =
     editing && initialDraft
       ? updateDraftQuotationAction.bind(null, initialDraft.id)
@@ -312,11 +321,27 @@ export function QuotationBuilder({
       {mode === "edit" ? <section className="grid gap-4 rounded-2xl border bg-[var(--surface)] p-5 md:grid-cols-2">
         <label className="font-semibold">
           Quotation discount (BDT)
-          <input name="discount_amount" type="number" min="0" step=".01" defaultValue={initialDraft?.discountAmount ?? 0} className={field} />
+          <input
+            name="discount_amount"
+            type="number"
+            min="0"
+            step=".01"
+            value={headerDiscount}
+            onChange={(event) => setHeaderDiscount(event.target.value)}
+            className={field}
+          />
         </label>
         <label className="font-semibold">
           Quotation tax (BDT)
-          <input name="tax_amount" type="number" min="0" step=".01" defaultValue={initialDraft?.taxAmount ?? 0} className={field} />
+          <input
+            name="tax_amount"
+            type="number"
+            min="0"
+            step=".01"
+            value={headerTax}
+            onChange={(event) => setHeaderTax(event.target.value)}
+            className={field}
+          />
         </label>
       </section> : null}
 
@@ -339,6 +364,7 @@ export function QuotationBuilder({
                 selectedProduct={row.product}
                 onClear={() =>
                   update(row.key, {
+                    retained: false,
                     product_id: "",
                     variation_id: "",
                     unit_price: "0",
@@ -349,6 +375,7 @@ export function QuotationBuilder({
                     Number(product.sale_price ?? product.regular_price ?? 0),
                   );
                   update(row.key, {
+                    retained: false,
                     product_id: product.id,
                     variation_id: "",
                     unit_price: String(price),
@@ -378,6 +405,7 @@ export function QuotationBuilder({
                       ),
                     );
                     update(row.key, {
+                      retained: false,
                       variation_id: event.target.value,
                       unit_price: String(price),
                     });
@@ -386,8 +414,17 @@ export function QuotationBuilder({
                   className={field}
                 >
                   <option value="">None</option>
-                  {variations
-                    .filter((item) => item.product_id === row.product_id)
+                  {catalogueForDraftEditRow(
+                    variations.filter(
+                      (item) => item.product_id === row.product_id,
+                    ),
+                    retainedVariations.find(
+                      (item) =>
+                        item.id === row.variation_id &&
+                        item.product_id === row.product_id,
+                    ),
+                    row.retained,
+                  )
                     .map((item) => (
                       <option key={item.id} value={item.id}>
                         {item.name || item.sku}

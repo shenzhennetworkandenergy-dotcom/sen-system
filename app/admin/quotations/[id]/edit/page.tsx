@@ -4,10 +4,13 @@ import { connection } from "next/server";
 import { DashboardShell } from "@/components/dashboard/Shell";
 import {
   QuotationBuilder,
-  type DraftQuotationValues,
 } from "@/components/quotations/QuotationBuilder";
 import { requirePermission } from "@/lib/auth/permissions";
 import { resolveQuotationViewScope } from "@/lib/quotations/access-policy";
+import {
+  mapDraftQuotationEditInitialValues,
+  type DraftQuotationLoader,
+} from "@/lib/quotations/draft-editing";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -78,7 +81,10 @@ export default async function EditDraftQuotationPage({
   const missingVariationIds = existingVariationIds.filter(
     (variationId) => !activeVariationIds.has(variationId),
   );
-  const [{ data: existingProducts }, { data: existingVariations }] =
+  const [
+    { data: existingProducts, error: existingProductError },
+    { data: existingVariations, error: existingVariationError },
+  ] =
     await Promise.all([
       missingProductIds.length
         ? db
@@ -87,22 +93,15 @@ export default async function EditDraftQuotationPage({
               "id,name,sku,model_number,brand_id,product_type,regular_price,sale_price,serial_tracking_required",
             )
             .in("id", missingProductIds)
-        : Promise.resolve({ data: [] }),
+        : Promise.resolve({ data: [], error: null }),
       missingVariationIds.length
         ? db
             .from("product_variations")
             .select("id,product_id,name:combination_key,sku,regular_price,sale_price")
             .in("id", missingVariationIds)
-        : Promise.resolve({ data: [] }),
+        : Promise.resolve({ data: [], error: null }),
     ]);
-  const products = [
-    ...(activeProducts ?? []),
-    ...(existingProducts ?? []),
-  ];
-  const variations = [
-    ...(activeVariations ?? []),
-    ...(existingVariations ?? []),
-  ];
+  if (existingProductError || existingVariationError) notFound();
   const customer = quotation.profiles as unknown as {
     id: string;
     full_name: string | null;
@@ -111,32 +110,12 @@ export default async function EditDraftQuotationPage({
     company_name: string | null;
   } | null;
   if (!customer) notFound();
-  const initialDraft: DraftQuotationValues = {
-    id: quotation.id,
-    reference: quotation.reference,
-    updatedAt: quotation.updated_at,
-    subject: quotation.subject ?? "",
-    companyName: quotation.company_name ?? "",
-    customerTaxIdentificationNumber:
-      quotation.customer_tax_identification_number ?? "",
-    requiredBy: quotation.required_by ?? "",
-    expirationDate: quotation.expiration_date ?? "",
-    discountAmount: Number(quotation.discount_amount ?? 0),
-    taxAmount: Number(quotation.tax_amount ?? 0),
-    termsAndConditions: quotation.terms_and_conditions ?? "",
-    paymentTerms: quotation.payment_terms ?? "",
-    deliveryInformation: quotation.delivery_information ?? "",
-    customerNotes: quotation.customer_notes ?? quotation.message ?? "",
-    internalNotes: quotation.internal_notes ?? "",
-    items: items.map((item) => ({
-      productId: item.product_id,
-      variationId: item.variation_id,
-      quantity: item.quantity,
-      unitPrice: item.unit_price ?? 0,
-      discountAmount: item.discount_amount ?? 0,
-      taxAmount: item.tax_amount ?? 0,
-    })),
-  };
+  const { fixedCustomer, draft: initialDraft } =
+    mapDraftQuotationEditInitialValues({
+      ...quotation,
+      quotation_request_items: items,
+      profiles: customer,
+    } as DraftQuotationLoader);
 
   return (
     <DashboardShell
@@ -157,11 +136,13 @@ export default async function EditDraftQuotationPage({
       ) : null}
       <QuotationBuilder
         customers={[]}
-        products={products}
-        variations={variations}
+        products={activeProducts ?? []}
+        variations={activeVariations ?? []}
+        retainedProducts={existingProducts ?? []}
+        retainedVariations={existingVariations ?? []}
         defaultExpiration={initialDraft.expirationDate}
         mode="edit"
-        fixedCustomer={customer}
+        fixedCustomer={fixedCustomer}
         initialDraft={initialDraft}
       />
     </DashboardShell>

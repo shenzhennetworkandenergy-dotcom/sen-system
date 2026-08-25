@@ -13,6 +13,12 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
 import { resolveQuotationViewScope } from "@/lib/quotations/access-policy";
 import { parseQuotationItems } from "@/lib/quotations/create";
+import {
+  buildDraftQuotationUpdatePayload,
+  categorizeDraftEditItems,
+  draftEditErrorDestination,
+  runDraftQuotationUpdate,
+} from "@/lib/quotations/draft-editing";
 import { defaultQuotationExpiration } from "@/lib/quotations/validity";
 import { isQuotationImmutable } from "@/lib/quotations/workflow";
 import { parseMoney } from "@/lib/validation/numbers";
@@ -227,8 +233,14 @@ export async function createQuotationAction(form: FormData) {
 
 const draftEditPath = (id: string) => `/admin/quotations/${id}/edit`;
 
-function failDraftEdit(id: string, message: string): never {
-  redirect(`${draftEditPath(id)}?error=${encodeURIComponent(message)}`);
+function failDraftEdit(
+  id: string,
+  message: string,
+  reason: "validation" | "stale" | "transition" = "validation",
+): never {
+  redirect(
+    `${draftEditErrorDestination(id, reason)}?error=${encodeURIComponent(message)}`,
+  );
 }
 
 function cleanDraftEditText(
@@ -310,7 +322,11 @@ export async function updateDraftQuotationAction(
     failDraftEdit(quotationId, "Quotation not found.");
   }
   if (quotation.status !== "draft") {
-    failDraftEdit(quotationId, "Only Draft quotations can be edited.");
+    failDraftEdit(
+      quotationId,
+      "This quotation is no longer a Draft and cannot be edited.",
+      "transition",
+    );
   }
 
   const existingLineKeys = new Set(
@@ -324,8 +340,9 @@ export async function updateDraftQuotationAction(
       (item) => `${item.productId}:${item.variationId ?? ""}`,
     ),
   );
-  const addedItems = requestedItems.filter(
-    (item) => !existingLineKeys.has(`${item.productId}:${item.variationId ?? ""}`),
+  const { newItems: addedItems } = categorizeDraftEditItems(
+    existingLineKeys,
+    requestedItems,
   );
   const addedProductIds = [...new Set(addedItems.map((item) => item.productId))];
   if (addedProductIds.length) {
@@ -377,61 +394,66 @@ export async function updateDraftQuotationAction(
     failDraftEdit(quotationId, "Each product or variation can only be added once.");
   }
 
-  const { data, error } = await db.rpc("update_draft_quotation", {
+  const updatePayload = {
     actor_profile_id: profile.id,
     requested_quotation_id: quotationId,
-    requested_expected_updated_at: expectedUpdatedAt,
-    requested_subject: cleanDraftEditText(form.get("subject"), 200),
-    requested_company_name: cleanDraftEditText(form.get("company_name"), 180),
-    requested_customer_tax_identification_number: cleanDraftEditText(
-      form.get("customer_tax_identification_number"),
-      100,
-    ),
-    requested_required_by: requiredBy,
-    requested_expiration_date: expirationDate,
-    requested_terms_and_conditions: cleanDraftEditText(
-      form.get("terms_and_conditions"),
-    ),
-    requested_payment_terms: cleanDraftEditText(form.get("payment_terms"), 2000),
-    requested_delivery_information: cleanDraftEditText(
-      form.get("delivery_information"),
-      2000,
-    ),
-    requested_customer_notes: cleanDraftEditText(form.get("message")),
-    requested_internal_notes: cleanDraftEditText(form.get("internal_notes")),
-    requested_discount_amount: discountAmount,
-    requested_tax_amount: taxAmount,
-    requested_items: requestedItems.map((item) => ({
-      product_id: item.productId,
-      variation_id: item.variationId,
-      quantity: item.quantity,
-      unit_price: item.unitPrice,
-      discount_amount: item.discountAmount,
-      tax_amount: item.taxAmount,
-    })),
-  });
-  if (error || !data) {
+    ...buildDraftQuotationUpdatePayload({
+      expectedUpdatedAt,
+      subject: cleanDraftEditText(form.get("subject"), 200) ?? "",
+      companyName: cleanDraftEditText(form.get("company_name"), 180) ?? "",
+      customerTaxIdentificationNumber:
+        cleanDraftEditText(
+          form.get("customer_tax_identification_number"),
+          100,
+        ) ?? "",
+      requiredBy: requiredBy ?? "",
+      expirationDate: expirationDate ?? "",
+      termsAndConditions: cleanDraftEditText(form.get("terms_and_conditions")) ?? "",
+      paymentTerms: cleanDraftEditText(form.get("payment_terms"), 2000) ?? "",
+      deliveryInformation:
+        cleanDraftEditText(form.get("delivery_information"), 2000) ?? "",
+      customerNotes: cleanDraftEditText(form.get("message")) ?? "",
+      internalNotes: cleanDraftEditText(form.get("internal_notes")) ?? "",
+      discountAmount,
+      taxAmount,
+      items: requestedItems,
+    }),
+  };
+  const saved = await runDraftQuotationUpdate(
+    {
+      mutate: async (name, payload) => {
+        const { data, error } = await db.rpc(name, payload);
+        return !error && Boolean(data);
+      },
+      audit: () =>
+        writeAuditLog({
+          actorId: profile.id,
+          actorRole: profile.role,
+          targetProfileId: quotation.profile_id,
+          action: "quotation.draft_updated",
+          module: "quotations",
+          entityType: "quotation_request",
+          entityId: quotationId,
+          description: "Draft quotation content updated.",
+          newValues: { item_count: requestedItems.length },
+        }),
+      revalidate: () => {
+        revalidatePath("/admin/quotations");
+        revalidatePath(`/admin/quotations/${quotationId}/manage`);
+        revalidatePath(`/admin/quotations/${quotationId}/edit`);
+        revalidatePath(`/admin/quotations/${quotationId}`);
+        revalidatePath("/account/quotations");
+      },
+    },
+    updatePayload,
+  );
+  if (!saved) {
     failDraftEdit(
       quotationId,
-      "Quotation changed before it could be saved. Reload the Draft and try again.",
+      "Quotation could not be saved because it changed or is no longer a Draft.",
+      "stale",
     );
   }
-  await writeAuditLog({
-    actorId: profile.id,
-    actorRole: profile.role,
-    targetProfileId: quotation.profile_id,
-    action: "quotation.draft_updated",
-    module: "quotations",
-    entityType: "quotation_request",
-    entityId: quotationId,
-    description: "Draft quotation content updated.",
-    newValues: { item_count: requestedItems.length },
-  });
-  revalidatePath("/admin/quotations");
-  revalidatePath(`/admin/quotations/${quotationId}/manage`);
-  revalidatePath(`/admin/quotations/${quotationId}/edit`);
-  revalidatePath(`/admin/quotations/${quotationId}`);
-  revalidatePath("/account/quotations");
   redirect(`${draftEditPath(quotationId)}?success=Draft%20quotation%20saved.`);
 }
 
