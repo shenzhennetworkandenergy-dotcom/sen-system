@@ -35,6 +35,8 @@ export default async function AdminQuotationsPage({
     await requireQuotationView();
   const canCreate =
     profile.role === "admin" || permissions.has("quotations.create");
+  const canEdit =
+    profile.role === "admin" || permissions.has("quotations.edit");
   const canOpenDocument = canOpenQuotationDocument(
     profile.role,
     permissions,
@@ -129,6 +131,7 @@ export default async function AdminQuotationsPage({
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 <a href={`/admin/quotations/${quotation.id}/manage`} className="inline-flex rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-semibold text-[var(--primary-foreground)]">Manage quotation</a>
+                {canEdit && quotation.status === "draft" ? <a href={`/admin/quotations/${quotation.id}/edit`} className="inline-flex rounded-lg border px-3 py-2 text-sm font-semibold">Edit draft</a> : null}
                 {canOpenDocument ? <a href={`/admin/quotations/${quotation.id}`} className="inline-flex rounded-lg border px-3 py-2 text-sm font-semibold">Print quotation</a> : null}
               </div>
               <p className="mt-3">{quotation.message || "No additional notes."}</p>

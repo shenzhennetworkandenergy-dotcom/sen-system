@@ -132,6 +132,7 @@ export function QuotationOperations({
       },
       new Date().toISOString().slice(0, 10),
     );
+  const canEditDraft = capabilities.edit && quotation.status === "draft";
 
   return (
     <section className="mx-auto mb-6 max-w-6xl space-y-5 print:hidden">
@@ -155,6 +156,14 @@ export function QuotationOperations({
               className="rounded-xl border px-4 py-2 text-sm font-bold"
             >
               Print / download
+            </Link>
+          ) : null}
+          {canEditDraft ? (
+            <Link
+              href={`/admin/quotations/${quotation.id}/edit`}
+              className="rounded-xl border px-4 py-2 text-sm font-bold"
+            >
+              Edit draft
             </Link>
           ) : null}
           <Link
@@ -198,7 +207,7 @@ export function QuotationOperations({
         canAccept ||
         canDecline) ? (
         <div className="grid gap-5 lg:grid-cols-[1.6fr_1fr]">
-          {capabilities.edit ? (
+          {canEditDraft ? (
             <form
               action={updateQuotationDetailsAction.bind(null, quotation.id)}
               className="grid gap-4 rounded-2xl border bg-white p-5 shadow-sm"

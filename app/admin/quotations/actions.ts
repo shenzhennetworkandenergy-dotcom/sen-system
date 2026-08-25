@@ -15,6 +15,7 @@ import { resolveQuotationViewScope } from "@/lib/quotations/access-policy";
 import { parseQuotationItems } from "@/lib/quotations/create";
 import { defaultQuotationExpiration } from "@/lib/quotations/validity";
 import { isQuotationImmutable } from "@/lib/quotations/workflow";
+import { parseMoney } from "@/lib/validation/numbers";
 
 export type QuotationCustomerActionState = {
   status: "idle" | "success" | "error";
@@ -222,6 +223,216 @@ export async function createQuotationAction(form: FormData) {
       ? "/admin/quotations"
       : "/admin/quotations/new";
   redirect(`${destination}?success=${encodeURIComponent(`Quotation ${reference} created.`)}`);
+}
+
+const draftEditPath = (id: string) => `/admin/quotations/${id}/edit`;
+
+function failDraftEdit(id: string, message: string): never {
+  redirect(`${draftEditPath(id)}?error=${encodeURIComponent(message)}`);
+}
+
+function cleanDraftEditText(
+  value: FormDataEntryValue | null,
+  maximum = 5000,
+) {
+  return String(value ?? "").trim().slice(0, maximum) || null;
+}
+
+function cleanDraftEditDate(value: FormDataEntryValue | null, label: string) {
+  const date = String(value ?? "").trim();
+  if (!date) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error(`${label} must be a valid date.`);
+  }
+  const normalized = new Date(`${date}T00:00:00.000Z`)
+    .toISOString()
+    .slice(0, 10);
+  if (normalized !== date) throw new Error(`${label} must be a valid date.`);
+  return date;
+}
+
+export async function updateDraftQuotationAction(
+  quotationId: string,
+  form: FormData,
+) {
+  const { profile, permissions } = await requirePermission("quotations.edit");
+  const scope = resolveQuotationViewScope(profile.role, permissions);
+  if (!scope) {
+    failDraftEdit(quotationId, "Quotation access denied.");
+  }
+
+  const expectedUpdatedAt = String(form.get("updated_at") ?? "").trim();
+  if (!expectedUpdatedAt || Number.isNaN(Date.parse(expectedUpdatedAt))) {
+    failDraftEdit(quotationId, "Quotation changed before it could be saved.");
+  }
+
+  let requestedItems;
+  let discountAmount: number;
+  let taxAmount: number;
+  let requiredBy: string | null;
+  let expirationDate: string | null;
+  try {
+    requestedItems = parseQuotationItems(
+      JSON.parse(String(form.get("items") ?? "[]")) as unknown,
+    );
+    discountAmount =
+      parseMoney(form.get("discount_amount"), "Quotation discount", {
+        minimum: 0,
+      }) ?? 0;
+    taxAmount =
+      parseMoney(form.get("tax_amount"), "Quotation tax", { minimum: 0 }) ??
+      0;
+    requiredBy = cleanDraftEditDate(form.get("required_by"), "Required by");
+    expirationDate = cleanDraftEditDate(
+      form.get("expiration_date"),
+      "Expiration date",
+    );
+  } catch (error) {
+    failDraftEdit(
+      quotationId,
+      error instanceof Error ? error.message : "Quotation values are invalid.",
+    );
+  }
+
+  const db = createSupabaseAdminClient();
+  let quotationQuery = db
+    .from("quotation_requests")
+    .select(
+      "id,reference,profile_id,status,created_by,quotation_request_items(product_id,variation_id)",
+    )
+    .eq("id", quotationId);
+  if (scope === "own") {
+    quotationQuery = quotationQuery.eq("created_by", profile.id);
+  }
+  const { data: quotation, error: quotationError } =
+    await quotationQuery.maybeSingle();
+  if (quotationError || !quotation) {
+    failDraftEdit(quotationId, "Quotation not found.");
+  }
+  if (quotation.status !== "draft") {
+    failDraftEdit(quotationId, "Only Draft quotations can be edited.");
+  }
+
+  const existingLineKeys = new Set(
+    (quotation.quotation_request_items ?? []).map(
+      (item: { product_id: string; variation_id: string | null }) =>
+        `${item.product_id}:${item.variation_id ?? ""}`,
+    ),
+  );
+  const requestedLineKeys = new Set(
+    requestedItems.map(
+      (item) => `${item.productId}:${item.variationId ?? ""}`,
+    ),
+  );
+  const addedItems = requestedItems.filter(
+    (item) => !existingLineKeys.has(`${item.productId}:${item.variationId ?? ""}`),
+  );
+  const addedProductIds = [...new Set(addedItems.map((item) => item.productId))];
+  if (addedProductIds.length) {
+    const { data: activeProducts, error: productError } = await db
+      .from("products")
+      .select("id")
+      .in("id", addedProductIds)
+      .eq("status", "active");
+    if (productError || (activeProducts?.length ?? 0) !== addedProductIds.length) {
+      failDraftEdit(quotationId, "Choose valid active products.");
+    }
+  }
+
+  const variationIds = [
+    ...new Set(
+      requestedItems
+        .map((item) => item.variationId)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  if (variationIds.length) {
+    const { data: variations, error: variationError } = await db
+      .from("product_variations")
+      .select("id,product_id,status")
+      .in("id", variationIds);
+    const variationMap = new Map(
+      (variations ?? []).map((variation) => [variation.id, variation]),
+    );
+    if (
+      variationError ||
+      variationMap.size !== variationIds.length ||
+      requestedItems.some(
+        (item) =>
+          item.variationId &&
+          variationMap.get(item.variationId)?.product_id !== item.productId,
+      ) ||
+      addedItems.some(
+        (item) =>
+          item.variationId && variationMap.get(item.variationId)?.status !== "active",
+      )
+    ) {
+      failDraftEdit(
+        quotationId,
+        "Choose valid active product variations for newly added products.",
+      );
+    }
+  }
+  if (requestedLineKeys.size !== requestedItems.length) {
+    failDraftEdit(quotationId, "Each product or variation can only be added once.");
+  }
+
+  const { data, error } = await db.rpc("update_draft_quotation", {
+    actor_profile_id: profile.id,
+    requested_quotation_id: quotationId,
+    requested_expected_updated_at: expectedUpdatedAt,
+    requested_subject: cleanDraftEditText(form.get("subject"), 200),
+    requested_company_name: cleanDraftEditText(form.get("company_name"), 180),
+    requested_customer_tax_identification_number: cleanDraftEditText(
+      form.get("customer_tax_identification_number"),
+      100,
+    ),
+    requested_required_by: requiredBy,
+    requested_expiration_date: expirationDate,
+    requested_terms_and_conditions: cleanDraftEditText(
+      form.get("terms_and_conditions"),
+    ),
+    requested_payment_terms: cleanDraftEditText(form.get("payment_terms"), 2000),
+    requested_delivery_information: cleanDraftEditText(
+      form.get("delivery_information"),
+      2000,
+    ),
+    requested_customer_notes: cleanDraftEditText(form.get("message")),
+    requested_internal_notes: cleanDraftEditText(form.get("internal_notes")),
+    requested_discount_amount: discountAmount,
+    requested_tax_amount: taxAmount,
+    requested_items: requestedItems.map((item) => ({
+      product_id: item.productId,
+      variation_id: item.variationId,
+      quantity: item.quantity,
+      unit_price: item.unitPrice,
+      discount_amount: item.discountAmount,
+      tax_amount: item.taxAmount,
+    })),
+  });
+  if (error || !data) {
+    failDraftEdit(
+      quotationId,
+      "Quotation changed before it could be saved. Reload the Draft and try again.",
+    );
+  }
+  await writeAuditLog({
+    actorId: profile.id,
+    actorRole: profile.role,
+    targetProfileId: quotation.profile_id,
+    action: "quotation.draft_updated",
+    module: "quotations",
+    entityType: "quotation_request",
+    entityId: quotationId,
+    description: "Draft quotation content updated.",
+    newValues: { item_count: requestedItems.length },
+  });
+  revalidatePath("/admin/quotations");
+  revalidatePath(`/admin/quotations/${quotationId}/manage`);
+  revalidatePath(`/admin/quotations/${quotationId}/edit`);
+  revalidatePath(`/admin/quotations/${quotationId}`);
+  revalidatePath("/account/quotations");
+  redirect(`${draftEditPath(quotationId)}?success=Draft%20quotation%20saved.`);
 }
 
 export async function updateQuotationAction(
