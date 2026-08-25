@@ -79,12 +79,21 @@ begin
     instance_id,id,aud,role,email,encrypted_password,email_confirmed_at,
     raw_app_meta_data,raw_user_meta_data,created_at,updated_at
   ) values
-    ('00000000-0000-0000-0000-000000000000',admin_id,'authenticated','authenticated','dqe-admin-'||stamp||'@local.test',crypt('offline-only',gen_salt('bf')),now(),'{}','{}',now(),now()),
-    ('00000000-0000-0000-0000-000000000000',owner_id,'authenticated','authenticated','dqe-owner-'||stamp||'@local.test',crypt('offline-only',gen_salt('bf')),now(),'{}','{}',now(),now()),
-    ('00000000-0000-0000-0000-000000000000',all_id,'authenticated','authenticated','dqe-all-'||stamp||'@local.test',crypt('offline-only',gen_salt('bf')),now(),'{}','{}',now(),now()),
-    ('00000000-0000-0000-0000-000000000000',denied_id,'authenticated','authenticated','dqe-denied-'||stamp||'@local.test',crypt('offline-only',gen_salt('bf')),now(),'{}','{}',now(),now()),
-    ('00000000-0000-0000-0000-000000000000',other_owner_id,'authenticated','authenticated','dqe-other-'||stamp||'@local.test',crypt('offline-only',gen_salt('bf')),now(),'{}','{}',now(),now()),
-    ('00000000-0000-0000-0000-000000000000',customer_id,'authenticated','authenticated','dqe-customer-'||stamp||'@local.test',crypt('offline-only',gen_salt('bf')),now(),'{}','{}',now(),now());
+    ('00000000-0000-0000-0000-000000000000',admin_id,'authenticated','authenticated','dqe-admin-'||stamp||'@local.test','offline-only',now(),'{}','{}',now(),now()),
+    ('00000000-0000-0000-0000-000000000000',owner_id,'authenticated','authenticated','dqe-owner-'||stamp||'@local.test','offline-only',now(),'{}','{}',now(),now()),
+    ('00000000-0000-0000-0000-000000000000',all_id,'authenticated','authenticated','dqe-all-'||stamp||'@local.test','offline-only',now(),'{}','{}',now(),now()),
+    ('00000000-0000-0000-0000-000000000000',denied_id,'authenticated','authenticated','dqe-denied-'||stamp||'@local.test','offline-only',now(),'{}','{}',now(),now()),
+    ('00000000-0000-0000-0000-000000000000',other_owner_id,'authenticated','authenticated','dqe-other-'||stamp||'@local.test','offline-only',now(),'{}','{}',now(),now()),
+    ('00000000-0000-0000-0000-000000000000',customer_id,'authenticated','authenticated','dqe-customer-'||stamp||'@local.test','offline-only',now(),'{}','{}',now(),now());
+  insert into public.profiles(id,email,full_name,role,status)
+  values
+    (admin_id,'dqe-admin-'||stamp||'@local.test','DQE Admin','admin','active'),
+    (owner_id,'dqe-owner-'||stamp||'@local.test','DQE Employee','employee','active'),
+    (all_id,'dqe-all-'||stamp||'@local.test','DQE Employee','employee','active'),
+    (denied_id,'dqe-denied-'||stamp||'@local.test','DQE Employee','employee','active'),
+    (other_owner_id,'dqe-other-'||stamp||'@local.test','DQE Employee','employee','active'),
+    (customer_id,'dqe-customer-'||stamp||'@local.test','DQE Customer','customer','active')
+  on conflict(id) do nothing;
   update public.profiles set role='admin',status='active',full_name='DQE Admin' where id=admin_id;
   update public.profiles set role='employee',status='active',full_name='DQE Employee'
   where id in(owner_id,all_id,denied_id,other_owner_id);
@@ -153,9 +162,37 @@ begin
     if sqlerrm not like '%Draft quotation changed%' then raise; end if;
   end;
 
+  perform pg_temp.assert_dqe(
+    has_function_privilege('service_role',
+      'public.update_draft_quotation(uuid,uuid,timestamp with time zone,text,text,text,date,date,text,text,text,text,text,numeric,numeric,jsonb)'::regprocedure,
+      'EXECUTE'
+    ) and not has_function_privilege('anon',
+      'public.update_draft_quotation(uuid,uuid,timestamp with time zone,text,text,text,date,date,text,text,text,text,text,numeric,numeric,jsonb)'::regprocedure,
+      'EXECUTE'
+    ) and not has_function_privilege('authenticated',
+      'public.update_draft_quotation(uuid,uuid,timestamp with time zone,text,text,text,date,date,text,text,text,text,text,numeric,numeric,jsonb)'::regprocedure,
+      'EXECUTE'
+    ),'Draft update RPC execute privilege is not service-role only'
+  );
+  result_id:=pg_temp.call_dqe(all_id,other_quotation_id,
+    (select updated_at from public.quotation_requests where id=other_quotation_id),replacement_items);
+  perform pg_temp.assert_dqe(result_id=other_quotation_id,'View All actor could not edit another creator Draft');
+
   select jsonb_build_object(
+    'customer_notifications',(select count(*) from public.customer_notifications),
+    'inventory_balances',(select count(*) from public.inventory_balances),
+    'inventory_reservations',(select count(*) from public.inventory_reservations),
     'inventory_movements',(select count(*) from public.inventory_movements),
     'sales_orders',(select count(*) from public.sales_orders),
+    'sales_order_items',(select count(*) from public.sales_order_items),
+    'sales_stock_out_requests',(select count(*) from public.sales_stock_out_requests),
+    'sales_stock_out_request_items',(select count(*) from public.sales_stock_out_request_items),
+    'sales_stock_out_request_revisions',(select count(*) from public.sales_stock_out_request_revisions),
+    'sales_stock_out_releases',(select count(*) from public.sales_stock_out_releases),
+    'sale_documents',(select count(*) from public.sale_documents),
+    'sale_payments',(select count(*) from public.sale_payments),
+    'payment_transactions',(select count(*) from public.payment_transactions),
+    'shipments',(select count(*) from public.shipments),
     'cashbook_entries',(select count(*) from public.cashbook_entries),
     'journal_entries',(select count(*) from public.journal_entries)
   ) into unchanged_counts;
@@ -174,12 +211,30 @@ begin
     from public.quotation_request_items where quotation_id=quotation_id),'Canonical refresher did not calculate replacement line totals');
   perform pg_temp.assert_dqe((select subtotal=200 and discount_amount=2 and tax_amount=3 and total_amount=196
     from public.quotation_requests where id=quotation_id),'Canonical refresher did not calculate quotation totals');
-  perform pg_temp.assert_dqe(unchanged_counts=jsonb_build_object(
+  perform pg_temp.assert_dqe((unchanged_counts-'customer_notifications')=jsonb_build_object(
+    'inventory_balances',(select count(*) from public.inventory_balances),
+    'inventory_reservations',(select count(*) from public.inventory_reservations),
     'inventory_movements',(select count(*) from public.inventory_movements),
     'sales_orders',(select count(*) from public.sales_orders),
+    'sales_order_items',(select count(*) from public.sales_order_items),
+    'sales_stock_out_requests',(select count(*) from public.sales_stock_out_requests),
+    'sales_stock_out_request_items',(select count(*) from public.sales_stock_out_request_items),
+    'sales_stock_out_request_revisions',(select count(*) from public.sales_stock_out_request_revisions),
+    'sales_stock_out_releases',(select count(*) from public.sales_stock_out_releases),
+    'sale_documents',(select count(*) from public.sale_documents),
+    'sale_payments',(select count(*) from public.sale_payments),
+    'payment_transactions',(select count(*) from public.payment_transactions),
+    'shipments',(select count(*) from public.shipments),
     'cashbook_entries',(select count(*) from public.cashbook_entries),
     'journal_entries',(select count(*) from public.journal_entries)
   ),'Draft edit caused an unrelated inventory, Sale, or accounting write');
+  perform pg_temp.assert_dqe((select count(*) from public.customer_notifications)
+    =(unchanged_counts->>'customer_notifications')::bigint+1,
+    'Draft edit did not produce exactly its existing quotation-update trigger notification');
+  perform pg_temp.assert_dqe((select count(*)=1 from public.customer_notifications
+    where entity_type='quotation_request' and entity_id=quotation_id
+      and notification_type='quotation_updated'),
+    'Draft edit produced an unexpected notification behavior');
   perform pg_temp.expect_dqe_failure(owner_id,quotation_id,
     (select updated_at from public.quotation_requests where id=quotation_id),
     replacement_items||replacement_items,'only be added once');
