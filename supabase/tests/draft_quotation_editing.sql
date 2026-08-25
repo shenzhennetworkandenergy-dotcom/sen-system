@@ -7,12 +7,12 @@ end $$;
 
 create or replace function pg_temp.call_dqe(
   actor_id uuid,
-  quotation_id uuid,
+  requested_quote_id uuid,
   expected_updated_at timestamptz,
   items jsonb
 ) returns uuid language sql as $$
   select public.update_draft_quotation(
-    actor_id,quotation_id,expected_updated_at,
+    actor_id,requested_quote_id,expected_updated_at,
     'Edited Draft subject','Edited Company','TIN-EDITED',current_date+7,current_date+14,
     'Edited terms','Net 30','Edited delivery','Edited customer note','Edited internal note',2,3,items
   )
@@ -20,7 +20,7 @@ $$;
 
 create or replace function pg_temp.expect_dqe_failure(
   actor_id uuid,
-  quotation_id uuid,
+  requested_quote_id uuid,
   expected_updated_at timestamptz,
   items jsonb,
   expected_error text
@@ -30,11 +30,11 @@ declare
   items_before jsonb;
   failed boolean:=false;
 begin
-  select to_jsonb(q) into header_before from public.quotation_requests q where q.id=quotation_id;
+  select to_jsonb(q) into header_before from public.quotation_requests q where q.id=requested_quote_id;
   select coalesce(jsonb_agg(to_jsonb(i) order by i.id),'[]'::jsonb) into items_before
-  from public.quotation_request_items i where i.quotation_id=quotation_id;
+  from public.quotation_request_items i where i.quotation_id=requested_quote_id;
   begin
-    perform pg_temp.call_dqe(actor_id,quotation_id,expected_updated_at,items);
+    perform pg_temp.call_dqe(actor_id,requested_quote_id,expected_updated_at,items);
   exception when others then
     failed:=true;
     if position(lower(expected_error) in lower(sqlerrm))=0 then
@@ -43,14 +43,29 @@ begin
   end;
   perform pg_temp.assert_dqe(failed,'Expected Draft edit failure did not occur');
   perform pg_temp.assert_dqe(
-    header_before=(select to_jsonb(q) from public.quotation_requests q where q.id=quotation_id),
+    header_before=(select to_jsonb(q) from public.quotation_requests q where q.id=requested_quote_id),
     'Failed Draft edit changed its quotation header'
   );
   perform pg_temp.assert_dqe(
     items_before=(select coalesce(jsonb_agg(to_jsonb(i) order by i.id),'[]'::jsonb)
-      from public.quotation_request_items i where i.quotation_id=quotation_id),
+      from public.quotation_request_items i where i.quotation_id=requested_quote_id),
     'Failed Draft edit changed its quotation items'
   );
+end $$;
+
+-- Fingerprints catch inserts, deletes, and in-place updates in the related
+-- operational tables.  The disposable verifier runs this whole file in one
+-- transaction, so this remains rollback-only even when a future trigger is
+-- added to the quotation path.
+create or replace function pg_temp.dqe_table_fingerprint(target regclass)
+returns text language plpgsql as $$
+declare result text;
+begin
+  execute format(
+    'select md5(coalesce(string_agg(to_jsonb(row_data)::text, ''|'' order by to_jsonb(row_data)::text), '''')) from %s row_data',
+    target
+  ) into result;
+  return result;
 end $$;
 
 do $$
@@ -71,9 +86,11 @@ declare
   quoted_quotation_id uuid:=gen_random_uuid();
   corrupt_quotation_id uuid:=gen_random_uuid();
   expected_updated_at timestamptz;
+  role_name text;
+  failed boolean;
   result_id uuid;
   replacement_items jsonb;
-  unchanged_counts jsonb;
+  unchanged_fingerprints jsonb;
 begin
   insert into auth.users(
     instance_id,id,aud,role,email,encrypted_password,email_confirmed_at,
@@ -177,25 +194,66 @@ begin
   result_id:=pg_temp.call_dqe(all_id,other_quotation_id,
     (select updated_at from public.quotation_requests where id=other_quotation_id),replacement_items);
   perform pg_temp.assert_dqe(result_id=other_quotation_id,'View All actor could not edit another creator Draft');
+  -- Exercise the function as its granted database role as well as checking the
+  -- ACL above.  The runner supplies the same service request context used by
+  -- the application RPC path.
+  begin
+    execute 'set local role service_role';
+    result_id:=public.update_draft_quotation(
+      all_id,other_quotation_id,(select updated_at from public.quotation_requests where id=other_quotation_id),
+      'Service role Draft subject',null,null,null,null,null,null,null,null,null,0,0,replacement_items
+    );
+    execute 'reset role';
+  exception when others then
+    execute 'reset role';
+    raise;
+  end;
+  perform pg_temp.assert_dqe(result_id=other_quotation_id,'Service role could not execute the Draft update RPC');
+  foreach role_name in array array['anon','authenticated'] loop
+    failed:=false;
+    begin
+      execute format('set local role %I',role_name);
+      perform public.update_draft_quotation(
+        owner_id,quotation_id,expected_updated_at,
+        'Unauthorized role call',null,null,null,null,null,null,null,null,null,0,0,replacement_items
+      );
+      execute 'reset role';
+    exception when insufficient_privilege then
+      failed:=true;
+      execute 'reset role';
+    end;
+    perform pg_temp.assert_dqe(failed,format('%s unexpectedly executed the service-only Draft update RPC',role_name));
+  end loop;
 
   select jsonb_build_object(
-    'customer_notifications',(select count(*) from public.customer_notifications),
-    'inventory_balances',(select count(*) from public.inventory_balances),
-    'inventory_reservations',(select count(*) from public.inventory_reservations),
-    'inventory_movements',(select count(*) from public.inventory_movements),
-    'sales_orders',(select count(*) from public.sales_orders),
-    'sales_order_items',(select count(*) from public.sales_order_items),
-    'sales_stock_out_requests',(select count(*) from public.sales_stock_out_requests),
-    'sales_stock_out_request_items',(select count(*) from public.sales_stock_out_request_items),
-    'sales_stock_out_request_revisions',(select count(*) from public.sales_stock_out_request_revisions),
-    'sales_stock_out_releases',(select count(*) from public.sales_stock_out_releases),
-    'sale_documents',(select count(*) from public.sale_documents),
-    'sale_payments',(select count(*) from public.sale_payments),
-    'payment_transactions',(select count(*) from public.payment_transactions),
-    'shipments',(select count(*) from public.shipments),
-    'cashbook_entries',(select count(*) from public.cashbook_entries),
-    'journal_entries',(select count(*) from public.journal_entries)
-  ) into unchanged_counts;
+    'customer_notifications',pg_temp.dqe_table_fingerprint('public.customer_notifications'),
+    'inventory_balances',pg_temp.dqe_table_fingerprint('public.inventory_balances'),
+    'inventory_reservations',pg_temp.dqe_table_fingerprint('public.inventory_reservations'),
+    'inventory_movements',pg_temp.dqe_table_fingerprint('public.inventory_movements'),
+    'inventory_movement_items',pg_temp.dqe_table_fingerprint('public.inventory_movement_items'),
+    'sales_orders',pg_temp.dqe_table_fingerprint('public.sales_orders'),
+    'sales_order_items',pg_temp.dqe_table_fingerprint('public.sales_order_items'),
+    'sales_stock_out_requests',pg_temp.dqe_table_fingerprint('public.sales_stock_out_requests'),
+    'sales_stock_out_request_items',pg_temp.dqe_table_fingerprint('public.sales_stock_out_request_items'),
+    'sales_stock_out_request_revisions',pg_temp.dqe_table_fingerprint('public.sales_stock_out_request_revisions'),
+    'sales_stock_out_request_revision_items',pg_temp.dqe_table_fingerprint('public.sales_stock_out_request_revision_items'),
+    'sales_stock_out_releases',pg_temp.dqe_table_fingerprint('public.sales_stock_out_releases'),
+    'sales_stock_out_release_items',pg_temp.dqe_table_fingerprint('public.sales_stock_out_release_items'),
+    'sales_stock_out_release_serials',pg_temp.dqe_table_fingerprint('public.sales_stock_out_release_serials'),
+    'sales_stock_out_serial_changes',pg_temp.dqe_table_fingerprint('public.sales_stock_out_serial_changes'),
+    'sale_documents',pg_temp.dqe_table_fingerprint('public.sale_documents'),
+    'sale_payments',pg_temp.dqe_table_fingerprint('public.sale_payments'),
+    'payment_transactions',pg_temp.dqe_table_fingerprint('public.payment_transactions'),
+    'shipments',pg_temp.dqe_table_fingerprint('public.shipments'),
+    'shipment_items',pg_temp.dqe_table_fingerprint('public.shipment_items'),
+    'shipment_serials',pg_temp.dqe_table_fingerprint('public.shipment_serials'),
+    'shipment_tracking_events',pg_temp.dqe_table_fingerprint('public.shipment_tracking_events'),
+    'cashbook_entries',pg_temp.dqe_table_fingerprint('public.cashbook_entries'),
+    'cashbook_days',pg_temp.dqe_table_fingerprint('public.cashbook_days'),
+    'journal_entries',pg_temp.dqe_table_fingerprint('public.journal_entries'),
+    'journal_lines',pg_temp.dqe_table_fingerprint('public.journal_lines'),
+    'sale_price_adjustments',pg_temp.dqe_table_fingerprint('public.sale_price_adjustments')
+  ) into unchanged_fingerprints;
   result_id:=pg_temp.call_dqe(owner_id,quotation_id,expected_updated_at,replacement_items);
   perform pg_temp.assert_dqe(result_id=quotation_id,'Draft update returned a different quotation ID');
   perform pg_temp.assert_dqe((select
@@ -203,35 +261,44 @@ begin
     and status='draft' and shipping_address_id is null and billing_address_id is null
     and subject='Edited Draft subject' and customer_notes='Edited customer note'
     from public.quotation_requests where id=quotation_id),'Draft edit changed fixed identity/customer/ownership/status/address data or missed headers');
-  perform pg_temp.assert_dqe((select count(*)=1 from public.quotation_request_items where quotation_id=quotation_id),'Draft item replacement did not leave exactly one line');
+  perform pg_temp.assert_dqe((select count(*)=1 from public.quotation_request_items i where i.quotation_id=dqe_test.quotation_id),'Draft item replacement did not leave exactly one line');
   perform pg_temp.assert_dqe((select
-    product_id=replacement_product_id and variation_id is null and product_name_snapshot='DQE Replacement Product'
-    and quantity=2 and unit_price=100 and discount_amount=10 and tax_amount=5
-    and line_subtotal=200 and line_total=195
-    from public.quotation_request_items where quotation_id=quotation_id),'Canonical refresher did not calculate replacement line totals');
+    i.product_id=replacement_product_id and i.variation_id is null and i.product_name_snapshot='DQE Replacement Product'
+    and i.quantity=2 and i.unit_price=100 and i.discount_amount=10 and i.tax_amount=5
+    and i.line_subtotal=200 and i.line_total=195
+    from public.quotation_request_items i where i.quotation_id=dqe_test.quotation_id),'Canonical refresher did not calculate replacement line totals');
   perform pg_temp.assert_dqe((select subtotal=200 and discount_amount=2 and tax_amount=3 and total_amount=196
     from public.quotation_requests where id=quotation_id),'Canonical refresher did not calculate quotation totals');
-  perform pg_temp.assert_dqe((unchanged_counts-'customer_notifications')=jsonb_build_object(
-    'inventory_balances',(select count(*) from public.inventory_balances),
-    'inventory_reservations',(select count(*) from public.inventory_reservations),
-    'inventory_movements',(select count(*) from public.inventory_movements),
-    'sales_orders',(select count(*) from public.sales_orders),
-    'sales_order_items',(select count(*) from public.sales_order_items),
-    'sales_stock_out_requests',(select count(*) from public.sales_stock_out_requests),
-    'sales_stock_out_request_items',(select count(*) from public.sales_stock_out_request_items),
-    'sales_stock_out_request_revisions',(select count(*) from public.sales_stock_out_request_revisions),
-    'sales_stock_out_releases',(select count(*) from public.sales_stock_out_releases),
-    'sale_documents',(select count(*) from public.sale_documents),
-    'sale_payments',(select count(*) from public.sale_payments),
-    'payment_transactions',(select count(*) from public.payment_transactions),
-    'shipments',(select count(*) from public.shipments),
-    'cashbook_entries',(select count(*) from public.cashbook_entries),
-    'journal_entries',(select count(*) from public.journal_entries)
-  ),'Draft edit caused an unrelated inventory, Sale, or accounting write');
-  perform pg_temp.assert_dqe((select count(*) from public.customer_notifications)
-    =(unchanged_counts->>'customer_notifications')::bigint+1,
-    'Draft edit did not produce exactly its existing quotation-update trigger notification');
-  perform pg_temp.assert_dqe((select count(*)=1 from public.customer_notifications
+  perform pg_temp.assert_dqe(unchanged_fingerprints=jsonb_build_object(
+    'customer_notifications',pg_temp.dqe_table_fingerprint('public.customer_notifications'),
+    'inventory_balances',pg_temp.dqe_table_fingerprint('public.inventory_balances'),
+    'inventory_reservations',pg_temp.dqe_table_fingerprint('public.inventory_reservations'),
+    'inventory_movements',pg_temp.dqe_table_fingerprint('public.inventory_movements'),
+    'inventory_movement_items',pg_temp.dqe_table_fingerprint('public.inventory_movement_items'),
+    'sales_orders',pg_temp.dqe_table_fingerprint('public.sales_orders'),
+    'sales_order_items',pg_temp.dqe_table_fingerprint('public.sales_order_items'),
+    'sales_stock_out_requests',pg_temp.dqe_table_fingerprint('public.sales_stock_out_requests'),
+    'sales_stock_out_request_items',pg_temp.dqe_table_fingerprint('public.sales_stock_out_request_items'),
+    'sales_stock_out_request_revisions',pg_temp.dqe_table_fingerprint('public.sales_stock_out_request_revisions'),
+    'sales_stock_out_request_revision_items',pg_temp.dqe_table_fingerprint('public.sales_stock_out_request_revision_items'),
+    'sales_stock_out_releases',pg_temp.dqe_table_fingerprint('public.sales_stock_out_releases'),
+    'sales_stock_out_release_items',pg_temp.dqe_table_fingerprint('public.sales_stock_out_release_items'),
+    'sales_stock_out_release_serials',pg_temp.dqe_table_fingerprint('public.sales_stock_out_release_serials'),
+    'sales_stock_out_serial_changes',pg_temp.dqe_table_fingerprint('public.sales_stock_out_serial_changes'),
+    'sale_documents',pg_temp.dqe_table_fingerprint('public.sale_documents'),
+    'sale_payments',pg_temp.dqe_table_fingerprint('public.sale_payments'),
+    'payment_transactions',pg_temp.dqe_table_fingerprint('public.payment_transactions'),
+    'shipments',pg_temp.dqe_table_fingerprint('public.shipments'),
+    'shipment_items',pg_temp.dqe_table_fingerprint('public.shipment_items'),
+    'shipment_serials',pg_temp.dqe_table_fingerprint('public.shipment_serials'),
+    'shipment_tracking_events',pg_temp.dqe_table_fingerprint('public.shipment_tracking_events'),
+    'cashbook_entries',pg_temp.dqe_table_fingerprint('public.cashbook_entries'),
+    'cashbook_days',pg_temp.dqe_table_fingerprint('public.cashbook_days'),
+    'journal_entries',pg_temp.dqe_table_fingerprint('public.journal_entries'),
+    'journal_lines',pg_temp.dqe_table_fingerprint('public.journal_lines'),
+    'sale_price_adjustments',pg_temp.dqe_table_fingerprint('public.sale_price_adjustments')
+  ),'Draft edit caused an unrelated notification, inventory, Sale, shipment, or accounting write');
+  perform pg_temp.assert_dqe((select count(*)=0 from public.customer_notifications
     where entity_type='quotation_request' and entity_id=quotation_id
       and notification_type='quotation_updated'),
     'Draft edit produced an unexpected notification behavior');
