@@ -18,9 +18,18 @@ import {
 import { moneyFromForm, parseWholeNumber } from "@/lib/validation/numbers";
 import { normalizeSaleLineEdit } from "@/lib/sales/line-editing";
 import { buildSalePaymentRpcArguments } from "@/lib/sales/payment-accounting";
+import {
+  normalizeCommercialTermsDraft,
+  normalizeDueDateCorrectionDraft,
+  type PaymentTermsType,
+} from "@/lib/sales/commercial-terms";
+import {
+  canAccessSaleUnderScope,
+  resolveSalesVisibilityScope,
+} from "@/lib/sales/visibility";
 
 const target = (id: string, kind: "success" | "error", message: string) => `/admin/sales/${id}?${kind}=${encodeURIComponent(message)}`;
-const safe = (message: string | undefined, fallback: string) => message && /sale|invoice|revision|release|payment|amount|method|stock|draft|serial|document|permission|eligible|accounting|cashbook|closed|received|channel|retry|operation/i.test(message) ? message : fallback;
+const safe = (message: string | undefined, fallback: string) => message && /sale|invoice|revision|release|payment|amount|method|stock|draft|serial|document|permission|eligible|accounting|cashbook|closed|received|channel|retry|operation|terms|credit|due date|correction/i.test(message) ? message : fallback;
 
 export async function updateSaleLinesAction(saleId: string, form: FormData) {
   const { profile } = await requirePermission("sales.edit");
@@ -68,6 +77,102 @@ export async function updateSaleLinesAction(saleId: string, form: FormData) {
   revalidatePath(`/admin/sales/${saleId}`);
   revalidatePath(`/account/sales`);
   redirect(target(saleId, "success", "Sale products and pricing updated. Existing documents were marked superseded."));
+}
+
+export async function updateSaleCommercialTermsAction(saleId: string, form: FormData) {
+  const { profile, permissions } = await requirePermission("sales.edit");
+  const db = createSupabaseAdminClient();
+  const [{ data: sale, error: saleError }, { data: invoice, error: invoiceError }] =
+    await Promise.all([
+      db
+        .from("sales_orders")
+        .select("id,created_by,payment_terms_type,credit_period_days,payment_due_date")
+        .eq("id", saleId)
+        .maybeSingle(),
+      db
+        .from("sale_documents")
+        .select("id")
+        .eq("order_id", saleId)
+        .eq("document_type", "invoice")
+        .neq("status", "voided")
+        .limit(1)
+        .maybeSingle(),
+    ]);
+  if (saleError || invoiceError || !sale) {
+    redirect(target(saleId, "error", "Unable to verify Sale commercial terms."));
+  }
+  const salesScope = resolveSalesVisibilityScope({
+    role: profile.role,
+    status: profile.status,
+    profileId: profile.id,
+    permissions,
+  });
+  if (!canAccessSaleUnderScope(salesScope, sale.created_by)) {
+    redirect(target(saleId, "error", "Sales access denied."));
+  }
+
+  let requested: {
+    paymentTermsType: PaymentTermsType | null;
+    creditPeriodDays: number | null;
+    paymentDueDate: string | null;
+    reason: string | null;
+  };
+  let operationId: string;
+  try {
+    operationId = uuid(form.get("operation_id"), "Commercial terms operation");
+    if (invoice) {
+      const correction = normalizeDueDateCorrectionDraft({
+        paymentDueDate: form.get("payment_due_date"),
+        reason: form.get("reason"),
+      });
+      requested = {
+        paymentTermsType: sale.payment_terms_type as PaymentTermsType | null,
+        creditPeriodDays: sale.credit_period_days,
+        ...correction,
+      };
+    } else {
+      requested = normalizeCommercialTermsDraft({
+        paymentTermsType: form.get("payment_terms_type"),
+        creditPeriodPreset: form.get("credit_period_preset"),
+        customCreditPeriodDays: form.get("custom_credit_period_days"),
+        paymentDueDate: form.get("payment_due_date"),
+        reason: form.get("reason"),
+      });
+    }
+  } catch (error) {
+    redirect(
+      target(
+        saleId,
+        "error",
+        error instanceof Error ? error.message : "Commercial terms are invalid.",
+      ),
+    );
+  }
+
+  const result = await db.rpc("update_sale_commercial_terms", {
+    actor_profile_id: profile.id,
+    requested_order_id: saleId,
+    requested_operation_id: operationId,
+    requested_payment_terms_type: requested.paymentTermsType,
+    requested_credit_period_days: requested.creditPeriodDays,
+    requested_payment_due_date: requested.paymentDueDate,
+    requested_reason: requested.reason,
+  });
+  if (result.error) {
+    redirect(
+      target(
+        saleId,
+        "error",
+        safe(result.error.message, "Unable to update Sale commercial terms."),
+      ),
+    );
+  }
+  revalidatePath(`/admin/sales/${saleId}`);
+  revalidatePath("/admin/receivables");
+  revalidatePath("/admin/receivables/customers");
+  redirect(target(saleId, "success", invoice
+    ? "Payment due date correction saved with audit history."
+    : "Commercial payment terms updated."));
 }
 
 export async function createSaleAction(form: FormData) {

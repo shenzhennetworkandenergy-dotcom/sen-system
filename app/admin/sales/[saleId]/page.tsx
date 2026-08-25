@@ -13,10 +13,16 @@ import { dateTime, label, money } from "@/lib/orders/types";
 import { getSale, getSaleAccessOwner } from "@/lib/sales/data";
 import { getAuthorizedPhysicalReturnLinks } from "@/lib/inventory/rma-return-data";
 import {
+  deriveEffectiveDueDate,
+  formatCommercialTerms,
+  type PaymentTermsType,
+} from "@/lib/sales/commercial-terms";
+import {
   cancelSaleAction,
   confirmSaleAction,
   generateSaleDocumentAction,
   recordPaymentAction,
+  updateSaleCommercialTermsAction,
 } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -73,6 +79,7 @@ export default async function SaleDetail({
   const sourceQuotationLink = getSaleSourceQuotationLink(sourceQuotation);
   const invoiceOperationId = randomUUID();
   const paymentOperationId = randomUUID();
+  const commercialTermsOperationId = randomUUID();
   const customer = order.customer as {
     full_name: string | null;
     email: string;
@@ -94,6 +101,29 @@ export default async function SaleDetail({
     (isAdmin || permissions.has("sales.edit"));
   const canChangePrice = isAdmin || permissions.has("sales.change_price");
   const canApplyDiscount = isAdmin || permissions.has("sales.apply_discount");
+  const canEditCommercialTerms = isAdmin || permissions.has("sales.edit");
+  const nonVoidInvoices = documents.filter(
+    (document) => document.document_type === "invoice" && document.status !== "voided",
+  );
+  const hasNonVoidInvoice = nonVoidInvoices.length > 0;
+  const commercialTerms = {
+    paymentTermsType: order.payment_terms_type as PaymentTermsType | null,
+    creditPeriodDays: order.credit_period_days === null
+      ? null
+      : Number(order.credit_period_days),
+    paymentDueDate: order.payment_due_date as string | null,
+  };
+  const dueDate = deriveEffectiveDueDate({
+    explicitDueDate: commercialTerms.paymentDueDate,
+    creditPeriodDays: commercialTerms.creditPeriodDays,
+    invoiceTimestamps: nonVoidInvoices.map((document) => document.created_at),
+  });
+  const presetPeriods = [7, 15, 30, 45, 60];
+  const currentPreset = commercialTerms.creditPeriodDays === null
+    ? ""
+    : presetPeriods.includes(commercialTerms.creditPeriodDays)
+      ? String(commercialTerms.creditPeriodDays)
+      : "custom";
   const hasSupersededInvoice = documents.some(
     (document) =>
       document.document_type === "invoice" && document.status === "superseded",
@@ -190,6 +220,66 @@ export default async function SaleDetail({
 
       <section className="mt-4 grid gap-3 xl:grid-cols-[1.4fr_.6fr]">
         <div className="space-y-3">
+          <article className="rounded-xl border border-blue-200 bg-[var(--surface)] p-4 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="font-bold text-[var(--primary)]">Commercial payment terms</h2>
+                <p className="mt-1 text-sm text-[var(--muted-text)]">
+                  These terms drive the operational Customer Receivables due date. Payments still use Sales → Record Payment.
+                </p>
+              </div>
+              <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-800">
+                {formatCommercialTerms(commercialTerms)}
+              </span>
+            </div>
+            <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
+              <div className="rounded-lg bg-[var(--muted-surface)] p-3"><dt className="text-[var(--muted-text)]">Effective due date</dt><dd className="font-semibold">{dueDate.dueDate ?? "Not set"}</dd></div>
+              <div className="rounded-lg bg-[var(--muted-surface)] p-3"><dt className="text-[var(--muted-text)]">Due-date source</dt><dd className="font-semibold">{dueDate.source === "credit_period" ? "Credit period" : dueDate.source === "explicit" ? "Explicit due date" : "Not set"}</dd></div>
+              <div className="rounded-lg bg-[var(--muted-surface)] p-3"><dt className="text-[var(--muted-text)]">Earliest valid invoice</dt><dd className="font-semibold">{dueDate.invoiceAnchorDate ?? "Not generated"}</dd></div>
+            </dl>
+            {canEditCommercialTerms ? hasNonVoidInvoice ? (
+              <form action={updateSaleCommercialTermsAction.bind(null, saleId)} className="mt-3 grid gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 md:grid-cols-[1fr_2fr_auto]">
+                <input type="hidden" name="operation_id" value={commercialTermsOperationId} />
+                <label className="grid gap-1 text-sm font-semibold text-amber-950">
+                  Explicit due date correction
+                  <input type="date" name="payment_due_date" defaultValue={commercialTerms.paymentDueDate ?? dueDate.dueDate ?? ""} required className={field} />
+                </label>
+                <label className="grid gap-1 text-sm font-semibold text-amber-950">
+                  Correction reason
+                  <input name="reason" required maxLength={1000} placeholder="Why the finalized due date is being corrected" className={field} />
+                </label>
+                <button className="self-end rounded-lg bg-amber-700 px-4 py-2 font-semibold text-white">Save correction</button>
+                <p className="text-xs text-amber-900 md:col-span-3">
+                  Invoice finalized: payment type and credit period are locked. This audited correction changes only the explicit due date and does not rewrite invoice documents.
+                </p>
+              </form>
+            ) : (
+              <form action={updateSaleCommercialTermsAction.bind(null, saleId)} className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-5">
+                <input type="hidden" name="operation_id" value={commercialTermsOperationId} />
+                <label className="grid gap-1 text-sm font-semibold">Payment terms
+                  <select name="payment_terms_type" defaultValue={commercialTerms.paymentTermsType ?? "immediate"} className={field}>
+                    <option value="immediate">Immediate</option><option value="partial">Partial</option><option value="credit">Credit</option>
+                  </select>
+                </label>
+                <label className="grid gap-1 text-sm font-semibold">Credit period
+                  <select name="credit_period_preset" defaultValue={currentPreset} className={field}>
+                    <option value="">No credit period</option><option value="7">7 days</option><option value="15">15 days</option><option value="30">30 days</option><option value="45">45 days</option><option value="60">60 days</option><option value="custom">Custom</option>
+                  </select>
+                </label>
+                <label className="grid gap-1 text-sm font-semibold">Custom days
+                  <input type="number" name="custom_credit_period_days" min={1} max={3650} step={1} defaultValue={currentPreset === "custom" ? commercialTerms.creditPeriodDays ?? "" : ""} className={field} />
+                </label>
+                <label className="grid gap-1 text-sm font-semibold">Explicit due date
+                  <input type="date" name="payment_due_date" defaultValue={commercialTerms.paymentDueDate ?? ""} className={field} />
+                </label>
+                <button className="self-end rounded-lg bg-[var(--primary)] px-4 py-2 font-semibold text-white">Save terms</button>
+                <p className="text-xs text-[var(--muted-text)] md:col-span-2 xl:col-span-5">
+                  Before invoice finalization, an explicit due date overrides a period-derived date. Without a genuine date or invoice anchor, Receivables shows “Not set.”
+                </p>
+              </form>
+            ) : null}
+          </article>
+
           <article className="rounded-xl border bg-[var(--surface)] p-4">
             <h2 className="font-bold">Products & pricing</h2>
             <div className="mt-3 space-y-2">

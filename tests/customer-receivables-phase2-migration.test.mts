@@ -32,6 +32,8 @@ test("commercial-term updates are atomic, idempotent, audited, and Sales-scope p
   assert.match(migration, /explicit due date is required after invoice finalization/i);
   assert.match(migration, /correction reason is required after invoice finalization/i);
   assert.match(migration, /insert into public\.audit_logs/i);
+  assert.match(migration, /old_values\s*,\s*new_values\s*,\s*metadata/i);
+  assert.doesNotMatch(migration, /previous_values/i);
   assert.match(migration, /operation_id/i);
 });
 

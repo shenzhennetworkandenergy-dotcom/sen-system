@@ -6,6 +6,9 @@ const builder = await readFile("scripts/build-native-schema.mjs", "utf8");
 const migration = normalize(
   await readFile("supabase/migrations/202608250001_receivables_phase1.sql", "utf8"),
 ).trim();
+const phase2Migration = normalize(
+  await readFile("supabase/migrations/202608250002_customer_receivables_phase2.sql", "utf8"),
+).trim();
 const schema = normalize(await readFile("database/native/schema.sql", "utf8"));
 
 function normalize(value: string) {
@@ -19,10 +22,44 @@ function occurrences(value: string, needle: string) {
 test("native builder appends the complete Receivables migration after the current production migrations", () => {
   const stockOutHotfix = builder.indexOf("stockOutReleaseQuantityMigration.trim()");
   const receivables = builder.indexOf("receivablesMigration.trim()");
+  const customerReceivables = builder.indexOf("customerReceivablesMigration.trim()");
 
   assert.match(builder, /202608250001_receivables_phase1\.sql/);
-  assert.ok(stockOutHotfix >= 0 && receivables > stockOutHotfix);
+  assert.match(builder, /202608250002_customer_receivables_phase2\.sql/);
+  assert.ok(
+    stockOutHotfix >= 0 &&
+      receivables > stockOutHotfix &&
+      customerReceivables > receivables,
+  );
   assert.equal(occurrences(schema, migration), 1);
+  assert.equal(occurrences(schema, phase2Migration), 1);
+});
+
+test("native schema exposes the Phase 2 Sales terms and derived read contract exactly once", () => {
+  for (const column of [
+    "payment_terms_type",
+    "credit_period_days",
+    "payment_due_date",
+  ]) {
+    assert.equal(occurrences(phase2Migration, `add column if not exists ${column}`), 1);
+  }
+  for (const view of [
+    "customer_receivables_detail_v",
+    "customer_receivables_summary_v",
+    "customer_receivables_metrics_v",
+  ]) {
+    assert.equal(
+      occurrences(schema.toLowerCase(), `create or replace view public.${view}`),
+      1,
+    );
+  }
+  assert.equal(
+    occurrences(
+      schema.toLowerCase(),
+      "create or replace function public.update_sale_commercial_terms(",
+    ),
+    1,
+  );
 });
 
 test("native schema exposes the Phase 1 Receivables contract exactly once", () => {
@@ -38,15 +75,15 @@ test("native schema exposes the Phase 1 Receivables contract exactly once", () =
     );
   }
 
-  for (const view of [
-    "customer_receivables_v",
-    "non_sales_receivables_v",
-    "receivables_overview_v",
-  ]) {
+  for (const [view, expectedDefinitions] of [
+    ["customer_receivables_v", 2],
+    ["non_sales_receivables_v", 1],
+    ["receivables_overview_v", 2],
+  ] as const) {
     assert.equal(
       occurrences(schema.toLowerCase(), `create or replace view public.${view}`),
-      1,
-      `${view} must be defined once`,
+      expectedDefinitions,
+      `${view} must contain only its expected additive migration definitions`,
     );
   }
 

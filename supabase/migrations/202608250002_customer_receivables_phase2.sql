@@ -131,7 +131,7 @@ begin
 
   insert into public.audit_logs(
     actor_id,actor_role,action,module,entity_type,entity_id,description,
-    previous_values,new_values,metadata
+    old_values,new_values,metadata
   ) values(
     actor_profile_id,actor_row.role,'sale.commercial_terms_updated','sales',
     'sales_order',requested_order_id::text,

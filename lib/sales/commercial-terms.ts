@@ -2,7 +2,7 @@ export const PAYMENT_TERMS_TYPES = ["immediate", "partial", "credit"] as const;
 export type PaymentTermsType = (typeof PAYMENT_TERMS_TYPES)[number];
 
 export type CommercialTerms = {
-  paymentTermsType: PaymentTermsType;
+  paymentTermsType: PaymentTermsType | null;
   creditPeriodDays: number | null;
   paymentDueDate: string | null;
 };
@@ -107,6 +107,21 @@ export function normalizeCommercialTermsDraft(
   };
 }
 
+export function normalizeDueDateCorrectionDraft(draft: {
+  paymentDueDate?: unknown;
+  reason?: unknown;
+}) {
+  const paymentDueDate = validDate(draft.paymentDueDate, "Payment due date");
+  const reason = text(draft.reason, 1000) || null;
+  if (!paymentDueDate) {
+    throw new Error("An explicit payment due date is required after invoice finalization.");
+  }
+  if (!reason) {
+    throw new Error("A correction reason is required after invoice finalization.");
+  }
+  return { paymentDueDate, reason };
+}
+
 export function validateCommercialTermsUpdate(input: {
   current: CommercialTerms;
   requested: CommercialTermsUpdate;
@@ -206,6 +221,7 @@ export function deriveReceivableState(input: {
 }
 
 export function formatCommercialTerms(terms: CommercialTerms) {
+  if (!terms.paymentTermsType) return "Not set";
   const label = terms.paymentTermsType.replace(/^./, (letter) => letter.toUpperCase());
   return terms.creditPeriodDays ? `${label} · ${terms.creditPeriodDays} days` : label;
 }

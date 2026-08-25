@@ -4,6 +4,7 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { ReceivablesNavigation } from "@/components/receivables/ReceivablesNavigation";
 import { requirePermission } from "@/lib/auth/permissions";
 import { getReceivablesDashboard } from "@/lib/receivables/data";
+import { resolveSalesVisibilityScope } from "@/lib/sales/visibility";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +31,17 @@ export default async function ReceivablesPage() {
   const isAdmin = profile.role === "admin";
   const canViewCustomer = isAdmin || permissions.has("receivables.view_customer");
   const canViewLoans = isAdmin || permissions.has("receivables.view_loans");
-  const data = await getReceivablesDashboard({ canViewCustomer, canViewLoans });
+  const salesScope = resolveSalesVisibilityScope({
+    role: profile.role,
+    status: profile.status,
+    profileId: profile.id,
+    permissions,
+  });
+  const data = await getReceivablesDashboard({
+    canViewCustomer,
+    canViewLoans,
+    salesScope,
+  });
 
   return (
     <DashboardShell
@@ -67,6 +78,19 @@ export default async function ReceivablesPage() {
               {metricCard("Due next 7 days", money(summary.dueThisWeek, summary.currency), "border-amber-200")}
               {metricCard("Past due", money(summary.overdue, summary.currency), "border-red-200")}
             </div>
+            {canViewCustomer ? (() => {
+              const customer = data.customerMetrics.find(
+                (metric) => metric.currency === summary.currency,
+              );
+              return customer ? (
+                <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  {metricCard("Customer current", money(customer.currentOutstanding, summary.currency), "border-blue-200")}
+                  {metricCard("Customer no due date", money(customer.noDueDate, summary.currency), "border-slate-200")}
+                  {metricCard("Collected this month", money(customer.collectedThisMonth, summary.currency), "border-green-200")}
+                  {metricCard("Customer records", String(customer.recordCount), "border-cyan-200")}
+                </div>
+              ) : null;
+            })() : null}
           </section>
         ))}
 

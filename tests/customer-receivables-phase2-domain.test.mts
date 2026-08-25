@@ -4,9 +4,37 @@ import test from "node:test";
 import {
   deriveEffectiveDueDate,
   deriveReceivableState,
+  formatCommercialTerms,
   normalizeCommercialTermsDraft,
+  normalizeDueDateCorrectionDraft,
   validateCommercialTermsUpdate,
 } from "../lib/sales/commercial-terms.ts";
+
+test("historical Sales without structured terms remain explicitly unset", () => {
+  assert.equal(formatCommercialTerms({
+    paymentTermsType: null,
+    creditPeriodDays: null,
+    paymentDueDate: null,
+  }), "Not set");
+});
+
+test("post-invoice due-date corrections require a valid date and reason without inventing terms", () => {
+  assert.deepEqual(normalizeDueDateCorrectionDraft({
+    paymentDueDate: "2026-10-15",
+    reason: "  Customer-approved correction  ",
+  }), {
+    paymentDueDate: "2026-10-15",
+    reason: "Customer-approved correction",
+  });
+  assert.throws(() => normalizeDueDateCorrectionDraft({
+    paymentDueDate: "",
+    reason: "Correction",
+  }), /due date/i);
+  assert.throws(() => normalizeDueDateCorrectionDraft({
+    paymentDueDate: "2026-10-15",
+    reason: "",
+  }), /reason/i);
+});
 
 test("normalizes immediate, preset, custom, partial, and explicit commercial terms", () => {
   assert.deepEqual(normalizeCommercialTermsDraft({ paymentTermsType: "immediate" }), {

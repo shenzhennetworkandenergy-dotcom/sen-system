@@ -16,4 +16,12 @@ test("Receivables database verifier is local-only, rollback-only, and covers fin
   assert.match(verifier, /cashbook_entries/);
   assert.match(verifier, /hr_payroll_records/);
   assert.match(verifier, /same operation/i);
+  assert.match(verifier, /customer_receivables_detail_v/);
+  assert.match(verifier, /customer_receivables_summary_v/);
+  assert.match(verifier, /customer_receivables_metrics_v/);
+  assert.match(verifier, /update_sale_commercial_terms/);
+  assert.match(verifier, /payment_terms_type/);
+  assert.match(verifier, /sales\.view_own/);
+  assert.match(verifier, /draft/i);
+  assert.match(verifier, /Asia\/Dhaka/);
 });
