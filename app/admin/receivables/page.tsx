@@ -91,6 +91,34 @@ export default async function ReceivablesPage() {
                 </div>
               ) : null;
             })() : null}
+            {canViewLoans ? (() => {
+              const loanMetrics = data.loanMetrics.filter(
+                (metric) => metric.currency === summary.currency,
+              );
+              if (!loanMetrics.length) return null;
+              const recoveredThisMonth = loanMetrics.reduce(
+                (total, metric) => total + metric.recoveredThisMonth,
+                0,
+              );
+              return (
+                <div className="mt-3 rounded-xl border border-violet-100 bg-violet-50/50 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold text-violet-950">Non-Sales category breakdown</h3>
+                    <span className="text-sm font-semibold text-green-800">
+                      Recovered / adjusted this month: {money(recoveredThisMonth, summary.currency)}
+                    </span>
+                  </div>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {loanMetrics.map((metric) => (
+                      <article key={`${metric.currency}-${metric.category}`} className="rounded-lg border bg-white p-3 text-sm">
+                        <div className="flex justify-between gap-3"><strong>{metric.category.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase())}</strong><span>{metric.accountCount} account(s)</span></div>
+                        <p className="mt-1 font-bold text-[var(--primary)]">{money(metric.outstandingAmount, metric.currency)}</p>
+                      </article>
+                    ))}
+                  </div>
+                </div>
+              );
+            })() : null}
           </section>
         ))}
 

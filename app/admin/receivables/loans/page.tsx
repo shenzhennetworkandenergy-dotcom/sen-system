@@ -1,4 +1,5 @@
 import { connection } from "next/server";
+import Link from "next/link";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
 import {
@@ -55,7 +56,18 @@ export default async function ReceivableLoansPage({
     crmContacts: rawOptions.crmContacts.map((item) => ({ id: item.id, label: item.full_name })),
     externalParties: rawOptions.externalParties.map((item) => ({ id: item.id, label: item.display_name })),
   };
-  const query = data.search ? `&q=${encodeURIComponent(data.search)}` : "";
+  const pageQuery = new URLSearchParams();
+  if (data.search) pageQuery.set("q", data.search);
+  if (data.filters.category) pageQuery.set("category", data.filters.category);
+  if (data.filters.status) pageQuery.set("status", data.filters.status);
+  if (data.filters.borrowerType) pageQuery.set("borrowerType", data.filters.borrowerType);
+  if (data.filters.currency) pageQuery.set("currency", data.filters.currency);
+  if (data.filters.outstandingOnly) pageQuery.set("outstandingOnly", "1");
+  const pageHref = (page: number) => {
+    const query = new URLSearchParams(pageQuery);
+    query.set("page", String(page));
+    return `?${query.toString()}`;
+  };
 
   return (
     <DashboardShell
@@ -71,12 +83,16 @@ export default async function ReceivableLoansPage({
             <h2 className="text-lg font-semibold text-[var(--primary)]">Operational accounts</h2>
             <p className="text-sm text-[var(--muted-text)]">Opening balance records are clearly marked and do not create fake historical cash transactions.</p>
           </div>
-          <span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-bold text-violet-800">Phase 1 foundation</span>
+          <span className="rounded-full bg-violet-100 px-3 py-1 text-xs font-bold text-violet-800">Phase 3 operational</span>
         </div>
       </section>
-      <form className="mb-4 flex flex-col gap-2 rounded-xl border bg-white p-3 sm:flex-row">
-        <input name="q" defaultValue={data.search} placeholder="Borrower or receivable number" maxLength={80} className="min-w-0 flex-1 rounded-lg border px-3 py-2" />
-        <button className="rounded-lg bg-[var(--primary)] px-4 py-2 font-semibold text-white">Search</button>
+      <form className="mb-4 grid gap-3 rounded-xl border bg-white p-3 md:grid-cols-3 xl:grid-cols-7">
+        <label className="text-xs font-semibold text-slate-700 xl:col-span-2">Search<input name="q" defaultValue={data.search} placeholder="Borrower or receivable number" maxLength={80} className="mt-1 w-full rounded-lg border px-3 py-2" /></label>
+        <label className="text-xs font-semibold text-slate-700">Category<select name="category" defaultValue={data.filters.category} className="mt-1 w-full rounded-lg border px-3 py-2"><option value="">All categories</option>{["employee_loan","salary_advance","customer_loan","company_loan","individual_loan","supplier_refundable_advance","security_deposit","rent_advance","recoverable_advance","other"].map((item) => <option key={item} value={item}>{label(item)}</option>)}</select></label>
+        <label className="text-xs font-semibold text-slate-700">Status<select name="status" defaultValue={data.filters.status} className="mt-1 w-full rounded-lg border px-3 py-2"><option value="">All statuses</option>{["requested","under_review","approved","active","fully_repaid","rejected","cancelled"].map((item) => <option key={item} value={item}>{label(item)}</option>)}</select></label>
+        <label className="text-xs font-semibold text-slate-700">Borrower<select name="borrowerType" defaultValue={data.filters.borrowerType} className="mt-1 w-full rounded-lg border px-3 py-2"><option value="">All borrowers</option>{["employee","customer","supplier","crm_company","crm_contact","external_party"].map((item) => <option key={item} value={item}>{label(item)}</option>)}</select></label>
+        <label className="text-xs font-semibold text-slate-700">Currency<input name="currency" defaultValue={data.filters.currency} maxLength={3} placeholder="BDT" className="mt-1 w-full rounded-lg border px-3 py-2 uppercase" /></label>
+        <div className="flex items-end gap-2"><label className="flex items-center gap-2 pb-2 text-xs font-semibold text-slate-700"><input type="checkbox" name="outstandingOnly" value="1" defaultChecked={data.filters.outstandingOnly} /> Outstanding only</label><button className="ml-auto rounded-lg bg-[var(--primary)] px-4 py-2 font-semibold text-white">Filter</button></div>
       </form>
       <div className="overflow-x-auto rounded-2xl border bg-white shadow-sm">
         <table className="w-full min-w-[980px] text-left text-sm">
@@ -84,7 +100,7 @@ export default async function ReceivableLoansPage({
           <tbody>
             {data.rows.map((row) => (
               <tr key={row.sourceId} className="border-t">
-                <td className="p-3 font-semibold">{row.referenceNumber}</td>
+                <td className="p-3 font-semibold"><Link href={`/admin/receivables/loans/${row.sourceId}`} className="text-blue-800 underline-offset-2 hover:underline">{row.referenceNumber}</Link></td>
                 <td className="p-3">{row.partyName}</td>
                 <td className="p-3">{label(row.receivableType)}</td>
                 <td className="p-3">{money(row.originalAmount, row.currency)}</td>
@@ -102,8 +118,8 @@ export default async function ReceivableLoansPage({
       <div className="mt-3 flex items-center justify-between text-sm">
         <span>{data.count} account(s)</span>
         <div className="flex gap-2">
-          {data.page > 1 ? <a href={`?page=${data.page - 1}${query}`} className="rounded border px-3 py-1.5">Previous</a> : null}
-          {data.page * data.pageSize < data.count ? <a href={`?page=${data.page + 1}${query}`} className="rounded border px-3 py-1.5">Next</a> : null}
+          {data.page > 1 ? <a href={pageHref(data.page - 1)} className="rounded border px-3 py-1.5">Previous</a> : null}
+          {data.page * data.pageSize < data.count ? <a href={pageHref(data.page + 1)} className="rounded border px-3 py-1.5">Next</a> : null}
         </div>
       </div>
 

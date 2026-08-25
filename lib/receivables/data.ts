@@ -590,7 +590,7 @@ export async function getNonSalesReceivables(
   params: ReceivablesListParams,
   access: Pick<ReceivablesAccess, "canViewLoans">,
 ) {
-  if (!access.canViewLoans) return { rows: [], count: 0, page: 1, pageSize: 25, search: "" };
+  if (!access.canViewLoans) return { rows: [], count: 0, ...parseList(params) };
   return getViewPage("non_sales_receivables_v", params);
 }
 
@@ -644,6 +644,31 @@ export async function getNonSalesReceivableDetail(
   }
   if (!accountResult.data) return null;
   const row = accountResult.data as Record<string, unknown>;
+  const borrowerColumn = {
+    employee: "employee_record_id",
+    customer: "customer_profile_id",
+    supplier: "supplier_id",
+    crm_company: "crm_company_id",
+    crm_contact: "crm_contact_id",
+    external_party: "external_party_id",
+  }[String(row.borrower_type)];
+  const borrowerId = borrowerColumn ? row[borrowerColumn] : null;
+  let existingExposure = 0;
+  if (borrowerColumn && borrowerId) {
+    const exposureResult = await db
+      .from("non_sales_receivable_details_v")
+      .select("outstanding_amount")
+      .eq(borrowerColumn, String(borrowerId))
+      .eq("currency", String(row.currency))
+      .neq("id", accountId)
+      .gt("outstanding_amount", 0)
+      .limit(500);
+    if (exposureResult.error) throw new Error("Unable to load borrower exposure.");
+    existingExposure = (exposureResult.data ?? []).reduce(
+      (total, item) => total + Number(item.outstanding_amount),
+      0,
+    );
+  }
   return {
     account: {
       id: String(row.id),
@@ -688,6 +713,7 @@ export async function getNonSalesReceivableDetail(
       disbursedAt: row.disbursed_at ? String(row.disbursed_at) : null,
       createdAt: String(row.created_at),
       lastActivityDate: row.last_activity_date ? String(row.last_activity_date) : null,
+      existingExposure,
     },
     installments: (installmentsResult.data ?? []).map((installment) => ({
       id: String(installment.id),

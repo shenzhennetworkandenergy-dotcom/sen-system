@@ -68,6 +68,15 @@ function optionsForType(type: BorrowerType, options: ReceivablePartyOptions) {
   }
 }
 
+function borrowerTypesForCategory(category: (typeof RECEIVABLE_CATEGORIES)[number]) {
+  if (category === "employee_loan" || category === "salary_advance") return ["employee"] as BorrowerType[];
+  if (category === "customer_loan") return ["customer"] as BorrowerType[];
+  if (category === "supplier_refundable_advance") return ["supplier"] as BorrowerType[];
+  if (category === "company_loan") return ["crm_company", "external_party"] as BorrowerType[];
+  if (category === "individual_loan") return ["crm_contact", "external_party"] as BorrowerType[];
+  return [...RECEIVABLE_BORROWER_TYPES];
+}
+
 function Feedback({ status, message }: { status: string; message: string }) {
   if (!message) return null;
   const tone =
@@ -90,16 +99,30 @@ function AccountFields({
   options: ReceivablePartyOptions;
   opening: boolean;
 }) {
+  const [category, setCategory] = useState<(typeof RECEIVABLE_CATEGORIES)[number]>("employee_loan");
   const [borrowerType, setBorrowerType] = useState<BorrowerType>("employee");
   const [existingExternalId, setExistingExternalId] = useState("");
   const borrowerOptions = optionsForType(borrowerType, options);
+  const borrowerTypes = borrowerTypesForCategory(category);
   return (
     <>
       <input type="hidden" name="operation_id" value={operationId} />
       <div className="grid gap-4 md:grid-cols-2">
         <label className={labelClass}>
           Receivable type
-          <select name="category" required className={fieldClass} defaultValue="employee_loan">
+          <select
+            name="category"
+            required
+            className={fieldClass}
+            value={category}
+            onChange={(event) => {
+              const nextCategory = event.target.value as (typeof RECEIVABLE_CATEGORIES)[number];
+              const nextBorrowerTypes = borrowerTypesForCategory(nextCategory);
+              setCategory(nextCategory);
+              if (!nextBorrowerTypes.includes(borrowerType)) setBorrowerType(nextBorrowerTypes[0]);
+              setExistingExternalId("");
+            }}
+          >
             {RECEIVABLE_CATEGORIES.map((category) => (
               <option key={category} value={category}>
                 {categoryLabels[category]}
@@ -119,7 +142,7 @@ function AccountFields({
               setExistingExternalId("");
             }}
           >
-            {RECEIVABLE_BORROWER_TYPES.map((type) => (
+            {borrowerTypes.map((type) => (
               <option key={type} value={type}>
                 {borrowerLabels[type]}
               </option>
@@ -267,7 +290,7 @@ export function RequestedReceivableForm({
     <form action={action} className="space-y-4 rounded-2xl border bg-white p-5 shadow-sm">
       <div>
         <h2 className="text-lg font-semibold text-[var(--primary)]">Create Loan / Advance Request</h2>
-        <p className="mt-1 text-sm text-[var(--muted-text)]">Creates an operational request only. No balance or financial posting is created in Phase 1.</p>
+        <p className="mt-1 text-sm text-[var(--muted-text)]">Creates an operational request only. Approval creates no balance; Accounting posting remains outside Phase 3.</p>
       </div>
       <AccountFields operationId={operationId} options={options} opening={false} />
       <Feedback status={state.status} message={state.message} />
