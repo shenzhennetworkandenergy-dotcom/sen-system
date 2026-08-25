@@ -8,6 +8,7 @@ import {
   normalizeAdjustmentInput,
   normalizeDisbursementInput,
   normalizeLifecycleInput,
+  normalizeInstallmentScheduleInput,
   normalizeRepaymentInput,
   normalizeReversalInput,
 } from "../lib/receivables/non-sales.ts";
@@ -40,6 +41,29 @@ test("normalizes lifecycle transitions and requires approval amount or terminal 
   assert.throws(
     () => normalizeLifecycleInput({ accountId, operationId, action: "reject" }),
     /reason/i,
+  );
+});
+
+test("normalizes editable pre-approval installment schedules", () => {
+  assert.deepEqual(
+    normalizeInstallmentScheduleInput({
+      accountId,
+      operationId,
+      installmentCount: "5",
+      installmentAmount: "10000",
+      firstDueDate: "2026-09-30",
+    }),
+    {
+      accountId,
+      operationId,
+      installmentCount: 5,
+      installmentAmount: 10000,
+      firstDueDate: "2026-09-30",
+    },
+  );
+  assert.throws(
+    () => normalizeInstallmentScheduleInput({ accountId, operationId, installmentCount: "0" }),
+    /positive whole number/i,
   );
 });
 

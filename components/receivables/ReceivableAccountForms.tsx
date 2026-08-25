@@ -31,11 +31,13 @@ const labelClass = "text-sm font-medium text-slate-800";
 
 const categoryLabels: Record<(typeof RECEIVABLE_CATEGORIES)[number], string> = {
   employee_loan: "Employee loan",
+  salary_advance: "Salary advance",
   customer_loan: "Customer loan",
   company_loan: "Company loan",
   individual_loan: "Individual loan",
   supplier_refundable_advance: "Supplier refundable advance",
   security_deposit: "Security deposit",
+  rent_advance: "Rent advance",
   recoverable_advance: "Other recoverable advance",
   other: "Other receivable",
 };

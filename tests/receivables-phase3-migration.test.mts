@@ -55,7 +55,7 @@ test("database operations lock, reauthorize, use operation IDs, and audit atomic
 test("immutable movements enforce one reversal and derive balances and FIFO installment state", () => {
   assert.match(
     migration,
-    /create unique index[^;]*reversal_of_transaction_id[^;]*where reversal_of_transaction_id is not null/is,
+    /create unique index[^;]*reversal_of_transaction_id[^;]*where reversal_of_transaction_id is not null/i,
   );
   assert.match(migration, /create or replace view public\.receivable_installment_status_v/i);
   assert.match(migration, /create or replace view public\.non_sales_receivable_details_v/i);

@@ -59,6 +59,11 @@ function optionalNote(value: unknown) {
   return clean(value, 2000) || null;
 }
 
+function optionalMoney(value: unknown, label: string) {
+  const normalized = clean(value, 80);
+  return normalized ? money(normalized, label) : null;
+}
+
 function lifecycleAction(value: unknown): LifecycleAction {
   const normalized = clean(value, 40);
   if (!RECEIVABLE_LIFECYCLE_ACTIONS.includes(normalized as LifecycleAction)) {
@@ -141,6 +146,32 @@ export function normalizeReversalInput(input: Draft) {
     operationId: uuid(input.operationId, "Operation ID"),
     effectiveDate: date(input.effectiveDate, "Effective date"),
     reason: reason(input.reason),
+  };
+}
+
+export function normalizeInstallmentScheduleInput(input: Draft) {
+  const accountId = uuid(input.accountId, "Receivable account");
+  const operationId = uuid(input.operationId, "Operation ID");
+  const rawCount = clean(input.installmentCount, 20);
+  if (!rawCount) {
+    return {
+      accountId,
+      operationId,
+      installmentCount: null,
+      installmentAmount: null,
+      firstDueDate: null,
+    };
+  }
+  const installmentCount = Number(rawCount);
+  if (!Number.isSafeInteger(installmentCount) || installmentCount <= 0) {
+    throw new Error("Installment count must be a positive whole number.");
+  }
+  return {
+    accountId,
+    operationId,
+    installmentCount,
+    installmentAmount: optionalMoney(input.installmentAmount, "Installment amount"),
+    firstDueDate: date(input.firstDueDate, "First due date"),
   };
 }
 

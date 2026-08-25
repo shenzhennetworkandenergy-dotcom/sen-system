@@ -9,10 +9,7 @@ import {
   type CustomerReceivablesListParams,
   type CustomerSummary,
 } from "@/lib/receivables/customer";
-import {
-  summarizeReceivablesRows,
-  type ReceivablesSummaryRow,
-} from "@/lib/receivables/summary";
+import type { ReceivablesSummaryRow } from "@/lib/receivables/summary";
 import type { SalesVisibilityScope } from "@/lib/sales/visibility";
 
 const RECEIVABLE_COLUMNS = [
@@ -48,6 +45,11 @@ export type ReceivablesListParams = {
   q?: string;
   page?: string;
   pageSize?: string;
+  category?: string;
+  status?: string;
+  borrowerType?: string;
+  currency?: string;
+  outstandingOnly?: string;
 };
 
 export type ReceivableRow = ReceivablesSummaryRow & {
@@ -249,20 +251,34 @@ function parseList(params: ReceivablesListParams) {
     .slice(0, 80)
     .replace(/[%,().]/g, " ")
     .replace(/\s+/g, " ");
-  return { page, pageSize, search };
+  const filters = {
+    category: String(params.category ?? "").trim().slice(0, 60),
+    status: String(params.status ?? "").trim().slice(0, 40),
+    borrowerType: String(params.borrowerType ?? "").trim().slice(0, 40),
+    currency: String(params.currency ?? "").trim().toUpperCase().slice(0, 3),
+    outstandingOnly: params.outstandingOnly === "1" || params.outstandingOnly === "true",
+  };
+  return { page, pageSize, search, filters };
 }
 
 async function getViewPage(
   view: "customer_receivables_v" | "non_sales_receivables_v",
   params: ReceivablesListParams,
 ) {
-  const { page, pageSize, search } = parseList(params);
+  const { page, pageSize, search, filters } = parseList(params);
   const db = createSupabaseAdminClient();
   let query = db.from(view).select(RECEIVABLE_COLUMNS, { count: "exact" });
   if (search) {
     query = query.or(
       `party_name.ilike.%${search}%,reference_number.ilike.%${search}%,invoice_number.ilike.%${search}%`,
     );
+  }
+  if (view === "non_sales_receivables_v") {
+    if (filters.category) query = query.eq("receivable_type", filters.category);
+    if (filters.status) query = query.eq("receivable_status", filters.status);
+    if (filters.borrowerType) query = query.eq("party_type", filters.borrowerType);
+    if (filters.currency) query = query.eq("currency", filters.currency);
+    if (filters.outstandingOnly) query = query.gt("outstanding_amount", 0);
   }
   const result = await query
     .order("outstanding_amount", { ascending: false })
@@ -282,60 +298,93 @@ async function getViewPage(
     page,
     pageSize,
     search,
+    filters,
   };
 }
 
-async function getAllViewRows(
-  view: "customer_receivables_v" | "non_sales_receivables_v",
-) {
-  const db = createSupabaseAdminClient();
-  const rows: ViewRow[] = [];
-  const batchSize = 500;
-  for (let offset = 0; ; offset += batchSize) {
-    const result = await db
-      .from(view)
-      .select(RECEIVABLE_COLUMNS)
-      .order("source_id", { ascending: true })
-      .range(offset, offset + batchSize - 1);
-    if (result.error) {
-      console.error("Receivables dashboard query failed", {
-        view,
-        code: result.error.code,
-        message: result.error.message,
-      });
-      throw new Error("Unable to load the Receivables dashboard.");
-    }
-    const batch = (result.data ?? []) as unknown as ViewRow[];
-    rows.push(...batch);
-    if (batch.length < batchSize) break;
-  }
-  return rows.map(mapRow);
+type NonSalesMetricRow = {
+  currency: string;
+  category: string;
+  account_count: string | number;
+  outstanding_amount: string | number;
+  due_today: string | number;
+  due_next_7_days: string | number;
+  overdue_amount: string | number;
+  recovered_this_month: string | number;
+};
+
+async function getNonSalesReceivableMetrics() {
+  const result = await createSupabaseAdminClient()
+    .from("non_sales_receivable_metrics_v")
+    .select("*")
+    .order("currency", { ascending: true })
+    .order("category", { ascending: true });
+  if (result.error) throw new Error("Unable to load non-Sales Receivables metrics.");
+  return ((result.data ?? []) as unknown as NonSalesMetricRow[]).map((row) => ({
+    currency: row.currency,
+    category: row.category,
+    accountCount: Number(row.account_count),
+    outstandingAmount: Number(row.outstanding_amount),
+    dueToday: Number(row.due_today),
+    dueNext7Days: Number(row.due_next_7_days),
+    overdueAmount: Number(row.overdue_amount),
+    recoveredThisMonth: Number(row.recovered_this_month),
+  }));
 }
 
-function dhakaBusinessDate() {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Dhaka",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
+async function getRecentNonSalesReceivables() {
+  const result = await createSupabaseAdminClient()
+    .from("non_sales_receivables_v")
+    .select(RECEIVABLE_COLUMNS)
+    .gt("outstanding_amount", 0)
+    .order("last_activity_date", { ascending: false, nullsFirst: false })
+    .order("issue_date", { ascending: false })
+    .limit(8);
+  if (result.error) throw new Error("Unable to load recent non-Sales Receivables.");
+  return ((result.data ?? []) as unknown as ViewRow[]).map(mapRow);
 }
 
 export async function getReceivablesDashboard(access: ReceivablesAccess) {
   const salesScope = access.salesScope ?? { kind: "none" as const };
-  const [customerMetrics, customerRows, loanRows] = await Promise.all([
+  const [customerMetrics, customerRows, loanMetrics, loanRows] = await Promise.all([
     access.canViewCustomer && salesScope.kind !== "none"
       ? getCustomerReceivableMetrics(salesScope)
       : Promise.resolve([]),
     access.canViewCustomer && salesScope.kind !== "none"
       ? getRecentCustomerReceivables(salesScope)
       : Promise.resolve([]),
-    access.canViewLoans ? getAllViewRows("non_sales_receivables_v") : Promise.resolve([]),
+    access.canViewLoans ? getNonSalesReceivableMetrics() : Promise.resolve([]),
+    access.canViewLoans ? getRecentNonSalesReceivables() : Promise.resolve([]),
   ]);
-  const loanSummary = summarizeReceivablesRows(loanRows, dhakaBusinessDate());
-  const summaries = new Map(
-    loanSummary.byCurrency.map((summary) => [summary.currency, { ...summary }]),
-  );
+  const summaries = new Map<string, {
+    currency: string;
+    totalOutstanding: number;
+    customerOutstanding: number;
+    nonSalesOutstanding: number;
+    dueToday: number;
+    dueThisWeek: number;
+    overdue: number;
+    recordCount: number;
+  }>();
+  for (const metric of loanMetrics) {
+    const current = summaries.get(metric.currency) ?? {
+      currency: metric.currency,
+      totalOutstanding: 0,
+      customerOutstanding: 0,
+      nonSalesOutstanding: 0,
+      dueToday: 0,
+      dueThisWeek: 0,
+      overdue: 0,
+      recordCount: 0,
+    };
+    current.totalOutstanding += metric.outstandingAmount;
+    current.nonSalesOutstanding += metric.outstandingAmount;
+    current.dueToday += metric.dueToday;
+    current.dueThisWeek += metric.dueNext7Days;
+    current.overdue += metric.overdueAmount;
+    current.recordCount += metric.accountCount;
+    summaries.set(metric.currency, current);
+  }
   for (const metric of customerMetrics) {
     const current = summaries.get(metric.currency) ?? {
       currency: metric.currency,
@@ -377,7 +426,7 @@ export async function getReceivablesDashboard(access: ReceivablesAccess) {
     isOpeningBalance: false,
   }));
   const rows = [...customerRecentRows, ...loanRows];
-  const recent = [...customerRecentRows, ...loanSummary.recent]
+  const recent = [...customerRecentRows, ...loanRows]
     .sort((left, right) =>
       (right.lastActivityDate ?? "").localeCompare(left.lastActivityDate ?? ""),
     )
@@ -387,6 +436,7 @@ export async function getReceivablesDashboard(access: ReceivablesAccess) {
       left.currency.localeCompare(right.currency),
     ),
     customerMetrics,
+    loanMetrics,
     recent,
     rows,
   };
@@ -542,6 +592,142 @@ export async function getNonSalesReceivables(
 ) {
   if (!access.canViewLoans) return { rows: [], count: 0, page: 1, pageSize: 25, search: "" };
   return getViewPage("non_sales_receivables_v", params);
+}
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export async function getNonSalesReceivableDetail(
+  accountId: string,
+  access: Pick<ReceivablesAccess, "canViewLoans">,
+) {
+  if (!access.canViewLoans || !UUID_PATTERN.test(accountId)) return null;
+  const db = createSupabaseAdminClient();
+  const [accountResult, installmentsResult, transactionsResult, auditResult] =
+    await Promise.all([
+      db
+        .from("non_sales_receivable_details_v")
+        .select("*")
+        .eq("id", accountId)
+        .maybeSingle(),
+      db
+        .from("receivable_installment_status_v")
+        .select("*")
+        .eq("receivable_account_id", accountId)
+        .order("installment_number", { ascending: true }),
+      db
+        .from("receivable_transactions")
+        .select("id,transaction_type,direction,amount,effective_date,payment_method,source,operation_id,reversal_of_transaction_id,notes,metadata,created_by,created_at")
+        .eq("receivable_account_id", accountId)
+        .order("effective_date", { ascending: false })
+        .order("created_at", { ascending: false })
+        .limit(200),
+      db
+        .from("audit_logs")
+        .select("id,actor_id,actor_role,action,description,old_values,new_values,metadata,created_at")
+        .eq("module", "receivables")
+        .eq("entity_id", accountId)
+        .order("created_at", { ascending: false })
+        .limit(100),
+    ]);
+  const error = accountResult.error
+    ?? installmentsResult.error
+    ?? transactionsResult.error
+    ?? auditResult.error;
+  if (error) {
+    console.error("Non-Sales Receivable detail query failed", {
+      accountId,
+      code: error.code,
+      message: error.message,
+    });
+    throw new Error("Unable to load the receivable account.");
+  }
+  if (!accountResult.data) return null;
+  const row = accountResult.data as Record<string, unknown>;
+  return {
+    account: {
+      id: String(row.id),
+      receivableNumber: String(row.receivable_number),
+      category: String(row.category),
+      borrowerType: String(row.borrower_type),
+      borrowerName: String(row.borrower_display_name_snapshot),
+      employeeRecordId: row.employee_record_id ? String(row.employee_record_id) : null,
+      customerProfileId: row.customer_profile_id ? String(row.customer_profile_id) : null,
+      supplierId: row.supplier_id ? String(row.supplier_id) : null,
+      crmCompanyId: row.crm_company_id ? String(row.crm_company_id) : null,
+      crmContactId: row.crm_contact_id ? String(row.crm_contact_id) : null,
+      externalPartyId: row.external_party_id ? String(row.external_party_id) : null,
+      currency: String(row.currency),
+      requestedAmount: Number(row.requested_amount),
+      originalAmount: Number(row.original_amount),
+      approvedAmount: row.approved_amount == null ? null : Number(row.approved_amount),
+      openingPrincipal: Number(row.opening_principal ?? 0),
+      disbursedAmount: Number(row.disbursed_amount ?? 0),
+      repaidAmount: Number(row.repaid_amount ?? 0),
+      adjustmentDecreaseAmount: Number(row.adjustment_decrease_amount ?? 0),
+      adjustmentIncreaseAmount: Number(row.adjustment_increase_amount ?? 0),
+      recoveredAmount: Number(row.recovered_amount ?? 0),
+      outstandingAmount: Number(row.outstanding_amount ?? 0),
+      defaultRepaymentMethod: row.default_repayment_method
+        ? String(row.default_repayment_method)
+        : null,
+      installmentCount: row.installment_count == null ? null : Number(row.installment_count),
+      installmentAmount: row.installment_amount == null ? null : Number(row.installment_amount),
+      firstDueDate: row.first_due_date ? String(row.first_due_date) : null,
+      finalDueDate: row.final_due_date ? String(row.final_due_date) : null,
+      disbursementDate: row.disbursement_date ? String(row.disbursement_date) : null,
+      status: String(row.status),
+      notes: row.notes ? String(row.notes) : null,
+      isOpeningBalance: Boolean(row.is_opening_balance),
+      openingAsOfDate: row.opening_as_of_date ? String(row.opening_as_of_date) : null,
+      openingPreviouslyRepaid: Number(row.opening_previously_repaid ?? 0),
+      createdBy: String(row.created_by),
+      approvedBy: row.approved_by ? String(row.approved_by) : null,
+      approvedAt: row.approved_at ? String(row.approved_at) : null,
+      disbursedBy: row.disbursed_by ? String(row.disbursed_by) : null,
+      disbursedAt: row.disbursed_at ? String(row.disbursed_at) : null,
+      createdAt: String(row.created_at),
+      lastActivityDate: row.last_activity_date ? String(row.last_activity_date) : null,
+    },
+    installments: (installmentsResult.data ?? []).map((installment) => ({
+      id: String(installment.id),
+      installmentNumber: Number(installment.installment_number),
+      dueDate: String(installment.due_date),
+      amountDue: Number(installment.amount_due),
+      paidAmount: Number(installment.paid_amount),
+      remainingAmount: Number(installment.remaining_amount),
+      status: String(installment.installment_status),
+      daysOverdue: installment.days_overdue == null ? null : Number(installment.days_overdue),
+    })),
+    transactions: (transactionsResult.data ?? []).map((transaction) => ({
+      id: String(transaction.id),
+      transactionType: String(transaction.transaction_type),
+      direction: String(transaction.direction),
+      amount: Number(transaction.amount),
+      effectiveDate: String(transaction.effective_date),
+      paymentMethod: transaction.payment_method ? String(transaction.payment_method) : null,
+      source: String(transaction.source),
+      operationId: String(transaction.operation_id),
+      reversalOfTransactionId: transaction.reversal_of_transaction_id
+        ? String(transaction.reversal_of_transaction_id)
+        : null,
+      notes: transaction.notes ? String(transaction.notes) : null,
+      metadata: transaction.metadata as Record<string, unknown>,
+      createdBy: String(transaction.created_by),
+      createdAt: String(transaction.created_at),
+    })),
+    audit: (auditResult.data ?? []).map((entry) => ({
+      id: String(entry.id),
+      actorId: entry.actor_id ? String(entry.actor_id) : null,
+      actorRole: entry.actor_role ? String(entry.actor_role) : null,
+      action: String(entry.action),
+      description: entry.description ? String(entry.description) : null,
+      oldValues: entry.old_values as Record<string, unknown> | null,
+      newValues: entry.new_values as Record<string, unknown> | null,
+      metadata: entry.metadata as Record<string, unknown> | null,
+      createdAt: String(entry.created_at),
+    })),
+  };
 }
 
 export async function getReceivablePartyOptions(
