@@ -13,5 +13,6 @@ test("Draft quotation database verifier refuses remote routing and self-tests tw
   assert.match(result.stdout, /local-host guard self-test passed/i);
   assert.match(result.stdout, /libpq-routing sanitization self-test passed/i);
   assert.match(result.stdout, /disposable identity self-test passed/i);
+  assert.match(result.stdout, /bounded cleanup self-test passed/i);
   assert.match(result.stdout, /two-session lock self-test passed/i);
 });
