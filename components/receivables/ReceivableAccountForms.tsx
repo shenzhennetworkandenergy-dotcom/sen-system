@@ -5,8 +5,8 @@ import { useActionState, useState } from "react";
 import {
   createOpeningReceivableAction,
   createRequestedReceivableAction,
-  initialReceivableActionState,
 } from "@/app/admin/receivables/actions";
+import { initialReceivableActionState } from "@/lib/receivables/action-state";
 import {
   RECEIVABLE_BORROWER_TYPES,
   RECEIVABLE_CATEGORIES,

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { requirePermission } from "@/lib/auth/permissions";
+import type { ReceivableActionState } from "@/lib/receivables/action-state";
 import {
   normalizeOpeningReceivableInput,
   normalizeRequestedReceivableInput,
@@ -18,18 +19,6 @@ import {
   normalizeReversalInput,
 } from "@/lib/receivables/non-sales";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-
-export type ReceivableActionState = {
-  status: "idle" | "success" | "error";
-  message: string;
-  accountId?: string;
-  transactionId?: string;
-};
-
-export const initialReceivableActionState: ReceivableActionState = {
-  status: "idle",
-  message: "",
-};
 
 function value(form: FormData, key: string) {
   return form.get(key) ?? "";

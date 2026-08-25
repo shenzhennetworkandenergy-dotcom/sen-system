@@ -10,9 +10,18 @@ const forms = await readFile(
   new URL("../components/receivables/ReceivableAccountForms.tsx", import.meta.url),
   "utf8",
 ).catch(() => "");
+const operations = await readFile(
+  new URL("../components/receivables/ReceivableOperations.tsx", import.meta.url),
+  "utf8",
+).catch(() => "");
+const actionState = await readFile(
+  new URL("../lib/receivables/action-state.ts", import.meta.url),
+  "utf8",
+).catch(() => "");
 
 test("server actions reauthorize, validate, and call only the approved RPCs", () => {
   assert.match(actions, /^\s*["']use server["']/);
+  assert.doesNotMatch(actions, /export\s+const\s+initialReceivableActionState/);
   assert.match(actions, /export async function createRequestedReceivableAction/);
   assert.match(actions, /export async function createOpeningReceivableAction/);
   assert.match(
@@ -46,4 +55,7 @@ test("forms use accessible labels, stable operation IDs, and pending feedback", 
   assert.match(forms, /pending/);
   assert.doesNotMatch(forms, /name=["'](?:journal|cashbook|payroll|accounting)[^"']*["']/i);
   assert.doesNotMatch(forms, /action=.*(?:journal|cashbook|payroll|accounting)/i);
+  assert.match(forms, /@\/lib\/receivables\/action-state/);
+  assert.match(operations, /@\/lib\/receivables\/action-state/);
+  assert.match(actionState, /export const initialReceivableActionState/);
 });

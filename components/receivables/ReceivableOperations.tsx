@@ -4,13 +4,13 @@ import { useActionState } from "react";
 
 import {
   confirmReceivableDisbursementAction,
-  initialReceivableActionState,
   recordReceivableAdjustmentAction,
   recordReceivableRepaymentAction,
   reverseReceivableTransactionAction,
   transitionReceivableAction,
   updateReceivableScheduleAction,
 } from "@/app/admin/receivables/actions";
+import { initialReceivableActionState } from "@/lib/receivables/action-state";
 
 const fieldClass =
   "mt-1 w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
