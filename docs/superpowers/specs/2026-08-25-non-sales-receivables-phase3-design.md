@@ -32,4 +32,3 @@ Migration `202608250004_non_sales_receivables_phase3.sql` is additive and follow
 ## User interface
 
 Enhance `/admin/receivables/loans` with server-side search/filter/pagination and permission-controlled creation/opening forms. Add `/admin/receivables/loans/[id]` for summary, lifecycle actions, schedule, disbursement, repayment, adjustment, reversal, immutable transactions, and audit activity. Display that operational movements are not automatically posted to Accounting.
-
