@@ -1,0 +1,106 @@
+import { connection } from "next/server";
+
+import { DashboardShell } from "@/components/dashboard/Shell";
+import { ReceivablesNavigation } from "@/components/receivables/ReceivablesNavigation";
+import { requirePermission } from "@/lib/auth/permissions";
+import { getReceivablesDashboard } from "@/lib/receivables/data";
+
+export const dynamic = "force-dynamic";
+
+function money(value: number, currency: string) {
+  return new Intl.NumberFormat("en-BD", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+function metricCard(label: string, value: string, tone = "border-blue-200") {
+  return (
+    <article className={`rounded-2xl border bg-white p-4 shadow-sm ${tone}`}>
+      <p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted-text)]">{label}</p>
+      <strong className="mt-2 block text-2xl text-[var(--primary)]">{value}</strong>
+    </article>
+  );
+}
+
+export default async function ReceivablesPage() {
+  await connection();
+  const { profile, permissions } = await requirePermission("receivables.view");
+  const isAdmin = profile.role === "admin";
+  const canViewCustomer = isAdmin || permissions.has("receivables.view_customer");
+  const canViewLoans = isAdmin || permissions.has("receivables.view_loans");
+  const data = await getReceivablesDashboard({ canViewCustomer, canViewLoans });
+
+  return (
+    <DashboardShell
+      admin={isAdmin}
+      employeePermissions={profile.role === "employee" ? permissions : undefined}
+      title="Receivables"
+      subtitle="Operational control centre for money owed to SEN. Accounting remains the authoritative financial ledger."
+    >
+      <ReceivablesNavigation canViewCustomer={canViewCustomer} canViewLoans={canViewLoans} />
+      {!canViewCustomer && !canViewLoans ? (
+        <p className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-amber-950">
+          You can open Receivables, but no financial category has been assigned to you.
+        </p>
+      ) : null}
+      <div className="space-y-5">
+        {data.byCurrency.map((summary) => (
+          <section key={summary.currency} className="rounded-2xl border bg-[var(--surface)] p-4 shadow-sm">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-[var(--primary)]">{summary.currency} exposure</h2>
+                <p className="text-sm text-[var(--muted-text)]">{summary.recordCount} open receivable(s)</p>
+              </div>
+              <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-bold text-blue-800">Operational view</span>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+              {metricCard("Total receivables", money(summary.totalOutstanding, summary.currency))}
+              {canViewCustomer
+                ? metricCard("Customer receivables", money(summary.customerOutstanding, summary.currency), "border-cyan-200")
+                : null}
+              {canViewLoans
+                ? metricCard("Loans & advances", money(summary.nonSalesOutstanding, summary.currency), "border-violet-200")
+                : null}
+              {metricCard("Due today", money(summary.dueToday, summary.currency), "border-amber-200")}
+              {metricCard("Due next 7 days", money(summary.dueThisWeek, summary.currency), "border-amber-200")}
+              {metricCard("Past due", money(summary.overdue, summary.currency), "border-red-200")}
+            </div>
+          </section>
+        ))}
+
+        {!data.byCurrency.length && (canViewCustomer || canViewLoans) ? (
+          <section className="rounded-2xl border bg-[var(--surface)] p-8 text-center shadow-sm">
+            <h2 className="text-lg font-semibold text-[var(--primary)]">No outstanding receivables</h2>
+            <p className="mt-1 text-sm text-[var(--muted-text)]">Authorized Sales and non-Sales sources currently have no operational exposure.</p>
+          </section>
+        ) : null}
+
+        {data.recent.length ? (
+          <section className="rounded-2xl border bg-[var(--surface)] p-4 shadow-sm">
+            <h2 className="text-lg font-semibold text-[var(--primary)]">Recent open receivables</h2>
+            <div className="mt-3 grid gap-2 md:grid-cols-2">
+              {data.recent.map((row) => {
+                const full = data.rows.find(
+                  (candidate) => candidate.sourceType === row.sourceType && candidate.sourceId === row.sourceId,
+                );
+                return (
+                  <article key={`${row.sourceType}-${row.sourceId}`} className="rounded-xl border bg-white p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold">{full?.partyName ?? full?.referenceNumber ?? "Receivable"}</p>
+                        <p className="text-xs text-[var(--muted-text)]">{full?.referenceNumber} · {row.sourceType === "customer_sale" ? "Customer Sale" : "Loan / Advance"}</p>
+                      </div>
+                      <strong className="shrink-0 text-[var(--primary)]">{money(row.outstandingAmount, row.currency)}</strong>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        ) : null}
+      </div>
+    </DashboardShell>
+  );
+}
