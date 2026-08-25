@@ -13,7 +13,7 @@ const quotationToSaleMigration = normalizeNewlines(
 ).trim();
 const draftQuotationEditingMigration = normalizeNewlines(
   await readFile(
-    "supabase/migrations/202608250002_draft_quotation_editing.sql",
+    "supabase/migrations/202608250003_draft_quotation_editing.sql",
     "utf8",
   ),
 ).trim();
@@ -24,7 +24,7 @@ const expectedMigrationOrder = [
   "202608220001_employee_stock_out_product_release.sql",
   "202608230003_quotation_view_own.sql",
   "202608230004_quotation_to_sale.sql",
-  "202608250002_draft_quotation_editing.sql",
+  "202608250003_draft_quotation_editing.sql",
 ];
 
 function normalizeNewlines(value: string) {

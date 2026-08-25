@@ -3,7 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 import test from "node:test";
 
 const migrationPath =
-  "supabase/migrations/202608250002_draft_quotation_editing.sql";
+  "supabase/migrations/202608250003_draft_quotation_editing.sql";
 const migration = await readFile(migrationPath, "utf8").catch(() => "");
 
 function functionDefinition(name: string) {
@@ -26,10 +26,10 @@ function functionBody(name: string) {
 
 test("adds only the approved Draft quotation editing migration", async () => {
   const migrations = (await readdir("supabase/migrations")).filter((name) =>
-    name.startsWith("202608250002"),
+    name.startsWith("202608250003"),
   );
 
-  assert.deepEqual(migrations, ["202608250002_draft_quotation_editing.sql"]);
+  assert.deepEqual(migrations, ["202608250003_draft_quotation_editing.sql"]);
   assert.ok(migration, `${migrationPath} must exist.`);
   assert.doesNotMatch(
     migration,

@@ -11,7 +11,7 @@ const { Client } = pg;
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const timeout = 12_000;
 const lockProbeTimeout = 5_000;
-const migrations = ["202608230003_quotation_view_own.sql", "202608230004_quotation_to_sale.sql", "202608250002_draft_quotation_editing.sql"];
+const migrations = ["202608230003_quotation_view_own.sql", "202608230004_quotation_to_sale.sql", "202608250003_draft_quotation_editing.sql"];
 const libpqRoutingVariables = ["PGHOST", "PGHOSTADDR", "PGPORT", "PGDATABASE", "PGUSER", "PGSERVICE", "PGSERVICEFILE", "PGPASSFILE", "PGSSLMODE", "PGSSLCERT", "PGSSLKEY", "PGSSLROOTCERT", "PGREQUIRESSL", "PGCHANNELBINDING", "PGTARGETSESSIONATTRS", "PGOPTIONS"];
 const protectedSideEffectTables = ["inventory_balances", "inventory_reservations", "inventory_movements", "inventory_movement_items", "sales_orders", "sales_order_items", "sales_stock_out_requests", "sales_stock_out_request_items", "sales_stock_out_request_revisions", "sales_stock_out_request_revision_items", "sales_stock_out_releases", "sales_stock_out_release_items", "sales_stock_out_release_serials", "sales_stock_out_serial_changes", "sale_documents", "sale_payments", "payment_transactions", "shipments", "shipment_documents", "shipment_items", "shipment_packages", "shipment_route_points", "shipment_serials", "shipment_tracking_events", "order_packages", "order_packed_items", "order_serial_allocations", "order_status_events", "serial_numbers", "serial_number_history", "serial_tracking_events", "inventory_daily_closing_sheets", "inventory_daily_closing_lines", "inventory_daily_closing_movement_details", "accounting_accounts", "cashbook_entries", "cashbook_days", "cashbook_descriptions", "journal_entries", "journal_lines", "sale_price_adjustments"];
 

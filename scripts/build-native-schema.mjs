@@ -22,7 +22,7 @@ const quotationToSaleMigrationUrl = new URL(
   import.meta.url,
 );
 const draftQuotationEditingMigrationUrl = new URL(
-  "../supabase/migrations/202608250002_draft_quotation_editing.sql",
+  "../supabase/migrations/202608250003_draft_quotation_editing.sql",
   import.meta.url,
 );
 const outputUrl = new URL("../database/native/schema.sql", import.meta.url);

@@ -11,7 +11,7 @@ test("native schema applies the Draft quotation edit migration in exact order", 
   const schema = normalizeNewlines(await readFile("database/native/schema.sql", "utf8"));
   const migration = normalizeNewlines(
     await readFile(
-      "supabase/migrations/202608250002_draft_quotation_editing.sql",
+      "supabase/migrations/202608250003_draft_quotation_editing.sql",
       "utf8",
     ),
   ).trim();
