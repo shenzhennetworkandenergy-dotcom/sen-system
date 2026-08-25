@@ -1,10 +1,12 @@
 export const RECEIVABLE_CATEGORIES = [
   "employee_loan",
+  "salary_advance",
   "customer_loan",
   "company_loan",
   "individual_loan",
   "supplier_refundable_advance",
   "security_deposit",
+  "rent_advance",
   "recoverable_advance",
   "other",
 ] as const;
@@ -237,6 +239,35 @@ function normalizeBase(input: ReceivableInputDraft) {
               })(),
           externalParty: null,
         };
+  const newExternalPartyType = borrower.externalParty?.partyType ?? null;
+  const compatible =
+    ((category === "employee_loan" || category === "salary_advance") &&
+      borrowerType === "employee") ||
+    (category === "customer_loan" && borrowerType === "customer") ||
+    (category === "supplier_refundable_advance" && borrowerType === "supplier") ||
+    (category === "company_loan" &&
+      (borrowerType === "crm_company" ||
+        (borrowerType === "external_party" &&
+          (newExternalPartyType === null || newExternalPartyType === "company")))) ||
+    (category === "individual_loan" &&
+      (borrowerType === "crm_contact" ||
+        (borrowerType === "external_party" &&
+          (newExternalPartyType === null || newExternalPartyType === "individual")))) ||
+    ["security_deposit", "rent_advance", "recoverable_advance", "other"].includes(category);
+  if (!compatible) {
+    const name = category.replaceAll("_", " ");
+    const expected =
+      category === "employee_loan" || category === "salary_advance"
+        ? "an employee borrower"
+        : category === "customer_loan"
+          ? "a customer borrower"
+          : category === "supplier_refundable_advance"
+            ? "a supplier borrower"
+            : category === "company_loan"
+              ? "a company borrower"
+              : "an individual borrower";
+    throw new Error(`${name} requires ${expected}.`);
+  }
   const currency = String(input.currency || "BDT").trim().toUpperCase();
   if (!/^[A-Z]{3}$/.test(currency)) throw new Error("Currency must use a three-letter code.");
   const defaultRepaymentMethod = text(input.defaultRepaymentMethod, 40)

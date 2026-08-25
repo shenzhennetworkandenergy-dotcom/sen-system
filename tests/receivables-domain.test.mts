@@ -103,6 +103,47 @@ test("requires exactly one valid borrower source", () => {
   );
 });
 
+test("enforces Phase 3 category and borrower compatibility", () => {
+  const base = {
+    operationId,
+    borrowerId: employeeId,
+    originalAmount: 50_000,
+  };
+
+  assert.doesNotThrow(() =>
+    normalizeRequestedReceivableInput({
+      ...base,
+      category: "salary_advance",
+      borrowerType: "employee",
+    }),
+  );
+  assert.doesNotThrow(() =>
+    normalizeRequestedReceivableInput({
+      ...base,
+      category: "rent_advance",
+      borrowerType: "employee",
+    }),
+  );
+  assert.throws(
+    () =>
+      normalizeRequestedReceivableInput({
+        ...base,
+        category: "employee_loan",
+        borrowerType: "supplier",
+      }),
+    /employee loan.*employee borrower/i,
+  );
+  assert.throws(
+    () =>
+      normalizeRequestedReceivableInput({
+        ...base,
+        category: "supplier_refundable_advance",
+        borrowerType: "customer",
+      }),
+    /supplier refundable advance.*supplier borrower/i,
+  );
+});
+
 test("rejects invalid operation IDs, money, dates, and currencies", () => {
   const valid = {
     category: "employee_loan" as const,
