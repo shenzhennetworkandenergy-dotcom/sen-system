@@ -5,6 +5,7 @@ import { useActionState, useMemo, useState } from "react";
 import {
   createQuotationAction,
   createQuotationCustomerAction,
+  updateDraftQuotationAction,
   type QuotationCustomerActionState,
 } from "@/app/admin/quotations/actions";
 import { CustomerTypeahead } from "@/components/customers/CustomerTypeahead";
@@ -13,6 +14,12 @@ import {
   type SalePickerProduct,
 } from "@/components/sales/SaleProductPicker";
 import type { CustomerSearchOption } from "@/lib/customers/search";
+import {
+  calculateDraftQuotationLine,
+  calculateDraftQuotationTotals,
+  catalogueForDraftEditRow,
+  type DraftQuotationValues,
+} from "@/lib/quotations/draft-editing";
 import { roundMoney } from "@/lib/validation/numbers";
 
 type Variation = {
@@ -25,6 +32,7 @@ type Variation = {
 };
 type Row = {
   key: string;
+  retained: boolean;
   product_id: string;
   variation_id: string;
   quantity: string;
@@ -32,11 +40,13 @@ type Row = {
   discount_amount: string;
   tax_amount: string;
 };
+export type { DraftQuotationValues } from "@/lib/quotations/draft-editing";
 
 const field =
   "mt-1 w-full rounded-xl border bg-[var(--surface)] px-3 py-3";
 const emptyRow = (): Row => ({
   key: crypto.randomUUID(),
+  retained: false,
   product_id: "",
   variation_id: "",
   quantity: "1",
@@ -49,14 +59,24 @@ export function QuotationBuilder({
   customers,
   products,
   variations,
+  retainedProducts = [],
+  retainedVariations = [],
   defaultExpiration,
+  mode = "create",
+  fixedCustomer,
+  initialDraft,
 }: {
   customers: CustomerSearchOption[];
   products: SalePickerProduct[];
   variations: Variation[];
+  retainedProducts?: SalePickerProduct[];
+  retainedVariations?: Variation[];
   defaultExpiration: string;
+  mode?: "create" | "edit";
+  fixedCustomer?: CustomerSearchOption;
+  initialDraft?: DraftQuotationValues;
 }) {
-  const [customerId, setCustomerId] = useState("");
+  const [customerId, setCustomerId] = useState(fixedCustomer?.id ?? "");
   const [customerOptions, setCustomerOptions] =
     useState<CustomerSearchOption[]>(customers);
   const createAndSelectCustomer = async (
@@ -81,7 +101,26 @@ export function QuotationBuilder({
       customer: null,
     } satisfies QuotationCustomerActionState,
   );
-  const [rows, setRows] = useState<Row[]>([emptyRow()]);
+  const [rows, setRows] = useState<Row[]>(() =>
+    initialDraft?.items.length
+      ? initialDraft.items.map((item) => ({
+          key: crypto.randomUUID(),
+          retained: true,
+          product_id: item.productId,
+          variation_id: item.variationId ?? "",
+          quantity: String(item.quantity),
+          unit_price: String(item.unitPrice),
+          discount_amount: String(item.discountAmount),
+          tax_amount: String(item.taxAmount),
+        }))
+      : [emptyRow()],
+  );
+  const [headerDiscount, setHeaderDiscount] = useState(
+    String(initialDraft?.discountAmount ?? 0),
+  );
+  const [headerTax, setHeaderTax] = useState(
+    String(initialDraft?.taxAmount ?? 0),
+  );
   const searchableProducts = useMemo(
     () =>
       products.map((product) => ({
@@ -96,18 +135,31 @@ export function QuotationBuilder({
   const selected = useMemo(
     () =>
       rows.map((row) => {
-        const product = products.find((item) => item.id === row.product_id);
-        const variation = variations.find(
+        const product = catalogueForDraftEditRow(
+          products,
+          retainedProducts.find((item) => item.id === row.product_id),
+          row.retained,
+        ).find((item) => item.id === row.product_id);
+        const variation = catalogueForDraftEditRow(
+          variations,
+          retainedVariations.find((item) => item.id === row.variation_id),
+          row.retained,
+        ).find(
           (item) => item.id === row.variation_id,
         );
         const quantity = Math.max(1, Math.trunc(Number(row.quantity) || 1));
         const unitPrice = Math.max(0, Number(row.unit_price) || 0);
-        const lineSubtotal = roundMoney(quantity * unitPrice);
         const discountAmount = Math.min(
-          lineSubtotal,
+          roundMoney(quantity * unitPrice),
           Math.max(0, Number(row.discount_amount) || 0),
         );
         const taxAmount = Math.max(0, Number(row.tax_amount) || 0);
+        const calculated = calculateDraftQuotationLine({
+          quantity,
+          unitPrice,
+          discountAmount,
+          taxAmount,
+        });
         return {
           ...row,
           product,
@@ -116,11 +168,11 @@ export function QuotationBuilder({
           unitPrice,
           discountAmount,
           taxAmount,
-          lineSubtotal,
-          lineTotal: roundMoney(lineSubtotal - discountAmount + taxAmount),
+          lineSubtotal: calculated.subtotal,
+          lineTotal: calculated.total,
         };
       }),
-    [products, rows, variations],
+    [products, retainedProducts, retainedVariations, rows, variations],
   );
   const update = (key: string, patch: Partial<Row>) =>
     setRows((current) =>
@@ -136,20 +188,26 @@ export function QuotationBuilder({
       discount_amount: row.discountAmount,
       tax_amount: row.taxAmount,
     }));
-  const totals = selected.reduce(
-    (result, row) => ({
-      subtotal: result.subtotal + row.lineSubtotal,
-      discount: result.discount + row.discountAmount,
-      tax: result.tax + row.taxAmount,
-      total: result.total + row.lineTotal,
-    }),
-    { subtotal: 0, discount: 0, tax: 0, total: 0 },
+  const editing = mode === "edit";
+  const totals = calculateDraftQuotationTotals(
+    selected.map((row) => ({
+      quantity: row.quantity,
+      unitPrice: row.unitPrice,
+      discountAmount: row.discountAmount,
+      taxAmount: row.taxAmount,
+    })),
+    editing ? Math.max(0, Number(headerDiscount) || 0) : 0,
+    editing ? Math.max(0, Number(headerTax) || 0) : 0,
   );
   const hasIncompleteRow = selected.some((row) => !row.product);
+  const quotationAction =
+    editing && initialDraft
+      ? updateDraftQuotationAction.bind(null, initialDraft.id)
+      : createQuotationAction;
 
   return (
     <>
-      <details className="mb-5 rounded-2xl border bg-[var(--surface)] p-4" open>
+      {mode === "create" ? <details className="mb-5 rounded-2xl border bg-[var(--surface)] p-4" open>
         <summary className="cursor-pointer font-bold">Add a new customer</summary>
         <form
           key={customerState.customer?.id ?? "new-customer"}
@@ -206,39 +264,86 @@ export function QuotationBuilder({
           </p>
         ) : null}
       </details>
+      : null}
 
-      <form action={createQuotationAction} className="space-y-5">
+      <form action={quotationAction} className="space-y-5">
       <input type="hidden" name="items" value={JSON.stringify(payload)} />
+      {mode === "edit" && initialDraft ? (
+        <input type="hidden" name="updated_at" value={initialDraft.updatedAt} />
+      ) : null}
       <section className="grid gap-4 rounded-2xl border bg-[var(--surface)] p-5 md:grid-cols-2">
-        <CustomerTypeahead
+        {mode === "create" ? <CustomerTypeahead
           customers={customerOptions}
           selectedCustomerId={customerId}
           onSelectionChange={(customer) => setCustomerId(customer?.id ?? "")}
           fieldClassName={field}
           labelClassName="font-semibold"
-        />
+        /> : (
+          <div className="rounded-xl border bg-[var(--muted-surface)] px-3 py-3">
+            <p className="font-semibold">Customer</p>
+            <p className="text-sm">{fixedCustomer?.full_name ?? "Customer"} · {fixedCustomer?.email ?? ""}</p>
+          </div>
+        )}
         <label className="font-semibold">
           Quotation subject
           <input
             name="subject"
             placeholder="Quotation subject"
+            defaultValue={initialDraft?.subject ?? ""}
             className={field}
           />
         </label>
+        {mode === "edit" ? <>
+          <label className="font-semibold">
+            Company
+            <input name="company_name" defaultValue={initialDraft?.companyName ?? ""} className={field} />
+          </label>
+          <label className="font-semibold">
+            Tax identification number
+            <input name="customer_tax_identification_number" defaultValue={initialDraft?.customerTaxIdentificationNumber ?? ""} className={field} />
+          </label>
+        </> : null}
         <label className="font-semibold">
           Required by
-          <input name="required_by" type="date" className={field} />
+          <input name="required_by" type="date" defaultValue={initialDraft?.requiredBy ?? ""} className={field} />
         </label>
         <label className="font-semibold">
           Quotation expires
           <input
             name="expiration_date"
             type="date"
-            defaultValue={defaultExpiration}
+            defaultValue={initialDraft?.expirationDate ?? defaultExpiration}
             className={field}
           />
         </label>
       </section>
+
+      {mode === "edit" ? <section className="grid gap-4 rounded-2xl border bg-[var(--surface)] p-5 md:grid-cols-2">
+        <label className="font-semibold">
+          Quotation discount (BDT)
+          <input
+            name="discount_amount"
+            type="number"
+            min="0"
+            step=".01"
+            value={headerDiscount}
+            onChange={(event) => setHeaderDiscount(event.target.value)}
+            className={field}
+          />
+        </label>
+        <label className="font-semibold">
+          Quotation tax (BDT)
+          <input
+            name="tax_amount"
+            type="number"
+            min="0"
+            step=".01"
+            value={headerTax}
+            onChange={(event) => setHeaderTax(event.target.value)}
+            className={field}
+          />
+        </label>
+      </section> : null}
 
       <section className="rounded-2xl border bg-[var(--surface)] p-5">
         <div>
@@ -259,6 +364,7 @@ export function QuotationBuilder({
                 selectedProduct={row.product}
                 onClear={() =>
                   update(row.key, {
+                    retained: false,
                     product_id: "",
                     variation_id: "",
                     unit_price: "0",
@@ -269,6 +375,7 @@ export function QuotationBuilder({
                     Number(product.sale_price ?? product.regular_price ?? 0),
                   );
                   update(row.key, {
+                    retained: false,
                     product_id: product.id,
                     variation_id: "",
                     unit_price: String(price),
@@ -298,6 +405,7 @@ export function QuotationBuilder({
                       ),
                     );
                     update(row.key, {
+                      retained: false,
                       variation_id: event.target.value,
                       unit_price: String(price),
                     });
@@ -306,8 +414,17 @@ export function QuotationBuilder({
                   className={field}
                 >
                   <option value="">None</option>
-                  {variations
-                    .filter((item) => item.product_id === row.product_id)
+                  {catalogueForDraftEditRow(
+                    variations.filter(
+                      (item) => item.product_id === row.product_id,
+                    ),
+                    retainedVariations.find(
+                      (item) =>
+                        item.id === row.variation_id &&
+                        item.product_id === row.product_id,
+                    ),
+                    row.retained,
+                  )
                     .map((item) => (
                       <option key={item.id} value={item.id}>
                         {item.name || item.sku}
@@ -410,6 +527,7 @@ export function QuotationBuilder({
           <textarea
             name="payment_terms"
             rows={3}
+            defaultValue={initialDraft?.paymentTerms ?? ""}
             placeholder="For example: Cash on delivery or payment within 15 days"
             className={field}
           />
@@ -419,6 +537,7 @@ export function QuotationBuilder({
           <textarea
             name="delivery_information"
             rows={3}
+            defaultValue={initialDraft?.deliveryInformation ?? ""}
             placeholder="Estimated delivery, transport or installation details"
             className={field}
           />
@@ -428,6 +547,7 @@ export function QuotationBuilder({
           <textarea
             name="terms_and_conditions"
             rows={4}
+            defaultValue={initialDraft?.termsAndConditions ?? ""}
             placeholder="Validity, warranty, exclusions and commercial conditions"
             className={field}
           />
@@ -437,6 +557,7 @@ export function QuotationBuilder({
           <textarea
             name="message"
             rows={3}
+            defaultValue={initialDraft?.customerNotes ?? ""}
             placeholder="Information shown to the customer"
             className={field}
           />
@@ -446,6 +567,7 @@ export function QuotationBuilder({
           <textarea
             name="internal_notes"
             rows={3}
+            defaultValue={initialDraft?.internalNotes ?? ""}
             placeholder="Private staff notes; not shown on the quotation document"
             className={field}
           />
@@ -456,7 +578,7 @@ export function QuotationBuilder({
           disabled={!customerId || !payload.length || hasIncompleteRow}
           className="rounded-xl bg-[var(--primary)] px-5 py-3 font-bold text-[var(--primary-foreground)] disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Generate quotation
+          {editing ? "Save Draft quotation" : "Generate quotation"}
         </button>
       </div>
       </form>

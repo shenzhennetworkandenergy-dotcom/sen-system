@@ -14,6 +14,15 @@ const quotationToSaleMigration = normalizeNewlines(
 const stockOutReleaseQuantityMigration = normalizeNewlines(
   await readFile("supabase/migrations/202608240001_stock_out_authoritative_release_quantity.sql", "utf8"),
 ).trim();
+const customerReceivablesMigration = normalizeNewlines(
+  await readFile("supabase/migrations/202608250002_customer_receivables_phase2.sql", "utf8"),
+).trim();
+const draftQuotationEditingMigration = normalizeNewlines(
+  await readFile(
+    "supabase/migrations/202608250003_draft_quotation_editing.sql",
+    "utf8",
+  ),
+).trim();
 
 const expectedMigrationOrder = [
   "202608190001_purchase_carrier_management.sql",
@@ -24,6 +33,7 @@ const expectedMigrationOrder = [
   "202608240001_stock_out_authoritative_release_quantity.sql",
   "202608250001_receivables_phase1.sql",
   "202608250002_customer_receivables_phase2.sql",
+  "202608250003_draft_quotation_editing.sql",
 ];
 
 function normalizeNewlines(value: string) {
@@ -69,6 +79,8 @@ test("native schema keeps quotation migrations together before the later Stock O
   const viewOwnPosition = schema.indexOf(viewOwnMigration);
   const conversionPosition = schema.indexOf(quotationToSaleMigration);
   const stockOutHotfixPosition = schema.indexOf(stockOutReleaseQuantityMigration);
+  const customerReceivablesPosition = schema.indexOf(customerReceivablesMigration);
+  const draftQuotationEditingPosition = schema.indexOf(draftQuotationEditingMigration);
   const nativeGrantsPosition = schema.indexOf(
     "-- Native application service access. Browser users never receive this role.",
   );
@@ -76,10 +88,16 @@ test("native schema keeps quotation migrations together before the later Stock O
   assert.ok(viewOwnPosition >= 0, "native schema must contain the complete View Own migration");
   assert.ok(conversionPosition > viewOwnPosition, "conversion must follow View Own");
   assert.ok(stockOutHotfixPosition > conversionPosition, "the later Stock Out hotfix must follow quotation conversion");
-  assert.ok(nativeGrantsPosition > stockOutHotfixPosition, "native grants must follow every migration");
+  assert.ok(customerReceivablesPosition > stockOutHotfixPosition, "Customer Receivables Phase 2 must remain after the Stock Out hotfix");
+  assert.ok(draftQuotationEditingPosition > customerReceivablesPosition, "Draft editing must follow Customer Receivables Phase 2");
+  assert.ok(nativeGrantsPosition > draftQuotationEditingPosition, "native grants must follow every migration");
   assert.equal(countMatches(schema, /alter table public\.quotation_requests\n  add column if not exists created_by uuid/g), 1);
   assert.equal(countMatches(schema, /create or replace function public\.create_sale_from_quotation\(/g), 1);
   assert.equal(schema.slice(viewOwnPosition, stockOutHotfixPosition), `${viewOwnMigration}\n\n${quotationToSaleMigration}\n\n`);
+  assert.equal(
+    schema.slice(draftQuotationEditingPosition, nativeGrantsPosition),
+    `${draftQuotationEditingMigration}\n\n`,
+  );
 
   assert.doesNotMatch(
     schema.slice(viewOwnPosition, stockOutHotfixPosition),

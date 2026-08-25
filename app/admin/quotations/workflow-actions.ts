@@ -66,8 +66,8 @@ export async function updateQuotationDetailsAction(
     profile,
     permissions,
   );
-  if (isQuotationImmutable(quotation.status)) {
-    fail(path, "An immutable quotation cannot be edited.");
+  if (quotation.status !== "draft") {
+    fail(path, "Only Draft quotations can have commercial details edited.");
   }
   const { data, error } = await db.rpc("update_quotation_details_and_totals", {
     actor_profile_id: profile.id,
