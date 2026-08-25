@@ -33,7 +33,7 @@ async function expectDatabaseError(work, pattern) {
 async function createRequested(actorId, operationId, amount = 50000) {
   return (await one(`
     select public.create_receivable_account(
-      $1::uuid,$2::uuid,'employee_loan'::text,'external_party'::text,null::uuid,$3::jsonb,
+      $1::uuid,$2::uuid,'individual_loan'::text,'external_party'::text,null::uuid,$3::jsonb,
       $4::numeric,'BDT'::text,'other'::text,5::integer,10000::numeric,
       current_date::date,(current_date+interval '4 months')::date,'Rollback-only requested account test'::text
     ) id
@@ -41,6 +41,16 @@ async function createRequested(actorId, operationId, amount = 50000) {
     party_type: "individual",
     display_name: "Receivables Test Borrower",
   }), amount])).id;
+}
+
+async function createEmployeeLoan(actorId, employeeRecordId, operationId, amount = 50000) {
+  return (await one(`
+    select public.create_receivable_account(
+      $1::uuid,$2::uuid,'employee_loan'::text,'employee'::text,$3::uuid,null::jsonb,
+      $4::numeric,'BDT'::text,'bank'::text,5::integer,10000::numeric,
+      current_date::date,(current_date+interval '4 months')::date,'Rollback-only employee loan test'::text
+    ) id
+  `, [actorId, operationId, employeeRecordId, amount])).id;
 }
 
 async function createOpening(actorId, operationId, outstanding = 80000) {
@@ -67,10 +77,19 @@ try {
       to_regclass('public.customer_receivables_detail_v') is not null as customer_detail,
       to_regclass('public.customer_receivables_summary_v') is not null as customer_summary,
       to_regclass('public.customer_receivables_metrics_v') is not null as customer_metrics,
+      to_regclass('public.receivable_installments') is not null as installments,
+      to_regclass('public.non_sales_receivable_details_v') is not null as non_sales_details,
+      to_regclass('public.receivable_installment_status_v') is not null as installment_status,
+      to_regclass('public.non_sales_receivable_metrics_v') is not null as non_sales_metrics,
       exists(select 1 from information_schema.columns where table_schema='public' and table_name='sales_orders' and column_name='payment_terms_type') as payment_terms,
       to_regprocedure('public.create_receivable_account(uuid,uuid,text,text,uuid,jsonb,numeric,text,text,integer,numeric,date,date,text)') is not null as create_account,
       to_regprocedure('public.create_opening_receivable(uuid,uuid,text,text,uuid,jsonb,numeric,numeric,numeric,date,text,text,integer,numeric,date,date,text)') is not null as create_opening,
       to_regprocedure('public.update_sale_commercial_terms(uuid,uuid,uuid,text,integer,date,text)') is not null as update_terms
+      ,to_regprocedure('public.transition_receivable_account(uuid,uuid,uuid,text,numeric,text)') is not null as transition_account
+      ,to_regprocedure('public.confirm_receivable_disbursement(uuid,uuid,uuid,numeric,date,text,text)') is not null as disburse_account
+      ,to_regprocedure('public.record_receivable_repayment(uuid,uuid,uuid,numeric,date,text,text)') is not null as record_repayment
+      ,to_regprocedure('public.record_receivable_adjustment(uuid,uuid,uuid,text,numeric,date,text)') is not null as record_adjustment
+      ,to_regprocedure('public.reverse_receivable_transaction(uuid,uuid,uuid,uuid,date,text)') is not null as reverse_transaction
   `);
   assert.deepEqual(capabilities, {
     accounts: true,
@@ -79,10 +98,19 @@ try {
     customer_detail: true,
     customer_summary: true,
     customer_metrics: true,
+    installments: true,
+    non_sales_details: true,
+    installment_status: true,
+    non_sales_metrics: true,
     payment_terms: true,
     create_account: true,
     create_opening: true,
     update_terms: true,
+    transition_account: true,
+    disburse_account: true,
+    record_repayment: true,
+    record_adjustment: true,
+    reverse_transaction: true,
   }, "Apply the additive Receivables migration to the local database before verification.");
 
   await query("begin");
@@ -105,6 +133,7 @@ try {
     voidInvoice: randomUUID(),
     draftSale: randomUUID(),
     employeeSale: randomUUID(),
+    employeeRecord: randomUUID(),
   };
   const stamp = fixture.admin.slice(0, 8);
 
@@ -132,6 +161,11 @@ try {
     where id=any($3::uuid[])`, [
     fixture.admin, fixture.employee, [fixture.admin, fixture.employee, fixture.customer],
   ]);
+  await query(`insert into public.hr_employee_records(
+    id,profile_id,employee_number,job_title,employment_type,employment_status,hire_date,created_by,updated_by
+  ) values($1,$2,$3,'Receivables Test Employee','full_time','active',current_date,$4,$4)`, [
+    fixture.employeeRecord, fixture.employee, `REC-EMP-${stamp}`, fixture.admin,
+  ]);
 
   const receivablesPermissions = await one(`
     select count(*)::integer count
@@ -142,8 +176,12 @@ try {
     "receivables.view_loans",
     "receivables.create",
     "receivables.manage_opening",
+    "receivables.approve",
+    "receivables.disburse",
+    "receivables.record_repayment",
+    "receivables.adjust",
   ]]);
-  assert.equal(receivablesPermissions.count, 5);
+  assert.equal(receivablesPermissions.count, 9);
   assert.equal(Number((await one(`
     select count(*) count from public.effective_permissions_for_profile($1)
     where permission_key like 'receivables.%'
@@ -366,6 +404,155 @@ try {
     select count(*) count from public.audit_logs
     where module='receivables' and entity_id=any($1::text[])
   `, [[requestedId, openingId]])).count), 2);
+
+  await expectDatabaseError(
+    () => one(`select public.create_receivable_account(
+      $1::uuid,$2::uuid,'employee_loan'::text,'external_party'::text,null::uuid,$3::jsonb,
+      50000::numeric,'BDT'::text,'bank'::text,null::integer,null::numeric,
+      null::date,null::date,'Invalid borrower pairing'::text
+    )`, [fixture.admin, randomUUID(), JSON.stringify({ party_type: "individual", display_name: "Wrong Borrower" })]),
+    /employee borrower/i,
+  );
+
+  const employeeLoanId = await createEmployeeLoan(
+    fixture.admin, fixture.employeeRecord, randomUUID(), 50000,
+  );
+  const secondEmployeeLoanId = await createEmployeeLoan(
+    fixture.admin, fixture.employeeRecord, randomUUID(), 25000,
+  );
+  assert.notEqual(employeeLoanId, secondEmployeeLoanId,
+    "One employee must retain multiple independent receivable accounts.");
+
+  const reviewOperation = randomUUID();
+  const reviewAccount = async (operationId) => (await one(`
+    select public.transition_receivable_account(
+      $1::uuid,$2::uuid,$3::uuid,'submit_review'::text,null::numeric,null::text
+    ) id
+  `, [fixture.admin, employeeLoanId, operationId])).id;
+  assert.equal(await reviewAccount(reviewOperation), employeeLoanId);
+  assert.equal(await reviewAccount(reviewOperation), employeeLoanId,
+    "Lifecycle retries must not duplicate audit history.");
+
+  const approveOperation = randomUUID();
+  const approveAccount = async (operationId) => (await one(`
+    select public.transition_receivable_account(
+      $1::uuid,$2::uuid,$3::uuid,'approve'::text,50000::numeric,'Approved for rollback-only verification'::text
+    ) id
+  `, [fixture.admin, employeeLoanId, operationId])).id;
+  assert.equal(await approveAccount(approveOperation), employeeLoanId);
+  assert.equal(await approveAccount(approveOperation), employeeLoanId);
+  assert.equal(Number((await one(`
+    select public.receivable_current_outstanding($1) amount
+  `, [employeeLoanId])).amount), 0, "Approval must not create a balance movement.");
+  assert.equal(Number((await one(`
+    select count(*) count from public.receivable_installments where receivable_account_id=$1
+  `, [employeeLoanId])).count), 5);
+  assert.equal(Number((await one(`
+    select sum(amount_due) amount from public.receivable_installments where receivable_account_id=$1
+  `, [employeeLoanId])).amount), 50000);
+  await expectDatabaseError(
+    () => query(`update public.receivable_installments set amount_due=9999
+      where receivable_account_id=$1 and installment_number=1`, [employeeLoanId]),
+    /immutable/i,
+  );
+
+  const disbursementOperation = randomUUID();
+  const disburse = async (operationId, amount = 50000) => (await one(`
+    select public.confirm_receivable_disbursement(
+      $1::uuid,$2::uuid,$3::uuid,$4::numeric,current_date::date,'bank'::text,'Rollback-only disbursement'::text
+    ) id
+  `, [fixture.admin, employeeLoanId, operationId, amount])).id;
+  const disbursementId = await disburse(disbursementOperation);
+  assert.equal(await disburse(disbursementOperation), disbursementId,
+    "Disbursement retry must return the original immutable transaction.");
+  await expectDatabaseError(
+    () => disburse(disbursementOperation, 49000),
+    /different values/i,
+  );
+  assert.equal(Number((await one(`select public.receivable_current_outstanding($1) amount`, [employeeLoanId])).amount), 50000);
+  assert.equal((await one(`select status from public.receivable_accounts where id=$1`, [employeeLoanId])).status, "active");
+
+  await expectDatabaseError(
+    () => one(`select public.transition_receivable_account(
+      $1::uuid,$2::uuid,$3::uuid,'cancel'::text,null::numeric,'Cannot erase movements'::text
+    )`, [fixture.admin, employeeLoanId, randomUUID()]),
+    /cannot be cancelled|balance movements/i,
+  );
+  await expectDatabaseError(
+    () => one(`select public.record_receivable_repayment(
+      $1::uuid,$2::uuid,$3::uuid,1000::numeric,current_date::date,'salary_deduction'::text,'Not payroll'::text
+    )`, [fixture.admin, employeeLoanId, randomUUID()]),
+    /Phase 4 Payroll/i,
+  );
+  await expectDatabaseError(
+    () => one(`select public.record_receivable_repayment(
+      $1::uuid,$2::uuid,$3::uuid,50001::numeric,current_date::date,'cash'::text,'Overpayment'::text
+    )`, [fixture.admin, employeeLoanId, randomUUID()]),
+    /exceed current outstanding/i,
+  );
+
+  const repaymentOperation = randomUUID();
+  const repay = async (operationId, amount = 12000) => (await one(`
+    select public.record_receivable_repayment(
+      $1::uuid,$2::uuid,$3::uuid,$4::numeric,current_date::date,'cash'::text,'Rollback-only repayment'::text
+    ) id
+  `, [fixture.admin, employeeLoanId, operationId, amount])).id;
+  const repaymentId = await repay(repaymentOperation);
+  assert.equal(await repay(repaymentOperation), repaymentId);
+  assert.equal(Number((await one(`select public.receivable_current_outstanding($1) amount`, [employeeLoanId])).amount), 38000);
+  const fifoInstallments = (await query(`
+    select installment_number,paid_amount,remaining_amount,installment_status
+    from public.receivable_installment_status_v
+    where receivable_account_id=$1 order by installment_number
+  `, [employeeLoanId])).rows;
+  assert.equal(Number(fifoInstallments[0].paid_amount), 10000);
+  assert.equal(fifoInstallments[0].installment_status, "paid");
+  assert.equal(Number(fifoInstallments[1].paid_amount), 2000);
+  assert.equal(fifoInstallments[1].installment_status, "partial");
+
+  await expectDatabaseError(
+    () => one(`select public.record_receivable_adjustment(
+      $1::uuid,$2::uuid,$3::uuid,'increase'::text,1000::numeric,current_date::date,'Unsafe schedule increase'::text
+    )`, [fixture.admin, employeeLoanId, randomUUID()]),
+    /approved installment schedule/i,
+  );
+  const adjustmentOperation = randomUUID();
+  const adjustmentId = (await one(`select public.record_receivable_adjustment(
+    $1::uuid,$2::uuid,$3::uuid,'decrease'::text,5000::numeric,current_date::date,'Operational rent-style adjustment'::text
+  ) id`, [fixture.admin, employeeLoanId, adjustmentOperation])).id;
+  assert.equal(Number((await one(`select public.receivable_current_outstanding($1) amount`, [employeeLoanId])).amount), 33000);
+
+  const adjustmentReversalOperation = randomUUID();
+  const adjustmentReversalId = (await one(`select public.reverse_receivable_transaction(
+    $1::uuid,$2::uuid,$3::uuid,$4::uuid,current_date::date,'Correct rollback-only adjustment'::text
+  ) id`, [fixture.admin, employeeLoanId, adjustmentId, adjustmentReversalOperation])).id;
+  assert.ok(adjustmentReversalId);
+  assert.equal(Number((await one(`select public.receivable_current_outstanding($1) amount`, [employeeLoanId])).amount), 38000);
+  await expectDatabaseError(
+    () => one(`select public.reverse_receivable_transaction(
+      $1::uuid,$2::uuid,$3::uuid,$4::uuid,current_date::date,'Duplicate reversal'::text
+    )`, [fixture.admin, employeeLoanId, adjustmentId, randomUUID()]),
+    /already been reversed/i,
+  );
+
+  const finalRepaymentId = (await one(`select public.record_receivable_repayment(
+    $1::uuid,$2::uuid,$3::uuid,38000::numeric,current_date::date,'bank'::text,'Final rollback-only repayment'::text
+  ) id`, [fixture.admin, employeeLoanId, randomUUID()])).id;
+  assert.equal((await one(`select status from public.receivable_accounts where id=$1`, [employeeLoanId])).status, "fully_repaid");
+  await one(`select public.reverse_receivable_transaction(
+    $1::uuid,$2::uuid,$3::uuid,$4::uuid,current_date::date,'Reopen after repayment correction'::text
+  )`, [fixture.admin, employeeLoanId, finalRepaymentId, randomUUID()]);
+  assert.equal((await one(`select status from public.receivable_accounts where id=$1`, [employeeLoanId])).status, "active");
+  assert.equal(Number((await one(`select public.receivable_current_outstanding($1) amount`, [employeeLoanId])).amount), 38000);
+
+  assert.equal(Number((await one(`
+    select count(*) count from public.receivable_transactions
+    where receivable_account_id=$1 and operation_id=$2
+  `, [employeeLoanId, disbursementOperation])).count), 1);
+  assert.ok(Number((await one(`
+    select count(*) count from public.audit_logs
+    where module='receivables' and entity_id=$1
+  `, [employeeLoanId])).count) >= 7);
 
   await query("set local role authenticated");
   await query("select set_config('request.jwt.claim.sub',$1,true)", [fixture.employee]);
