@@ -11,6 +11,13 @@ import { isValidTimeZone, parseEmployeeSchedule, zonedLocalDateTimeToIso } from 
 import { validateEmployeeDocuments } from "@/lib/hr/documents";
 import { parsePermanentHrDeletion } from "@/lib/hr/permanent-deletion";
 import { parseAttendanceInput, parseEmployeeInput, parseMoney } from "@/lib/hr/validation";
+import {
+  assertPayrollStatusTransition,
+  buildPayrollPlanHash,
+  derivePayrollOperationId,
+  planPayrollLoanDeductions,
+  type PayrollLoanAccount,
+} from "@/lib/hr/payroll-receivables";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 const text = (form: FormData, key: string) => String(form.get(key) ?? "").trim();
@@ -370,11 +377,54 @@ export async function savePayrollAction(form: FormData) {
   try {
     const base = parseMoney(text(form,"base_salary")); const allowance = parseMoney(text(form,"allowance") || 0);
     const bonus = parseMoney(text(form,"bonus") || 0); const deduction = parseMoney(text(form,"deduction") || 0);
-    const gross = base + allowance + bonus; const net = Math.max(0,gross-deduction);
     const db = createSupabaseAdminClient();
+    const currency = normalizeCurrencyCode(text(form,"currency") || "BDT");
+    const employeeRecordId = text(form,"employee_record_id");
+    const periodEnd = text(form,"period_end");
+    const accountResult = await db.from("receivable_accounts")
+      .select("id,employee_record_id,category,status,currency,default_repayment_method,receivable_number")
+      .eq("employee_record_id",employeeRecordId)
+      .in("category",["employee_loan","salary_advance"])
+      .eq("status","active")
+      .eq("currency",currency)
+      .eq("default_repayment_method","salary_deduction");
+    if (report("Payroll loan eligibility lookup failed",accountResult.error)) throw new Error("Unable to calculate eligible payroll loan deductions.");
+    const accounts = accountResult.data ?? [];
+    const installmentResult = accounts.length
+      ? await db.from("receivable_installment_status_v")
+        .select("receivable_account_id,installment_number,due_date,amount_due,remaining_amount")
+        .in("receivable_account_id",accounts.map((row) => row.id))
+        .gt("remaining_amount",0)
+        .order("installment_number")
+      : { data: [], error: null };
+    if (report("Payroll loan installment lookup failed",installmentResult.error)) throw new Error("Unable to calculate eligible payroll loan installments.");
+    const firstInstallment = new Map<string, { installmentNumber:number; dueDate:string; amountDue:number; remainingAmount:number }>();
+    for (const row of installmentResult.data ?? []) {
+      if (!firstInstallment.has(row.receivable_account_id)) firstInstallment.set(row.receivable_account_id, {
+        installmentNumber:Number(row.installment_number), dueDate:String(row.due_date), amountDue:Number(row.amount_due), remainingAmount:Number(row.remaining_amount),
+      });
+    }
+    const loanAccounts: PayrollLoanAccount[] = accounts.map((row) => ({
+      id:row.id, employeeRecordId:row.employee_record_id, category:row.category, status:row.status,
+      currency:row.currency, outstandingAmount:0, repaymentMethod:row.default_repayment_method,
+      installment:firstInstallment.get(row.id) ?? null,
+    }));
+    if (loanAccounts.length) {
+      const outstandingResult = await Promise.all(loanAccounts.map(async (row) => {
+        const result = await db.rpc("receivable_current_outstanding",{ requested_account_id:row.id });
+        if (result.error) throw new Error("Unable to calculate current loan outstanding.");
+        return { id:row.id, outstandingAmount:Number(result.data ?? 0) };
+      }));
+      const outstandingById = new Map(outstandingResult.map((row) => [row.id,row.outstandingAmount]));
+      for (const row of loanAccounts) row.outstandingAmount = outstandingById.get(row.id) ?? 0;
+    }
+    const gross = base + allowance + bonus;
+    const loanPlan = planPayrollLoanDeductions({
+      employeeRecordId, periodEnd, currency, currentGrossPay:gross, existingDeductions:deduction, accounts:loanAccounts,
+    });
     const { data,error } = await db.from("hr_payroll_records").insert({
-      employee_record_id:text(form,"employee_record_id"),period_start:text(form,"period_start"),period_end:text(form,"period_end"),
-      base_salary:base,gross_pay:gross,deductions:deduction,net_pay:net,currency:normalizeCurrencyCode(text(form,"currency") || "BDT"),
+      employee_record_id:employeeRecordId,period_start:text(form,"period_start"),period_end:periodEnd,
+      base_salary:base,gross_pay:gross,deductions:loanPlan.totalDeduction,net_pay:loanPlan.netPayable,currency,
       status:"draft",notes:nullable(form,"notes"),created_by:profile.id,
     }).select("id").single();
     if (report("Payroll save failed",error) || !data) throw new Error("Unable to create payroll record.");
@@ -383,7 +433,34 @@ export async function savePayrollAction(form: FormData) {
       bonus ? { payroll_record_id:data.id,component_type:"earning",name:"Bonus",amount:bonus } : null,
       deduction ? { payroll_record_id:data.id,component_type:"deduction",name:"Deduction",amount:deduction } : null,
     ].filter((component): component is NonNullable<typeof component> => component !== null);
-    if (components.length) await db.from("hr_payroll_components").insert(components);
+    if (components.length) {
+      const componentResult = await db.from("hr_payroll_components").insert(components);
+      if (report("Payroll component save failed",componentResult.error)) throw new Error("Unable to save payroll components.");
+    }
+    const loanComponentIds = new Map<string,string>();
+    for (const planned of loanPlan.deductions) {
+      const accountRow = accounts.find((row) => row.id===planned.receivableAccountId);
+      const componentResult = await db.from("hr_payroll_components").insert({
+        payroll_record_id:data.id,component_type:"deduction",name:`Loan installment — ${accountRow?.receivable_number ?? planned.receivableAccountId}`,
+        amount:planned.amount,notes:"Auto-planned salary deduction; repayment occurs only when payroll is paid.",
+      }).select("id").single();
+      if (report("Payroll loan component save failed",componentResult.error) || !componentResult.data) throw new Error("Unable to save payroll loan component.");
+      loanComponentIds.set(planned.receivableAccountId,componentResult.data.id);
+    }
+    const planHash = buildPayrollPlanHash(data.id,loanPlan.deductions);
+    const planRows = loanPlan.deductions.map((planned) => ({
+      receivable_account_id:planned.receivableAccountId,
+      payroll_component_id:loanComponentIds.get(planned.receivableAccountId) ?? null,
+      amount:planned.amount,
+      operation_id:derivePayrollOperationId(data.id,planned.receivableAccountId),
+    }));
+    const planResult = await db.rpc("prepare_hr_payroll_receivable_plan",{
+      actor_profile_id:profile.id,requested_payroll_id:data.id,requested_plan:planRows,requested_plan_hash:planHash,
+    });
+    if (report("Payroll receivable plan save failed",planResult.error)) {
+      await db.from("hr_payroll_records").delete().eq("id",data.id);
+      throw new Error("Unable to save the payroll receivable deduction plan.");
+    }
     await audit(profile.id,"hr.payroll_created","payroll",String(data.id),"Payroll record created.");
   } catch (error) {
     payrollKind = "error";
@@ -396,9 +473,33 @@ export async function updatePayrollStatusAction(form: FormData) {
   const { profile } = await requireHrAdmin();
   const status = text(form,"status");
   if (!["approved","paid","cancelled"].includes(status)) return finish(form,"error","Invalid payroll status.");
-  const payload: Record<string,unknown> = { status,approved_by:profile.id,updated_at:new Date().toISOString() };
-  if (status === "paid") payload.paid_at = new Date().toISOString();
-  const { error } = await createSupabaseAdminClient().from("hr_payroll_records").update(payload).eq("id",text(form,"payroll_id"));
+  const db = createSupabaseAdminClient();
+  const currentResult = await db.from("hr_payroll_records").select("status").eq("id",text(form,"payroll_id")).single();
+  if (report("Payroll status lookup failed",currentResult.error) || !currentResult.data) return finish(form,"error","Unable to load payroll status.");
+  try {
+    assertPayrollStatusTransition(currentResult.data.status,status as "approved" | "paid" | "cancelled");
+  } catch (error) {
+    return finish(form,"error",error instanceof Error ? error.message : "Invalid payroll status transition.");
+  }
+  let error: { code?:string; message?:string } | null = null;
+  if (status === "paid") {
+    const result = await db.rpc("mark_hr_payroll_paid_with_receivables",{
+      actor_profile_id:profile.id,requested_payroll_id:text(form,"payroll_id"),requested_operation_id:randomUUID(),
+    });
+    error = result.error;
+  } else if (status === "approved") {
+    const links = await db.from("payroll_receivable_deductions").select("plan_hash").eq("payroll_record_id",text(form,"payroll_id")).eq("status","draft");
+    if (report("Payroll deduction plan lookup failed",links.error)) return finish(form,"error","Unable to freeze payroll loan deductions.");
+    const hashes = Array.from(new Set((links.data ?? []).map((row) => row.plan_hash)));
+    if (hashes.length>1) return finish(form,"error","Payroll deduction plan is inconsistent; regenerate payroll before approval.");
+    const result = await db.rpc("approve_hr_payroll_with_receivables",{
+      actor_profile_id:profile.id,requested_payroll_id:text(form,"payroll_id"),requested_plan_hash:hashes[0] ?? "no-loan-deductions",
+    });
+    error = result.error;
+  } else {
+    const result = await db.from("hr_payroll_records").update({ status:"cancelled",updated_at:new Date().toISOString() }).eq("id",text(form,"payroll_id"));
+    error = result.error;
+  }
   if (report("Payroll status update failed",error)) return finish(form,"error","Unable to update payroll.");
   finish(form,"success",`Payroll marked ${status}.`);
 }

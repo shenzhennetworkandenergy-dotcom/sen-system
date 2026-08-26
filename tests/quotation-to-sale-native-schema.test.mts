@@ -29,6 +29,12 @@ const nonSalesReceivablesMigration = normalizeNewlines(
     "utf8",
   ),
 ).trim();
+const payrollReceivablesMigration = normalizeNewlines(
+  await readFile(
+    "supabase/migrations/202608250005_payroll_receivables_phase4.sql",
+    "utf8",
+  ),
+).trim();
 
 const expectedMigrationOrder = [
   "202608190001_purchase_carrier_management.sql",
@@ -41,6 +47,7 @@ const expectedMigrationOrder = [
   "202608250002_customer_receivables_phase2.sql",
   "202608250003_draft_quotation_editing.sql",
   "202608250004_non_sales_receivables_phase3.sql",
+  "202608250005_payroll_receivables_phase4.sql",
 ];
 
 function normalizeNewlines(value: string) {
@@ -89,6 +96,7 @@ test("native schema keeps quotation migrations together before the later Stock O
   const customerReceivablesPosition = schema.indexOf(customerReceivablesMigration);
   const draftQuotationEditingPosition = schema.indexOf(draftQuotationEditingMigration);
   const nonSalesReceivablesPosition = schema.indexOf(nonSalesReceivablesMigration);
+  const payrollReceivablesPosition = schema.indexOf(payrollReceivablesMigration);
   const nativeGrantsPosition = schema.indexOf(
     "-- Native application service access. Browser users never receive this role.",
   );
@@ -99,7 +107,8 @@ test("native schema keeps quotation migrations together before the later Stock O
   assert.ok(customerReceivablesPosition > stockOutHotfixPosition, "Customer Receivables Phase 2 must remain after the Stock Out hotfix");
   assert.ok(draftQuotationEditingPosition > customerReceivablesPosition, "Draft editing must follow Customer Receivables Phase 2");
   assert.ok(nonSalesReceivablesPosition > draftQuotationEditingPosition, "Non-Sales Receivables Phase 3 must follow Draft editing");
-  assert.ok(nativeGrantsPosition > nonSalesReceivablesPosition, "native grants must follow every migration");
+  assert.ok(payrollReceivablesPosition > nonSalesReceivablesPosition, "Payroll Receivables Phase 4 must follow Non-Sales Receivables Phase 3");
+  assert.ok(nativeGrantsPosition > payrollReceivablesPosition, "native grants must follow every migration");
   assert.equal(countMatches(schema, /alter table public\.quotation_requests\n  add column if not exists created_by uuid/g), 1);
   assert.equal(countMatches(schema, /create or replace function public\.create_sale_from_quotation\(/g), 1);
   assert.equal(schema.slice(viewOwnPosition, stockOutHotfixPosition), `${viewOwnMigration}\n\n${quotationToSaleMigration}\n\n`);
