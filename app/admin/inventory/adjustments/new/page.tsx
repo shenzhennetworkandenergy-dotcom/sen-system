@@ -1,14 +1,19 @@
 import { DashboardShell } from "@/components/dashboard/Shell";
+import { InventoryProductFields } from "@/components/inventory/InventoryProductTypeahead";
 import { requireAnyPermission } from "@/lib/auth/permissions";
 import { getInventorySelectors } from "@/lib/inventory/data";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { adjustInventoryAction, transferInventoryAction } from "../../actions";
 
 export default async function NewAdjustmentPage({ searchParams }: { searchParams: Promise<{ success?: string; error?: string; product?: string }> }) {
   const { profile, permissions } = await requireAnyPermission(["inventory.adjust_stock", "inventory.transfer"]);
   const [options, message] = await Promise.all([getInventorySelectors(), searchParams]);
-  const productMap = new Map(options.products.map((item) => [item.id, item])), warehouseMap = new Map(options.warehouses.map((item) => [item.id, item]));
-  const selectedProduct = message.product ? productMap.get(message.product) : null;
-  const productOptions = options.products.map((item) => <option key={item.id} value={item.id}>{item.name} - {item.sku}{item.serial_tracking_required ? " - serialized" : ""}</option>);
+  const productMap = new Map(options.products.map((item) => [item.id, item]));
+  const warehouseMap = new Map(options.warehouses.map((item) => [item.id, item]));
+  const selectedProductResult = message.product
+    ? await createSupabaseAdminClient().from("products").select("id,name,sku,model_number,serial_tracking_required").eq("id", message.product).neq("status", "archived").maybeSingle()
+    : { data: null };
+  const selectedProduct = selectedProductResult.data ?? productMap.get(message.product ?? "") ?? null;
   return <DashboardShell admin={profile.role === "admin"} employeePermissions={profile.role === "employee" ? permissions : undefined} title="Stock operations" subtitle="Create an atomic adjustment, opening balance, or confirmed warehouse transfer.">
     {message.error ? <p className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-red-900">{message.error}</p> : null}
     {selectedProduct ? <div className="mb-5 rounded-xl border border-blue-200 bg-blue-50 p-4 text-blue-950"><strong>Adjusting {selectedProduct.name}</strong><p className="mt-1 text-sm">{selectedProduct.serial_tracking_required ? "This is a serialized product. Receive generated batches to increase stock, or enter the exact available SEN/manufacturer serials when decreasing stock." : "Choose the warehouse, reason, and quantity change below."}</p>{selectedProduct.serial_tracking_required ? <a href={`/admin/serials/batches?product=${selectedProduct.id}`} className="mt-3 inline-block rounded bg-blue-900 px-3 py-2 text-sm font-semibold text-white">Receive generated serials</a> : null}</div> : null}
@@ -16,8 +21,7 @@ export default async function NewAdjustmentPage({ searchParams }: { searchParams
     <div className="grid gap-6 xl:grid-cols-2">
       <form action={adjustInventoryAction} className="space-y-4 rounded-xl border bg-[var(--surface)] p-6"><h2 className="text-xl font-semibold">Adjust stock</h2>
         <label>Warehouse<select name="warehouse_id" required className="mt-1 w-full rounded border p-3"><option value="">Select warehouse</option>{options.warehouses.map((item) => <option key={item.id} value={item.id}>{item.name} ({item.code})</option>)}</select></label>
-        <label>Product<select name="product_id" required defaultValue={selectedProduct?.id ?? ""} className="mt-1 w-full rounded border p-3"><option value="">Select product</option>{productOptions}</select></label>
-        <label>Variation (optional)<select name="variation_id" className="mt-1 w-full rounded border p-3"><option value="">Parent product</option>{options.variations.map((item) => <option key={item.id} value={item.id}>{item.sku} - {item.combination_key}</option>)}</select></label>
+        <InventoryProductFields scope="adjust" initialProduct={selectedProduct} />
         <label>Reason<select name="reason_id" required className="mt-1 w-full rounded border p-3"><option value="">Select reason</option>{options.reasons.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         <label>Quantity change<input name="quantity_change" type="number" inputMode="numeric" step="1" required placeholder="Use a negative whole number to decrease" className="mt-1 w-full rounded border p-3" /></label>
         <label>Serial numbers<textarea name="serials" placeholder="One serial per line when serial tracking is enabled" className="mt-1 min-h-28 w-full rounded border p-3" /></label><label>Notes<textarea name="notes" className="mt-1 min-h-24 w-full rounded border p-3" /></label>
@@ -26,8 +30,7 @@ export default async function NewAdjustmentPage({ searchParams }: { searchParams
       <form action={transferInventoryAction} className="space-y-4 rounded-xl border bg-[var(--surface)] p-6"><h2 className="text-xl font-semibold">Transfer stock</h2>
         <label>Source warehouse<select name="source_id" required className="mt-1 w-full rounded border p-3"><option value="">Select source</option>{options.warehouses.map((item) => <option key={item.id} value={item.id}>{item.name} ({item.code})</option>)}</select></label>
         <label>Destination warehouse<select name="destination_id" required className="mt-1 w-full rounded border p-3"><option value="">Select destination</option>{options.warehouses.map((item) => <option key={item.id} value={item.id}>{item.name} ({item.code})</option>)}</select></label>
-        <label>Product<select name="product_id" required className="mt-1 w-full rounded border p-3"><option value="">Select product</option>{productOptions}</select></label>
-        <label>Variation (optional)<select name="variation_id" className="mt-1 w-full rounded border p-3"><option value="">Parent product</option>{options.variations.map((item) => <option key={item.id} value={item.id}>{item.sku} - {item.combination_key}</option>)}</select></label>
+        <InventoryProductFields scope="transfer" initialProduct={selectedProduct} />
         <label>Quantity<input name="quantity" type="number" inputMode="numeric" min="1" step="1" required className="mt-1 w-full rounded border p-3" /></label>
         <label>Serial numbers<textarea name="serials" placeholder="One serial per line for serialized products" className="mt-1 min-h-28 w-full rounded border p-3" /></label><label>Notes<textarea name="notes" className="mt-1 min-h-24 w-full rounded border p-3" /></label>
         <button className="min-h-12 rounded bg-[var(--primary)] px-5 py-3 font-semibold text-[var(--primary-foreground)]">Confirm transfer</button>
