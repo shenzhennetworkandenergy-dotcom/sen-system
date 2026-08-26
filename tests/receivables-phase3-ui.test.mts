@@ -25,7 +25,10 @@ test("detail route is permission protected and displays immutable operational tr
   assert.match(detail, /Installment Schedule/);
   assert.match(detail, /Immutable Transaction History/);
   assert.match(detail, /Audit Activity/);
-  assert.match(detail, /Accounting posting not yet automated/i);
+  assert.match(
+    detail,
+    /Accounting posting not yet automated|Phase 5 accounting posting is available/i,
+  );
   assert.match(detail, /ReceivableOperations/);
 });
 

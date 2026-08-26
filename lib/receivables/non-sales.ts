@@ -6,9 +6,17 @@ export const RECEIVABLE_LIFECYCLE_ACTIONS = [
 ] as const;
 
 export const MANUAL_OPERATIONAL_METHODS = ["cash", "bank", "mfs", "other"] as const;
+export const ACCOUNTING_ADJUSTMENT_TREATMENTS = [
+  "cash_recovery",
+  "rent_expense_offset",
+  "payable_offset",
+  "write_off",
+  "non_cash_correction",
+] as const;
 
 type LifecycleAction = (typeof RECEIVABLE_LIFECYCLE_ACTIONS)[number];
 type ManualOperationalMethod = (typeof MANUAL_OPERATIONAL_METHODS)[number];
+type AccountingAdjustmentTreatment = (typeof ACCOUNTING_ADJUSTMENT_TREATMENTS)[number];
 
 type Draft = Record<string, unknown>;
 
@@ -83,6 +91,14 @@ function operationalMethod(value: unknown): ManualOperationalMethod {
   return normalized as ManualOperationalMethod;
 }
 
+function accountingAdjustmentTreatment(value: unknown): AccountingAdjustmentTreatment {
+  const normalized = clean(value, 60);
+  if (!ACCOUNTING_ADJUSTMENT_TREATMENTS.includes(normalized as AccountingAdjustmentTreatment)) {
+    throw new Error("Invalid Accounting treatment.");
+  }
+  return normalized as AccountingAdjustmentTreatment;
+}
+
 export function normalizeLifecycleInput(input: Draft) {
   const action = lifecycleAction(input.action);
   const approvedAmount = action === "approve" ? money(input.approvedAmount, "Approved amount") : null;
@@ -134,6 +150,33 @@ export function normalizeAdjustmentInput(input: Draft) {
     operationId: uuid(input.operationId, "Operation ID"),
     direction,
     amount: money(input.amount, "Adjustment amount"),
+    effectiveDate: date(input.effectiveDate, "Effective date"),
+    reason: reason(input.reason),
+  };
+}
+
+export function normalizeAccountingAdjustmentInput(input: Draft) {
+  const base = normalizeAdjustmentInput(input);
+  const paymentMethod = operationalMethod(input.paymentMethod);
+  const accountingTreatment = accountingAdjustmentTreatment(input.accountingTreatment);
+  if (accountingTreatment === "cash_recovery") {
+    if (base.direction !== "decrease") {
+      throw new Error("Cash recovery must decrease the Receivable outstanding.");
+    }
+    if (!(["cash", "bank", "mfs"] as const).includes(paymentMethod as "cash" | "bank" | "mfs")) {
+      throw new Error("Cash recovery requires cash, bank, or MFS as the payment method.");
+    }
+  } else if (paymentMethod !== "other") {
+    throw new Error("Select Other for a non-cash Accounting treatment.");
+  }
+  return { ...base, paymentMethod, accountingTreatment };
+}
+
+export function normalizeAccountingReversalInput(input: Draft) {
+  return {
+    accountId: uuid(input.accountId, "Receivable account"),
+    postingId: uuid(input.postingId, "Accounting posting"),
+    operationId: uuid(input.operationId, "Operation ID"),
     effectiveDate: date(input.effectiveDate, "Effective date"),
     reason: reason(input.reason),
   };

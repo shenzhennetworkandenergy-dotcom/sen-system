@@ -52,6 +52,93 @@ export type ReceivablesListParams = {
   outstandingOnly?: string;
 };
 
+export type ReceivableAccountingReconciliationRow = {
+  receivableAccountId: string;
+  receivableNumber: string;
+  borrowerName: string;
+  category: string;
+  currency: string;
+  receivableTransactionId: string;
+  transactionType: string;
+  direction: string;
+  amount: number;
+  effectiveDate: string;
+  paymentMethod: string | null;
+  source: string;
+  accountingTreatment: string | null;
+  postingId: string | null;
+  postingStatus: string;
+  postingType: string | null;
+  postingOperationId: string | null;
+  journalEntryId: string | null;
+  journalEntryNumber: string | null;
+  cashbookEntryId: string | null;
+  accountingDate: string | null;
+  reversalOfPostingId: string | null;
+  notes: string | null;
+  createdAt: string;
+};
+
+type ReceivableAccountingReconciliationViewRow = {
+  receivable_account_id: string;
+  receivable_number: string;
+  borrower_name: string;
+  category: string;
+  currency: string;
+  receivable_transaction_id: string;
+  transaction_type: string;
+  direction: string;
+  amount: string | number;
+  effective_date: string;
+  payment_method: string | null;
+  source: string;
+  accounting_treatment: string | null;
+  posting_id: string | null;
+  posting_status: string;
+  posting_type: string | null;
+  posting_operation_id: string | null;
+  journal_entry_id: string | null;
+  journal_entry_number: string | null;
+  cashbook_entry_id: string | null;
+  accounting_date: string | null;
+  reversal_of_posting_id: string | null;
+  notes: string | null;
+  created_at: string;
+};
+
+function mapAccountingReconciliationRow(
+  row: ReceivableAccountingReconciliationViewRow,
+): ReceivableAccountingReconciliationRow {
+  return {
+    receivableAccountId: String(row.receivable_account_id),
+    receivableNumber: String(row.receivable_number),
+    borrowerName: String(row.borrower_name),
+    category: String(row.category),
+    currency: String(row.currency),
+    receivableTransactionId: String(row.receivable_transaction_id),
+    transactionType: String(row.transaction_type),
+    direction: String(row.direction),
+    amount: Number(row.amount),
+    effectiveDate: String(row.effective_date),
+    paymentMethod: row.payment_method ? String(row.payment_method) : null,
+    source: String(row.source),
+    accountingTreatment: row.accounting_treatment ? String(row.accounting_treatment) : null,
+    postingId: row.posting_id ? String(row.posting_id) : null,
+    postingStatus: String(row.posting_status),
+    postingType: row.posting_type ? String(row.posting_type) : null,
+    postingOperationId: row.posting_operation_id ? String(row.posting_operation_id) : null,
+    journalEntryId: row.journal_entry_id ? String(row.journal_entry_id) : null,
+    journalEntryNumber: row.journal_entry_number ? String(row.journal_entry_number) : null,
+    cashbookEntryId: row.cashbook_entry_id ? String(row.cashbook_entry_id) : null,
+    accountingDate: row.accounting_date ? String(row.accounting_date) : null,
+    reversalOfPostingId: row.reversal_of_posting_id
+      ? String(row.reversal_of_posting_id)
+      : null,
+    notes: row.notes ? String(row.notes) : null,
+    createdAt: String(row.created_at),
+  };
+}
+
 export type ReceivableRow = ReceivablesSummaryRow & {
   referenceNumber: string;
   invoiceNumber: string | null;
@@ -603,7 +690,7 @@ export async function getNonSalesReceivableDetail(
 ) {
   if (!access.canViewLoans || !UUID_PATTERN.test(accountId)) return null;
   const db = createSupabaseAdminClient();
-  const [accountResult, installmentsResult, transactionsResult, auditResult] =
+  const [accountResult, installmentsResult, transactionsResult, auditResult, accountingResult] =
     await Promise.all([
       db
         .from("non_sales_receivable_details_v")
@@ -629,11 +716,19 @@ export async function getNonSalesReceivableDetail(
         .eq("entity_id", accountId)
         .order("created_at", { ascending: false })
         .limit(100),
+      db
+        .from("receivable_accounting_reconciliation_v")
+        .select("*")
+        .eq("receivable_account_id", accountId)
+        .order("effective_date", { ascending: false })
+        .order("created_at", { ascending: false })
+        .limit(200),
     ]);
   const error = accountResult.error
     ?? installmentsResult.error
     ?? transactionsResult.error
-    ?? auditResult.error;
+    ?? auditResult.error
+    ?? accountingResult.error;
   if (error) {
     console.error("Non-Sales Receivable detail query failed", {
       accountId,
@@ -742,6 +837,9 @@ export async function getNonSalesReceivableDetail(
       createdBy: String(transaction.created_by),
       createdAt: String(transaction.created_at),
     })),
+    accountingPostings: (accountingResult.data ?? []).map((posting) =>
+      mapAccountingReconciliationRow(posting as unknown as ReceivableAccountingReconciliationViewRow),
+    ),
     audit: (auditResult.data ?? []).map((entry) => ({
       id: String(entry.id),
       actorId: entry.actor_id ? String(entry.actor_id) : null,
@@ -753,6 +851,39 @@ export async function getNonSalesReceivableDetail(
       metadata: entry.metadata as Record<string, unknown> | null,
       createdAt: String(entry.created_at),
     })),
+  };
+}
+
+export async function getReceivableAccountingReconciliation(
+  params: { q?: string; page?: string; pageSize?: string },
+  access: Pick<ReceivablesAccess, "canViewLoans">,
+) {
+  if (!access.canViewLoans) {
+    return { rows: [], count: 0, page: 1, pageSize: 25, search: "" };
+  }
+  const page = Math.max(1, Number.parseInt(params.page ?? "1", 10) || 1);
+  const pageSize = Math.min(100, Math.max(10, Number.parseInt(params.pageSize ?? "25", 10) || 25));
+  const search = String(params.q ?? "").trim().slice(0, 80).replace(/[%,().]/g, " ").replace(/\s+/g, " ");
+  const db = createSupabaseAdminClient();
+  let query = db
+    .from("receivable_accounting_reconciliation_v")
+    .select("*", { count: "exact" });
+  if (search) {
+    query = query.or(`receivable_number.ilike.%${search}%,borrower_name.ilike.%${search}%,journal_entry_number.ilike.%${search}%`);
+  }
+  const result = await query
+    .order("effective_date", { ascending: false })
+    .order("created_at", { ascending: false })
+    .range((page - 1) * pageSize, page * pageSize - 1);
+  if (result.error) throw new Error("Unable to load Accounting reconciliation.");
+  return {
+    rows: (result.data ?? []).map((row) =>
+      mapAccountingReconciliationRow(row as unknown as ReceivableAccountingReconciliationViewRow),
+    ),
+    count: result.count ?? 0,
+    page,
+    pageSize,
+    search,
   };
 }
 

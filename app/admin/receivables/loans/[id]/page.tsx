@@ -58,6 +58,7 @@ export default async function ReceivableLoanDetailPage({
     canDisburse: isAdmin || permissions.has("receivables.disburse"),
     canRecordRepayment: isAdmin || permissions.has("receivables.record_repayment"),
     canAdjust: isAdmin || permissions.has("receivables.adjust"),
+    canPostAccounting: isAdmin || permissions.has("accounting.create_entry"),
   };
   const operationIds = {
     lifecycle: crypto.randomUUID(),
@@ -65,8 +66,12 @@ export default async function ReceivableLoanDetailPage({
     disbursement: crypto.randomUUID(),
     repayment: crypto.randomUUID(),
     adjustment: crypto.randomUUID(),
+    accountingReversal: crypto.randomUUID(),
     reversals: Object.fromEntries(
       detail.transactions.map((transaction) => [transaction.id, crypto.randomUUID()]),
+    ),
+    accountingReversals: Object.fromEntries(
+      detail.accountingPostings.map((posting) => [posting.receivableTransactionId, crypto.randomUUID()]),
     ),
   };
   const approvedExposure = detail.account.existingExposure
@@ -79,7 +84,11 @@ export default async function ReceivableLoanDetailPage({
       title={detail.account.receivableNumber}
       subtitle={`${label(detail.account.category)} · ${detail.account.borrowerName}`}
     >
-      <ReceivablesNavigation canViewCustomer={canViewCustomer} canViewLoans />
+      <ReceivablesNavigation
+        canViewCustomer={canViewCustomer}
+        canViewLoans
+        canReconcile={isAdmin || (permissions.has("accounting.view") && permissions.has("receivables.view_loans"))}
+      />
       <Link href="/admin/receivables/loans" className="mb-4 inline-flex font-semibold text-blue-800 hover:underline">
         ← Back to Loans & Advances
       </Link>
@@ -136,7 +145,7 @@ export default async function ReceivableLoanDetailPage({
             <div className="border-t border-violet-200 pt-3 flex justify-between gap-3"><dt>Exposure after approval</dt><dd className="font-bold text-violet-950">{money(approvedExposure, detail.account.currency)}</dd></div>
           </dl>
           <p className="mt-5 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-950">
-            Operationally recorded — Accounting posting not yet automated.
+            Phase 5 accounting posting is available only for authorized BDT transactions. Opening balances remain historical and unposted.
           </p>
         </article>
       </section>
@@ -149,7 +158,26 @@ export default async function ReceivableLoanDetailPage({
       </section>
 
       <section className="mt-5">
-        <ReceivableOperations account={detail.account} permissions={operationPermissions} operationIds={operationIds} transactions={detail.transactions} />
+        <ReceivableOperations
+          account={detail.account}
+          permissions={operationPermissions}
+          operationIds={operationIds}
+          transactions={detail.transactions}
+          accountingPostings={detail.accountingPostings}
+        />
+      </section>
+
+      <section className="mt-5 rounded-2xl border border-indigo-200 bg-indigo-50/40 p-5 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-indigo-950">Accounting &amp; Cash Book Reconciliation</h2>
+            <p className="mt-1 text-sm text-indigo-900">Every posted movement is linked to one journal and, for cash movements, one Cash Book entry.</p>
+          </div>
+          <Link href="/admin/receivables/reconciliation" className="font-semibold text-indigo-800 hover:underline">Open reconciliation view →</Link>
+        </div>
+        {detail.accountingPostings.length ? (
+          <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-white/80"><tr>{["Date","Movement","Treatment","Posting status","Journal","Cash Book"].map((head) => <th key={head} className="p-3">{head}</th>)}</tr></thead><tbody>{detail.accountingPostings.map((posting) => <tr key={posting.receivableTransactionId} className="border-t border-indigo-100"><td className="p-3">{posting.effectiveDate}</td><td className="p-3">{label(posting.transactionType)} · {posting.direction === "increase" ? "+" : "−"}{money(posting.amount, posting.currency)}</td><td className="p-3">{posting.accountingTreatment ? label(posting.accountingTreatment) : "Not set"}</td><td className="p-3"><span className={`rounded-full px-2 py-1 text-xs font-semibold ${posting.postingStatus === "posted" ? "bg-green-100 text-green-800" : posting.postingStatus === "needs_review" ? "bg-amber-100 text-amber-900" : posting.postingStatus === "reversed" ? "bg-slate-200 text-slate-700" : "bg-blue-100 text-blue-800"}`}>{label(posting.postingStatus)}</span></td><td className="p-3">{posting.journalEntryNumber ?? "—"}</td><td className="p-3">{posting.cashbookEntryId ? "Linked" : "—"}</td></tr>)}</tbody></table></div>
+        ) : <p className="mt-4 text-sm text-indigo-900">No accounting posting links exist yet. Opening balances remain intentionally unposted.</p>}
       </section>
 
       <section className="mt-5 rounded-2xl border bg-white p-5 shadow-sm">

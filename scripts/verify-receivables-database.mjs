@@ -81,6 +81,9 @@ try {
       to_regclass('public.non_sales_receivable_details_v') is not null as non_sales_details,
       to_regclass('public.receivable_installment_status_v') is not null as installment_status,
       to_regclass('public.non_sales_receivable_metrics_v') is not null as non_sales_metrics,
+      to_regclass('public.receivable_accounting_postings') is not null as accounting_postings,
+      to_regclass('public.receivable_accounting_reconciliation_v') is not null as accounting_reconciliation,
+      exists(select 1 from information_schema.columns where table_schema='public' and table_name='receivable_transactions' and column_name='accounting_treatment') as accounting_treatment,
       exists(select 1 from information_schema.columns where table_schema='public' and table_name='sales_orders' and column_name='payment_terms_type') as payment_terms,
       to_regprocedure('public.create_receivable_account(uuid,uuid,text,text,uuid,jsonb,numeric,text,text,integer,numeric,date,date,text)') is not null as create_account,
       to_regprocedure('public.create_opening_receivable(uuid,uuid,text,text,uuid,jsonb,numeric,numeric,numeric,date,text,text,integer,numeric,date,date,text)') is not null as create_opening,
@@ -90,6 +93,10 @@ try {
       ,to_regprocedure('public.record_receivable_repayment(uuid,uuid,uuid,numeric,date,text,text)') is not null as record_repayment
       ,to_regprocedure('public.record_receivable_adjustment(uuid,uuid,uuid,text,numeric,date,text)') is not null as record_adjustment
       ,to_regprocedure('public.reverse_receivable_transaction(uuid,uuid,uuid,uuid,date,text)') is not null as reverse_transaction
+      ,to_regprocedure('public.post_receivable_disbursement(uuid,uuid,uuid,numeric,date,text,text)') is not null as post_disbursement
+      ,to_regprocedure('public.post_receivable_repayment(uuid,uuid,uuid,numeric,date,text,text)') is not null as post_repayment
+      ,to_regprocedure('public.post_receivable_adjustment(uuid,uuid,uuid,text,numeric,date,text,text,text)') is not null as post_adjustment
+      ,to_regprocedure('public.reverse_receivable_accounting_posting(uuid,uuid,uuid,uuid,date,text)') is not null as reverse_accounting
   `);
   assert.deepEqual(capabilities, {
     accounts: true,
@@ -102,6 +109,9 @@ try {
     non_sales_details: true,
     installment_status: true,
     non_sales_metrics: true,
+    accounting_postings: true,
+    accounting_reconciliation: true,
+    accounting_treatment: true,
     payment_terms: true,
     create_account: true,
     create_opening: true,
@@ -111,6 +121,10 @@ try {
     record_repayment: true,
     record_adjustment: true,
     reverse_transaction: true,
+    post_disbursement: true,
+    post_repayment: true,
+    post_adjustment: true,
+    reverse_accounting: true,
   }, "Apply the additive Receivables migration to the local database before verification.");
 
   await query("begin");
@@ -589,6 +603,70 @@ try {
   await query("reset role");
   await query("select set_config('request.jwt.claim.role','service_role',true)");
 
+  const phase5Permissions = [
+    "receivables.record_repayment",
+    "receivables.adjust",
+    "accounting.create_entry",
+    "accounting.approve_entry",
+    "accounting.manage_cashbook",
+  ];
+  await query(`insert into public.profile_permission_overrides(
+    profile_id,permission_id,effect,reason,assigned_by,is_active
+  ) select $1,id,'allow','Rollback-only Phase 5 verification',$1,true
+    from public.permissions where key=any($2::text[])`, [fixture.admin, phase5Permissions]);
+  const phase5FinancialCountsBefore = await one(`
+    select
+      (select count(*)::integer from public.sale_payments) sale_payments,
+      (select count(*)::integer from public.journal_entries) journal_entries,
+      (select count(*)::integer from public.cashbook_entries) cashbook_entries,
+      (select count(*)::integer from public.hr_payroll_records) hr_payroll_records
+  `);
+  const phase5Operation = randomUUID();
+  const phase5First = await one(`select public.post_receivable_repayment(
+    $1::uuid,$2::uuid,$3::uuid,100::numeric,current_date::date,'bank'::text,
+    'Rollback-only Phase 5 accounting repayment'
+  ) result`, [fixture.admin, employeeLoanId, phase5Operation]);
+  assert.equal(phase5First.result.replayed, false);
+  const phase5Retry = await one(`select public.post_receivable_repayment(
+    $1::uuid,$2::uuid,$3::uuid,100::numeric,current_date::date,'bank'::text,
+    'Rollback-only Phase 5 accounting repayment'
+  ) result`, [fixture.admin, employeeLoanId, phase5Operation]);
+  assert.equal(phase5Retry.result.replayed, true, "Posting retry must replay the original result.");
+  assert.equal(Number((await one(`select count(*) count from public.receivable_accounting_postings
+    where operation_id=$1`, [phase5Operation])).count), 1);
+  assert.equal(Number((await one(`select count(*) count from public.journal_entries
+    where id=$1::uuid`, [phase5First.result.journal_entry_id])).count), 1);
+  assert.equal(Number((await one(`select count(*) count from public.cashbook_entries
+    where id=$1::uuid`, [phase5First.result.cashbook_entry_id])).count), 1);
+  await expectDatabaseError(
+    () => one(`select public.post_receivable_repayment(
+      $1::uuid,$2::uuid,$3::uuid,101::numeric,current_date::date,'bank'::text,
+      'Rollback-only Phase 5 mismatched retry'
+    ) result`, [fixture.admin, employeeLoanId, phase5Operation]),
+    /different (?:values|posting data)/i,
+  );
+
+  const nonCashOperation = randomUUID();
+  const nonCashResult = await one(`select public.post_receivable_adjustment(
+    $1::uuid,$2::uuid,$3::uuid,'decrease'::text,50::numeric,current_date::date,
+    'other'::text,'rent_expense_offset'::text,'Rollback-only rent offset'
+  ) result`, [fixture.admin, employeeLoanId, nonCashOperation]);
+  assert.equal(nonCashResult.result.posting_status, "posted");
+  assert.equal(nonCashResult.result.cashbook_entry_id, null,
+    "Non-cash rent offsets must not create Cash Book entries.");
+  assert.equal(Number((await one(`select count(*) count from public.receivable_accounting_postings
+    where operation_id=$1 and posting_status='posted'`, [nonCashOperation])).count), 1);
+
+  await query(`select public.reverse_receivable_accounting_posting(
+    $1::uuid,$2::uuid,$3::uuid,$4::uuid,current_date::date,'Rollback-only Phase 5 reversal'
+  )`, [fixture.admin, employeeLoanId, phase5First.result.posting_id, randomUUID()]);
+  await expectDatabaseError(
+    () => one(`select public.reverse_receivable_accounting_posting(
+      $1::uuid,$2::uuid,$3::uuid,$4::uuid,current_date::date,'Duplicate Phase 5 reversal'
+    )`, [fixture.admin, employeeLoanId, phase5First.result.posting_id, randomUUID()]),
+    /already been reversed/i,
+  );
+
   const financialCountsAfter = await one(`
     select
       (select count(*)::integer from public.sale_payments) sale_payments,
@@ -596,8 +674,14 @@ try {
       (select count(*)::integer from public.cashbook_entries) cashbook_entries,
       (select count(*)::integer from public.hr_payroll_records) hr_payroll_records
   `);
-  assert.deepEqual(financialCountsAfter, financialCountsBefore,
-    "Phase 1 operational accounts/opening balances must not change Sales payments, Accounting, cashbook, or Payroll.");
+  assert.equal(financialCountsAfter.sale_payments, financialCountsBefore.sale_payments,
+    "Receivables accounting must not create or modify Sales payments.");
+  assert.equal(financialCountsAfter.hr_payroll_records, financialCountsBefore.hr_payroll_records,
+    "Receivables accounting must not create or modify Payroll records.");
+  assert.equal(financialCountsAfter.journal_entries, phase5FinancialCountsBefore.journal_entries + 3,
+    "Phase 5 rollback-only posting test should create exactly three journals.");
+  assert.equal(financialCountsAfter.cashbook_entries, phase5FinancialCountsBefore.cashbook_entries + 2,
+    "Phase 5 rollback-only posting test should create Cash Book rows only for cash movements.");
 
   console.log("Receivables local database verification passed (rollback-only; no data retained)." );
 } finally {

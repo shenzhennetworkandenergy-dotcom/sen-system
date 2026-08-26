@@ -11,6 +11,8 @@ import {
   type ReceivableInputDraft,
 } from "@/lib/receivables/domain";
 import {
+  normalizeAccountingAdjustmentInput,
+  normalizeAccountingReversalInput,
   normalizeAdjustmentInput,
   normalizeDisbursementInput,
   normalizeInstallmentScheduleInput,
@@ -67,6 +69,7 @@ function refreshReceivableRoutes() {
   revalidatePath("/admin/receivables");
   revalidatePath("/admin/receivables/customers");
   revalidatePath("/admin/receivables/loans");
+  revalidatePath("/admin/receivables/reconciliation");
 }
 
 function refreshReceivableDetail(accountId: string) {
@@ -78,6 +81,25 @@ function errorState(error: unknown, fallback: string): ReceivableActionState {
   return {
     status: "error",
     message: error instanceof Error ? error.message : fallback,
+  };
+}
+
+function postingResult(
+  data: unknown,
+  accountId: string,
+  postedMessage: string,
+): ReceivableActionState {
+  const result = data && typeof data === "object" ? data as Record<string, unknown> : {};
+  const postingStatus = String(result.posting_status ?? "");
+  return {
+    status: "success",
+    message: postingStatus === "needs_review"
+      ? "The operational movement was recorded, but its Accounting treatment needs review. No journal or Cash Book entry was created."
+      : postedMessage,
+    accountId,
+    transactionId: result.receivable_transaction_id
+      ? String(result.receivable_transaction_id)
+      : undefined,
   };
 }
 
@@ -415,4 +437,167 @@ export async function reverseReceivableTransactionAction(
     accountId: input.accountId,
     transactionId: String(data),
   };
+}
+
+export async function postReceivableDisbursementAction(
+  _previous: ReceivableActionState,
+  form: FormData,
+): Promise<ReceivableActionState> {
+  const { profile } = await requirePermission("receivables.disburse");
+  await requirePermission("accounting.create_entry");
+  let input: ReturnType<typeof normalizeDisbursementInput>;
+  try {
+    input = normalizeDisbursementInput({
+      accountId: value(form, "account_id"),
+      operationId: value(form, "operation_id"),
+      amount: value(form, "amount"),
+      effectiveDate: value(form, "effective_date"),
+      paymentMethod: value(form, "payment_method"),
+      note: value(form, "note"),
+    });
+  } catch (error) {
+    return errorState(error, "Check the disbursement details.");
+  }
+  const { data, error } = await createSupabaseAdminClient().rpc(
+    "post_receivable_disbursement",
+    {
+      actor_profile_id: profile.id,
+      requested_account_id: input.accountId,
+      requested_operation_id: input.operationId,
+      requested_amount: input.amount,
+      requested_effective_date: input.effectiveDate,
+      requested_payment_method: input.paymentMethod,
+      requested_note: input.note,
+    },
+  );
+  if (error || !data) return errorState(error, "Unable to post the disbursement.");
+  refreshReceivableDetail(input.accountId);
+  return postingResult(
+    data,
+    input.accountId,
+    "Disbursement and its Accounting/Cash Book entries were posted atomically.",
+  );
+}
+
+export async function postReceivableRepaymentAction(
+  _previous: ReceivableActionState,
+  form: FormData,
+): Promise<ReceivableActionState> {
+  const { profile } = await requirePermission("receivables.record_repayment");
+  await requirePermission("accounting.create_entry");
+  let input: ReturnType<typeof normalizeRepaymentInput>;
+  try {
+    input = normalizeRepaymentInput({
+      accountId: value(form, "account_id"),
+      operationId: value(form, "operation_id"),
+      amount: value(form, "amount"),
+      effectiveDate: value(form, "effective_date"),
+      paymentMethod: value(form, "payment_method"),
+      note: value(form, "note"),
+    });
+  } catch (error) {
+    return errorState(error, "Check the repayment details.");
+  }
+  const { data, error } = await createSupabaseAdminClient().rpc(
+    "post_receivable_repayment",
+    {
+      actor_profile_id: profile.id,
+      requested_account_id: input.accountId,
+      requested_operation_id: input.operationId,
+      requested_amount: input.amount,
+      requested_effective_date: input.effectiveDate,
+      requested_payment_method: input.paymentMethod,
+      requested_note: input.note,
+    },
+  );
+  if (error || !data) return errorState(error, "Unable to post the repayment.");
+  refreshReceivableDetail(input.accountId);
+  return postingResult(
+    data,
+    input.accountId,
+    "Repayment and its Accounting/Cash Book entries were posted atomically.",
+  );
+}
+
+export async function postReceivableAdjustmentAction(
+  _previous: ReceivableActionState,
+  form: FormData,
+): Promise<ReceivableActionState> {
+  const { profile } = await requirePermission("receivables.adjust");
+  await requirePermission("accounting.create_entry");
+  let input: ReturnType<typeof normalizeAccountingAdjustmentInput>;
+  try {
+    input = normalizeAccountingAdjustmentInput({
+      accountId: value(form, "account_id"),
+      operationId: value(form, "operation_id"),
+      direction: value(form, "direction"),
+      amount: value(form, "amount"),
+      effectiveDate: value(form, "effective_date"),
+      paymentMethod: value(form, "payment_method"),
+      accountingTreatment: value(form, "accounting_treatment"),
+      reason: value(form, "reason"),
+      hasApprovedSchedule: value(form, "has_approved_schedule") === "true",
+    });
+  } catch (error) {
+    return errorState(error, "Check the adjustment details.");
+  }
+  const { data, error } = await createSupabaseAdminClient().rpc(
+    "post_receivable_adjustment",
+    {
+      actor_profile_id: profile.id,
+      requested_account_id: input.accountId,
+      requested_operation_id: input.operationId,
+      requested_direction: input.direction,
+      requested_amount: input.amount,
+      requested_effective_date: input.effectiveDate,
+      requested_payment_method: input.paymentMethod,
+      requested_accounting_treatment: input.accountingTreatment,
+      requested_reason: input.reason,
+    },
+  );
+  if (error || !data) return errorState(error, "Unable to post the adjustment.");
+  refreshReceivableDetail(input.accountId);
+  return postingResult(
+    data,
+    input.accountId,
+    "Adjustment and its Accounting entry were posted atomically.",
+  );
+}
+
+export async function reverseReceivableAccountingAction(
+  _previous: ReceivableActionState,
+  form: FormData,
+): Promise<ReceivableActionState> {
+  const { profile } = await requirePermission("receivables.adjust");
+  await requirePermission("accounting.create_entry");
+  let input: ReturnType<typeof normalizeAccountingReversalInput>;
+  try {
+    input = normalizeAccountingReversalInput({
+      accountId: value(form, "account_id"),
+      postingId: value(form, "posting_id"),
+      operationId: value(form, "operation_id"),
+      effectiveDate: value(form, "effective_date"),
+      reason: value(form, "reason"),
+    });
+  } catch (error) {
+    return errorState(error, "Check the Accounting reversal details.");
+  }
+  const { data, error } = await createSupabaseAdminClient().rpc(
+    "reverse_receivable_accounting_posting",
+    {
+      actor_profile_id: profile.id,
+      requested_account_id: input.accountId,
+      requested_posting_id: input.postingId,
+      requested_operation_id: input.operationId,
+      requested_effective_date: input.effectiveDate,
+      requested_reason: input.reason,
+    },
+  );
+  if (error || !data) return errorState(error, "Unable to reverse the Accounting posting.");
+  refreshReceivableDetail(input.accountId);
+  return postingResult(
+    data,
+    input.accountId,
+    "The Receivable, journal, and Cash Book effects were reversed immutably.",
+  );
 }

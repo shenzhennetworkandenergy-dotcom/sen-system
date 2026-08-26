@@ -12,6 +12,9 @@ const phase2Migration = normalize(
 const phase3Migration = normalize(
   await readFile("supabase/migrations/202608250004_non_sales_receivables_phase3.sql", "utf8"),
 ).trim();
+const phase5Migration = normalize(
+  await readFile("supabase/migrations/202608250006_receivables_accounting_phase5.sql", "utf8"),
+).trim();
 const schema = normalize(await readFile("database/native/schema.sql", "utf8"));
 
 function normalize(value: string) {
@@ -28,20 +31,43 @@ test("native builder appends the complete Receivables migration after the curren
   const customerReceivables = builder.indexOf("customerReceivablesMigration.trim()");
   const draftQuotationEditing = builder.indexOf("draftQuotationEditingMigration.trim()");
   const nonSalesReceivables = builder.indexOf("nonSalesReceivablesMigration.trim()");
+  const payrollReceivables = builder.indexOf("payrollReceivablesMigration.trim()");
+  const receivablesAccounting = builder.indexOf("receivablesAccountingMigration.trim()");
 
   assert.match(builder, /202608250001_receivables_phase1\.sql/);
   assert.match(builder, /202608250002_customer_receivables_phase2\.sql/);
   assert.match(builder, /202608250004_non_sales_receivables_phase3\.sql/);
+  assert.match(builder, /202608250005_payroll_receivables_phase4\.sql/);
+  assert.match(builder, /202608250006_receivables_accounting_phase5\.sql/);
   assert.ok(
     stockOutHotfix >= 0 &&
       receivables > stockOutHotfix &&
       customerReceivables > receivables &&
       draftQuotationEditing > customerReceivables &&
-      nonSalesReceivables > draftQuotationEditing,
+      nonSalesReceivables > draftQuotationEditing &&
+      payrollReceivables > nonSalesReceivables &&
+      receivablesAccounting > payrollReceivables,
   );
   assert.equal(occurrences(schema, migration), 1);
   assert.equal(occurrences(schema, phase2Migration), 1);
   assert.equal(occurrences(schema, phase3Migration), 1);
+  assert.equal(occurrences(schema, phase5Migration), 1);
+});
+
+test("native schema exposes the Phase 5 accounting reconciliation contract exactly once", () => {
+  assert.equal(occurrences(schema.toLowerCase(), "create table public.receivable_accounting_postings"), 1);
+  assert.equal(occurrences(schema.toLowerCase(), "create or replace view public.receivable_accounting_reconciliation_v"), 1);
+  for (const rpc of [
+    "post_receivable_accounting_operation",
+    "post_receivable_disbursement",
+    "post_receivable_repayment",
+    "post_receivable_adjustment",
+    "reverse_receivable_accounting_posting",
+  ]) {
+    assert.equal(occurrences(schema.toLowerCase(), `create or replace function public.${rpc}(`), 1);
+  }
+  assert.match(phase5Migration, /enable row level security/i);
+  assert.match(phase5Migration, /posting_status='posted'/i);
 });
 
 test("native schema exposes the Phase 3 operational Receivables contract exactly once", () => {

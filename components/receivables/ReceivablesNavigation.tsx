@@ -3,9 +3,11 @@ import { routes } from "@/lib/constants/routes";
 export function ReceivablesNavigation({
   canViewCustomer,
   canViewLoans,
+  canReconcile = false,
 }: {
   canViewCustomer: boolean;
   canViewLoans: boolean;
+  canReconcile?: boolean;
 }) {
   const items = [
     { label: "Receivables Dashboard", href: routes.adminReceivables, visible: true },
@@ -18,6 +20,11 @@ export function ReceivablesNavigation({
       label: "Loans & Advances",
       href: routes.adminReceivableLoans,
       visible: canViewLoans,
+    },
+    {
+      label: "Accounting Reconciliation",
+      href: "/admin/receivables/reconciliation",
+      visible: canReconcile,
     },
   ];
   return (

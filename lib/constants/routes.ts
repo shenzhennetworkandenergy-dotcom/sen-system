@@ -28,6 +28,7 @@ export const routes = {
   adminReceivables: "/admin/receivables",
   adminCustomerReceivables: "/admin/receivables/customers",
   adminReceivableLoans: "/admin/receivables/loans",
+  adminReceivablesReconciliation: "/admin/receivables/reconciliation",
   adminHr: "/admin/hr",
   adminHrEmployees: "/admin/hr/employees",
   adminHrNewEmployee: "/admin/hr/employees/new",
