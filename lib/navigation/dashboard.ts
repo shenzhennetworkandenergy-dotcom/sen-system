@@ -43,6 +43,7 @@ export const employeeNavigation: DashboardNavigationItem[] = [
   {key:"employee-profile",label:"My workplace",route:routes.employeeProfile,group:"Workspace",iconKey:"locations",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
   {key:"employee-activity",label:"My Activity",route:routes.employeeActivity,group:"Workspace",iconKey:"activity",requiredPermission:"activity.view_own",implemented:true,adminVisible:false,employeeVisible:true},
   {key:"employee-hr",label:"My HR",route:routes.employeeHr,group:"Workspace",iconKey:"hr",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
+  {key:"employee-attendance",label:"Attendance",route:routes.employeeHrAttendance,group:"Workspace",iconKey:"activity",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
   {key:"receive-new-stock",moduleKey:"inventory",label:"নতুন পণ্য রিসিভ / Receive Stock",route:routes.employeeInventoryReceive,group:"Inventory and Logistics",iconKey:"inventory",requiredPermission:"inventory.receive_new_stock",implemented:true,adminVisible:false,employeeVisible:true},
   {key:"stock-out-product-release",moduleKey:"inventory",label:"স্টক থেকে পণ্য রিলিজ / Stock Out",route:routes.employeeInventoryStockOut,group:"Inventory and Logistics",iconKey:"inventory",requiredPermission:"inventory.release_sales_stock",implemented:true,adminVisible:false,employeeVisible:true},
   ...adminNavigation.filter((item)=>item.employeeVisible),
