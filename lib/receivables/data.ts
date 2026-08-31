@@ -752,7 +752,8 @@ export async function getNonSalesReceivableDetail(
         .from("receivable_installment_status_v")
         .select("*")
         .eq("receivable_account_id", accountId)
-        .order("installment_number", { ascending: true }),
+        .order("installment_number", { ascending: true })
+        .limit(500),
       db
         .from("receivable_transactions")
         .select(transactionColumns)

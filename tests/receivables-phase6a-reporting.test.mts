@@ -315,6 +315,7 @@ test("Receivables DAL and routes consume the centralized security contract befor
   assert.match(data, /sanitizeReportingMetadata|sanitizeReportingTransaction/);
   assert.match(data, /select\(transactionColumns\)/);
   assert.match(data, /if\s*\(access\.canViewAccountingDetails\)/);
+  assert.match(data, /receivable_installment_status_v[\s\S]*?\.limit\(500\)/);
   assert.match(detail, /resolveReceivablesReportScope/);
   assert.match(detail, /canViewAccountingDetails/);
   assert.match(detail, /accountingPostings/);
