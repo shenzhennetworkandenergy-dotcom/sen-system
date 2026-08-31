@@ -4,6 +4,7 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { ReceivablesNavigation } from "@/components/receivables/ReceivablesNavigation";
 import { requireAllPermissions } from "@/lib/auth/permissions";
 import { getReceivableAccountingReconciliation } from "@/lib/receivables/data";
+import { resolveReceivablesReportScope } from "@/lib/receivables/reporting-access";
 
 export const dynamic = "force-dynamic";
 
@@ -22,8 +23,9 @@ export default async function ReceivablesReconciliationPage({
     "accounting.view",
   ]);
   const params = await searchParams;
-  const isAdmin = profile.role === "admin";
-  const data = await getReceivableAccountingReconciliation(params, { canViewLoans: true });
+  const reportScope = resolveReceivablesReportScope({ profile, permissions });
+  const isAdmin = reportScope.isAdmin;
+  const data = await getReceivableAccountingReconciliation(params, reportScope);
   const pageHref = (page: number) => {
     const query = new URLSearchParams();
     if (data.search) query.set("q", data.search);
@@ -38,7 +40,7 @@ export default async function ReceivablesReconciliationPage({
       title="Accounting Reconciliation"
       subtitle="Read-only links between non-Sales Receivable movements, journals, and the Quick Cash Book."
     >
-      <ReceivablesNavigation canViewCustomer={isAdmin || permissions.has("receivables.view_customer")} canViewLoans canReconcile />
+      <ReceivablesNavigation canViewCustomer={reportScope.canViewCustomerReceivables} canViewLoans={reportScope.canViewLoans} canReconcile={reportScope.canViewAccountingDetails} />
       <section className="mb-4 rounded-2xl border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-950">
         Historical opening balances and ambiguous/non-BDT operations remain visibly unposted or marked Needs Review. This view does not create or edit financial records.
       </section>

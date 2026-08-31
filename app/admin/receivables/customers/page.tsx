@@ -8,7 +8,7 @@ import {
   getCustomerReceivableSummaries,
 } from "@/lib/receivables/data";
 import { formatCommercialTerms } from "@/lib/sales/commercial-terms";
-import { resolveSalesVisibilityScope } from "@/lib/sales/visibility";
+import { resolveReceivablesReportScope } from "@/lib/receivables/reporting-access";
 
 export const dynamic = "force-dynamic";
 
@@ -35,18 +35,14 @@ export default async function CustomerReceivablesPage({
     "receivables.view_customer",
   ]);
   const params = await searchParams;
-  const isAdmin = profile.role === "admin";
-  const salesScope = resolveSalesVisibilityScope({
-    role: profile.role,
-    status: profile.status,
-    profileId: profile.id,
-    permissions,
-  });
+  const reportScope = resolveReceivablesReportScope({ profile, permissions });
+  const isAdmin = reportScope.isAdmin;
+  const canViewCustomer = reportScope.canViewCustomerReceivables;
   const [data, summaries] = await Promise.all([
-    getCustomerReceivables(params, { canViewCustomer: true, salesScope }),
-    getCustomerReceivableSummaries(salesScope),
+    getCustomerReceivables(params, reportScope),
+    getCustomerReceivableSummaries(reportScope),
   ]);
-  const canViewLoans = isAdmin || permissions.has("receivables.view_loans");
+  const canViewLoans = reportScope.canViewLoans;
   const pageHref = (page: number) => {
     const query = new URLSearchParams();
     if (data.search) query.set("q", data.search);
@@ -68,11 +64,11 @@ export default async function CustomerReceivablesPage({
       title="Customer Receivables"
       subtitle="Read-only outstanding derived from existing Sales invoices and successful Sales payments."
     >
-      <ReceivablesNavigation canViewCustomer canViewLoans={canViewLoans} />
+      <ReceivablesNavigation canViewCustomer={canViewCustomer} canViewLoans={canViewLoans} />
       <div className="mb-4 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-950">
         Record customer collections through the existing Sales → Record Payment workflow. This page does not create another payment or Accounting entry.
       </div>
-      {salesScope.kind === "none" ? (
+      {reportScope.salesScope.kind === "none" ? (
         <p className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950">
           Customer Receivables also follows Sales visibility. No Sales view scope is assigned to this account.
         </p>

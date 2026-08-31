@@ -35,6 +35,7 @@ type OperationIds = {
 type ReversibleTransaction = {
   id: string;
   transactionType: string;
+  source: string;
   reversalOfTransactionId: string | null;
 };
 
@@ -136,6 +137,7 @@ export function ReceivableOperations({
   operationIds,
   transactions,
   accountingPostings,
+  canViewAccountingDetails = false,
 }: {
   account: {
     id: string;
@@ -158,6 +160,8 @@ export function ReceivableOperations({
   operationIds: OperationIds;
   transactions: ReversibleTransaction[];
   accountingPostings: AccountingPosting[];
+  /** Read visibility is distinct from the Accounting write permission. */
+  canViewAccountingDetails?: boolean;
 }) {
   const [lifecycleState, lifecycleAction, lifecyclePending] = useActionState(
     transitionReceivableAction,
@@ -207,6 +211,33 @@ export function ReceivableOperations({
     accountingPostings.map((posting) => [posting.receivableTransactionId, posting]),
   );
   const useAccountingPosting = permissions.canPostAccounting;
+  const isProtectedSource = (source: string) => {
+    const normalized = source.toLowerCase();
+    return ["financial-linked", "payroll-linked", "accounting"].includes(normalized)
+      || normalized.includes("payroll");
+  };
+  const reversibleTransactions = transactions.filter((transaction) => {
+    if (transaction.transactionType === "reversal" || reversibleIds.has(transaction.id)) return false;
+    const posting = accountingByTransaction.get(transaction.id);
+    // A hidden posting is represented by the sanitized financial-linked
+    // source.  It must never fall back to the operational reversal form just
+    // because the protected posting query was intentionally not issued.
+    if (!posting && isProtectedSource(transaction.source)) return false;
+    // A posted movement must use the Accounting reversal boundary.  Never
+    // fall back to an operational reversal when the caller lacks the matching
+    // Accounting write authority.
+    return !posting || Boolean(
+      posting.postingId
+        && useAccountingPosting
+        && canViewAccountingDetails,
+    );
+  });
+  const showReversalControls = permissions.canAdjust && reversibleTransactions.length > 0;
+  const hasBlockedPostedTransactions = permissions.canAdjust && (
+      !canViewAccountingDetails
+        ? transactions.some((transaction) => isProtectedSource(transaction.source))
+      : transactions.some((transaction) => accountingByTransaction.has(transaction.id))
+  ) && (!canViewAccountingDetails || !useAccountingPosting);
 
   return (
     <section className="space-y-4" aria-label="Receivable operations">
@@ -307,21 +338,25 @@ export function ReceivableOperations({
         </form>
       ) : null}
 
-      {permissions.canAdjust && transactions.some((transaction) => transaction.transactionType !== "reversal" && !reversibleIds.has(transaction.id)) ? (
+      {showReversalControls && reversibleTransactions.length ? (
         <details className="rounded-2xl border bg-white p-4 shadow-sm">
           <summary className="cursor-pointer font-semibold text-red-900">Correct a transaction with an immutable reversal</summary>
           <div className="mt-3 space-y-2">
-            {transactions
-              .filter((transaction) => transaction.transactionType !== "reversal" && !reversibleIds.has(transaction.id))
-              .map((transaction) => (
+            {reversibleTransactions.map((transaction) => (
                 accountingByTransaction.get(transaction.id)?.postingId && useAccountingPosting ? (
                   <AccountingReversalForm key={transaction.id} accountId={account.id} postingId={accountingByTransaction.get(transaction.id)!.postingId!} operationId={operationIds.accountingReversals?.[transaction.id] ?? operationIds.reversals[transaction.id]} />
                 ) : (
                   <ReversalForm key={transaction.id} accountId={account.id} transactionId={transaction.id} operationId={operationIds.reversals[transaction.id]} />
                 )
-              ))}
+            ))}
           </div>
         </details>
+      ) : hasBlockedPostedTransactions ? (
+        <p className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+          {canViewAccountingDetails
+            ? "Accounting create-entry permission is required before reversing a posted movement."
+            : "Accounting visibility is required before reversing a posted movement."}
+        </p>
       ) : null}
     </section>
   );

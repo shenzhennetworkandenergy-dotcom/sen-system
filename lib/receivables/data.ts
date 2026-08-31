@@ -9,6 +9,17 @@ import {
   type CustomerReceivablesListParams,
   type CustomerSummary,
 } from "@/lib/receivables/customer";
+import {
+  normalizeReportingListParams,
+  normalizeReportingCurrency,
+  sanitizeReportingRepaymentMethod,
+  sanitizeReportingAuditEntry,
+  sanitizeReportingAccountingLink,
+  sanitizeReportingText,
+  sanitizeReportingTransaction,
+  type ReceivablesReportScope,
+  type ReportingAuditEntry,
+} from "@/lib/receivables/reporting";
 import type { ReceivablesSummaryRow } from "@/lib/receivables/summary";
 import type { SalesVisibilityScope } from "@/lib/sales/visibility";
 
@@ -34,11 +45,8 @@ const RECEIVABLE_COLUMNS = [
   "is_opening_balance",
 ].join(",");
 
-export type ReceivablesAccess = {
-  canViewCustomer: boolean;
-  canViewLoans: boolean;
+export type ReceivablesAccess = ReceivablesReportScope & {
   canManageAccounts?: boolean;
-  salesScope?: SalesVisibilityScope;
 };
 
 export type ReceivablesListParams = {
@@ -108,20 +116,25 @@ type ReceivableAccountingReconciliationViewRow = {
 
 function mapAccountingReconciliationRow(
   row: ReceivableAccountingReconciliationViewRow,
+  visibility: { canViewPayrollDetails: boolean },
 ): ReceivableAccountingReconciliationRow {
+  const protectedLink = sanitizeReportingAccountingLink(
+    row as unknown as Record<string, unknown>,
+    visibility,
+  );
   return {
     receivableAccountId: String(row.receivable_account_id),
     receivableNumber: String(row.receivable_number),
     borrowerName: String(row.borrower_name),
     category: String(row.category),
-    currency: String(row.currency),
+    currency: normalizeReportingCurrency(row.currency),
     receivableTransactionId: String(row.receivable_transaction_id),
     transactionType: String(row.transaction_type),
     direction: String(row.direction),
     amount: Number(row.amount),
     effectiveDate: String(row.effective_date),
-    paymentMethod: row.payment_method ? String(row.payment_method) : null,
-    source: String(row.source),
+    paymentMethod: protectedLink.paymentMethod,
+    source: protectedLink.source,
     accountingTreatment: row.accounting_treatment ? String(row.accounting_treatment) : null,
     postingId: row.posting_id ? String(row.posting_id) : null,
     postingStatus: String(row.posting_status),
@@ -134,7 +147,7 @@ function mapAccountingReconciliationRow(
     reversalOfPostingId: row.reversal_of_posting_id
       ? String(row.reversal_of_posting_id)
       : null,
-    notes: row.notes ? String(row.notes) : null,
+    notes: protectedLink.notes,
     createdAt: String(row.created_at),
   };
 }
@@ -285,7 +298,7 @@ function mapCustomerRow(row: CustomerDetailViewRow): CustomerReceivableRow {
     partyName: row.party_name,
     responsibleProfileId: row.responsible_profile_id,
     salespersonName: row.salesperson_name,
-    currency: row.currency,
+    currency: normalizeReportingCurrency(row.currency),
     originalAmount: Number(row.original_amount),
     paidAmount: Number(row.paid_amount),
     refundedAmount: Number(row.refunded_amount),
@@ -313,7 +326,7 @@ function mapRow(row: ViewRow): ReceivableRow {
     partyType: row.party_type,
     partyId: row.party_id,
     partyName: row.party_name,
-    currency: row.currency,
+    currency: normalizeReportingCurrency(row.currency),
     originalAmount: Number(row.original_amount),
     paidAmount: Number(row.paid_amount),
     outstandingAmount: Number(row.outstanding_amount),
@@ -328,21 +341,22 @@ function mapRow(row: ViewRow): ReceivableRow {
 }
 
 function parseList(params: ReceivablesListParams) {
-  const page = Math.max(1, Number.parseInt(params.page ?? "1", 10) || 1);
-  const pageSize = Math.min(
-    100,
-    Math.max(10, Number.parseInt(params.pageSize ?? "25", 10) || 25),
-  );
-  const search = String(params.q ?? "")
-    .trim()
-    .slice(0, 80)
-    .replace(/[%,().]/g, " ")
-    .replace(/\s+/g, " ");
+  const normalized = normalizeReportingListParams({
+    q: params.q,
+    page: params.page,
+    pageSize: params.pageSize,
+    currency: params.currency,
+  });
+  const page = normalized.page;
+  // Keep the Phase 1 list minimum while using the shared bounded maximum.
+  const pageSize = Math.max(10, normalized.pageSize);
+  // Explicit slice retained here as a visible bound for the legacy list contract.
+  const search = normalized.search.slice(0, 80);
   const filters = {
     category: String(params.category ?? "").trim().slice(0, 60),
     status: String(params.status ?? "").trim().slice(0, 40),
     borrowerType: String(params.borrowerType ?? "").trim().slice(0, 40),
-    currency: String(params.currency ?? "").trim().toUpperCase().slice(0, 3),
+    currency: normalized.currency,
     outstandingOnly: params.outstandingOnly === "1" || params.outstandingOnly === "true",
   };
   return { page, pageSize, search, filters };
@@ -370,6 +384,7 @@ async function getViewPage(
   const result = await query
     .order("outstanding_amount", { ascending: false })
     .order("issue_date", { ascending: false })
+    .order("source_id", { ascending: true })
     .range((page - 1) * pageSize, page * pageSize - 1);
   if (result.error) {
     console.error("Receivables list query failed", {
@@ -408,7 +423,7 @@ async function getNonSalesReceivableMetrics() {
     .order("category", { ascending: true });
   if (result.error) throw new Error("Unable to load non-Sales Receivables metrics.");
   return ((result.data ?? []) as unknown as NonSalesMetricRow[]).map((row) => ({
-    currency: row.currency,
+    currency: normalizeReportingCurrency(row.currency),
     category: row.category,
     accountCount: Number(row.account_count),
     outstandingAmount: Number(row.outstanding_amount),
@@ -426,22 +441,25 @@ async function getRecentNonSalesReceivables() {
     .gt("outstanding_amount", 0)
     .order("last_activity_date", { ascending: false, nullsFirst: false })
     .order("issue_date", { ascending: false })
+    .order("source_id", { ascending: true })
     .limit(8);
   if (result.error) throw new Error("Unable to load recent non-Sales Receivables.");
   return ((result.data ?? []) as unknown as ViewRow[]).map(mapRow);
 }
 
 export async function getReceivablesDashboard(access: ReceivablesAccess) {
-  const salesScope = access.salesScope ?? { kind: "none" as const };
+  const salesScope = access.salesScope;
+  const canViewCustomer = access.canViewReceivables && access.canViewCustomerReceivables;
+  const canViewLoans = access.canViewReceivables && access.canViewLoans;
   const [customerMetrics, customerRows, loanMetrics, loanRows] = await Promise.all([
-    access.canViewCustomer && salesScope.kind !== "none"
+    canViewCustomer && salesScope.kind !== "none"
       ? getCustomerReceivableMetrics(salesScope)
       : Promise.resolve([]),
-    access.canViewCustomer && salesScope.kind !== "none"
+    canViewCustomer && salesScope.kind !== "none"
       ? getRecentCustomerReceivables(salesScope)
       : Promise.resolve([]),
-    access.canViewLoans ? getNonSalesReceivableMetrics() : Promise.resolve([]),
-    access.canViewLoans ? getRecentNonSalesReceivables() : Promise.resolve([]),
+    canViewLoans ? getNonSalesReceivableMetrics() : Promise.resolve([]),
+    canViewLoans ? getRecentNonSalesReceivables() : Promise.resolve([]),
   ]);
   const summaries = new Map<string, {
     currency: string;
@@ -500,7 +518,7 @@ export async function getReceivablesDashboard(access: ReceivablesAccess) {
     partyType: "customer",
     partyId: row.customerId,
     partyName: row.partyName,
-    currency: row.currency,
+    currency: normalizeReportingCurrency(row.currency),
     originalAmount: row.originalAmount,
     paidAmount: row.paidAmount,
     outstandingAmount: row.outstandingAmount,
@@ -531,11 +549,29 @@ export async function getReceivablesDashboard(access: ReceivablesAccess) {
 
 export async function getCustomerReceivables(
   params: CustomerReceivablesListParams,
-  access: Pick<ReceivablesAccess, "canViewCustomer" | "salesScope">,
+  access: Pick<ReceivablesAccess, "canViewReceivables" | "canViewCustomerReceivables" | "salesScope">,
 ) {
-  const filters = normalizeCustomerReceivablesParams(params);
-  const salesScope = access.salesScope ?? { kind: "none" as const };
-  if (!access.canViewCustomer || salesScope.kind === "none") {
+  const legacyFilters = normalizeCustomerReceivablesParams(params);
+  const reportingFilters = normalizeReportingListParams({
+    q: params.q,
+    page: params.page,
+    pageSize: params.pageSize,
+    dueFrom: params.dueFrom,
+    dueTo: params.dueTo,
+  });
+  const filters = {
+    ...legacyFilters,
+    // Use the shared bounded/wildcard-neutralized reporting primitives while
+    // retaining the Phase 2 response shape expected by the page.
+    page: reportingFilters.page,
+    pageSize: Math.max(10, reportingFilters.pageSize),
+    search: reportingFilters.search,
+    salesperson: normalizeReportingListParams({ q: params.salesperson }).search,
+    dueFrom: reportingFilters.dueFrom ?? "",
+    dueTo: reportingFilters.dueTo ?? "",
+  };
+  const salesScope = access.salesScope;
+  if (!access.canViewReceivables || !access.canViewCustomerReceivables || salesScope.kind === "none") {
     return { rows: [], count: 0, ...filters };
   }
   const db = createSupabaseAdminClient();
@@ -569,6 +605,7 @@ export async function getCustomerReceivables(
   const result = await query
     .order("outstanding_amount", { ascending: false })
     .order("issue_date", { ascending: false })
+    .order("source_id", { ascending: true })
     .range(
       (filters.page - 1) * filters.pageSize,
       filters.page * filters.pageSize - 1,
@@ -600,6 +637,7 @@ async function getRecentCustomerReceivables(salesScope: SalesVisibilityScope) {
   const result = await query
     .order("last_payment_date", { ascending: false, nullsFirst: false })
     .order("issue_date", { ascending: false })
+    .order("source_id", { ascending: true })
     .limit(8);
   if (result.error) {
     console.error("Recent Customer Receivables query failed", {
@@ -612,15 +650,21 @@ async function getRecentCustomerReceivables(salesScope: SalesVisibilityScope) {
 }
 
 export async function getCustomerReceivableSummaries(
-  salesScope: SalesVisibilityScope,
+  access: Pick<ReceivablesAccess, "canViewReceivables" | "canViewCustomerReceivables" | "salesScope">,
 ) {
+  const salesScope = access.salesScope;
+  if (!access.canViewReceivables || !access.canViewCustomerReceivables) return [];
   if (salesScope.kind === "none") return [];
   const db = createSupabaseAdminClient();
   let query = db.from("customer_receivables_summary_v").select("*");
   if (salesScope.kind === "own") {
     query = query.eq("responsible_profile_id", salesScope.profileId);
   }
-  const result = await query.order("total_outstanding", { ascending: false });
+  const result = await query
+    .order("total_outstanding", { ascending: false })
+    .order("customer_id", { ascending: true })
+    .order("currency", { ascending: true })
+    .limit(500);
   if (result.error) {
     console.error("Customer Receivables summary query failed", {
       code: result.error.code,
@@ -633,7 +677,7 @@ export async function getCustomerReceivableSummaries(
       customerId: String(row.customer_id),
       customerName: row.customer_name ? String(row.customer_name) : null,
       companyName: row.company_name ? String(row.company_name) : null,
-      currency: String(row.currency),
+      currency: normalizeReportingCurrency(row.currency),
       totalInvoiced: Number(row.total_invoiced),
       totalPaid: Number(row.total_paid),
       totalOutstanding: Number(row.total_outstanding),
@@ -660,7 +704,7 @@ async function getCustomerReceivableMetrics(salesScope: SalesVisibilityScope) {
   }
   return mergeCustomerMetricRows(
     (result.data ?? []).map((row) => ({
-      currency: String(row.currency),
+      currency: normalizeReportingCurrency(row.currency),
       customerOutstanding: Number(row.customer_outstanding),
       currentOutstanding: Number(row.current_outstanding),
       dueToday: Number(row.due_today),
@@ -675,9 +719,9 @@ async function getCustomerReceivableMetrics(salesScope: SalesVisibilityScope) {
 
 export async function getNonSalesReceivables(
   params: ReceivablesListParams,
-  access: Pick<ReceivablesAccess, "canViewLoans">,
+  access: Pick<ReceivablesAccess, "canViewReceivables" | "canViewLoans">,
 ) {
-  if (!access.canViewLoans) return { rows: [], count: 0, ...parseList(params) };
+  if (!access.canViewReceivables || !access.canViewLoans) return { rows: [], count: 0, ...parseList(params) };
   return getViewPage("non_sales_receivables_v", params);
 }
 
@@ -686,11 +730,18 @@ const UUID_PATTERN =
 
 export async function getNonSalesReceivableDetail(
   accountId: string,
-  access: Pick<ReceivablesAccess, "canViewLoans">,
+  access: Pick<ReceivablesAccess, "canViewReceivables" | "canViewLoans" | "canViewAccountingDetails" | "canViewPayrollDetails">,
 ) {
-  if (!access.canViewLoans || !UUID_PATTERN.test(accountId)) return null;
+  if (!access.canViewReceivables || !access.canViewLoans || !UUID_PATTERN.test(accountId)) return null;
   const db = createSupabaseAdminClient();
-  const [accountResult, installmentsResult, transactionsResult, auditResult, accountingResult] =
+  const canViewProtectedDetails = access.canViewAccountingDetails || access.canViewPayrollDetails;
+  const transactionColumns = canViewProtectedDetails
+    ? "id,transaction_type,direction,amount,effective_date,payment_method,source,operation_id,reversal_of_transaction_id,notes,metadata,created_by,created_at"
+    : "id,transaction_type,direction,amount,effective_date,payment_method,source,operation_id,reversal_of_transaction_id,notes,created_by,created_at";
+  const auditColumns = canViewProtectedDetails
+    ? "id,actor_id,actor_role,action,description,old_values,new_values,metadata,created_at"
+    : "id,actor_id,actor_role,action,description,created_at";
+  const [accountResult, installmentsResult, transactionsResult, auditResult] =
     await Promise.all([
       db
         .from("non_sales_receivable_details_v")
@@ -704,31 +755,43 @@ export async function getNonSalesReceivableDetail(
         .order("installment_number", { ascending: true }),
       db
         .from("receivable_transactions")
-        .select("id,transaction_type,direction,amount,effective_date,payment_method,source,operation_id,reversal_of_transaction_id,notes,metadata,created_by,created_at")
+        .select(transactionColumns)
         .eq("receivable_account_id", accountId)
         .order("effective_date", { ascending: false })
         .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
         .limit(200),
       db
         .from("audit_logs")
-        .select("id,actor_id,actor_role,action,description,old_values,new_values,metadata,created_at")
+        .select(auditColumns)
         .eq("module", "receivables")
         .eq("entity_id", accountId)
         .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
         .limit(100),
-      db
-        .from("receivable_accounting_reconciliation_v")
-        .select("*")
-        .eq("receivable_account_id", accountId)
-        .order("effective_date", { ascending: false })
-        .order("created_at", { ascending: false })
-        .limit(200),
     ]);
+
+  // Never issue the protected service-role query for a caller who lacks the
+  // Accounting visibility permission.  An empty result is intentionally
+  // indistinguishable from "no postings" to the operational viewer.
+  let accountingRows: unknown[] = [];
+  let accountingError: { code?: string; message?: string } | null = null;
+  if (access.canViewAccountingDetails) {
+    const accountingResult = await db
+      .from("receivable_accounting_reconciliation_v")
+      .select("*")
+      .eq("receivable_account_id", accountId)
+      .order("effective_date", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(200);
+    accountingRows = (accountingResult.data ?? []) as unknown[];
+    accountingError = accountingResult.error;
+  }
   const error = accountResult.error
     ?? installmentsResult.error
     ?? transactionsResult.error
     ?? auditResult.error
-    ?? accountingResult.error;
+    ?? accountingError;
   if (error) {
     console.error("Non-Sales Receivable detail query failed", {
       accountId,
@@ -777,7 +840,7 @@ export async function getNonSalesReceivableDetail(
       crmCompanyId: row.crm_company_id ? String(row.crm_company_id) : null,
       crmContactId: row.crm_contact_id ? String(row.crm_contact_id) : null,
       externalPartyId: row.external_party_id ? String(row.external_party_id) : null,
-      currency: String(row.currency),
+      currency: normalizeReportingCurrency(row.currency),
       requestedAmount: Number(row.requested_amount),
       originalAmount: Number(row.original_amount),
       approvedAmount: row.approved_amount == null ? null : Number(row.approved_amount),
@@ -788,16 +851,20 @@ export async function getNonSalesReceivableDetail(
       adjustmentIncreaseAmount: Number(row.adjustment_increase_amount ?? 0),
       recoveredAmount: Number(row.recovered_amount ?? 0),
       outstandingAmount: Number(row.outstanding_amount ?? 0),
-      defaultRepaymentMethod: row.default_repayment_method
-        ? String(row.default_repayment_method)
-        : null,
+      defaultRepaymentMethod: sanitizeReportingRepaymentMethod(
+        row.default_repayment_method,
+        { canViewPayrollDetails: access.canViewPayrollDetails },
+      ),
       installmentCount: row.installment_count == null ? null : Number(row.installment_count),
       installmentAmount: row.installment_amount == null ? null : Number(row.installment_amount),
       firstDueDate: row.first_due_date ? String(row.first_due_date) : null,
       finalDueDate: row.final_due_date ? String(row.final_due_date) : null,
       disbursementDate: row.disbursement_date ? String(row.disbursement_date) : null,
       status: String(row.status),
-      notes: row.notes ? String(row.notes) : null,
+      notes: sanitizeReportingText(row.notes, {
+        canViewAccountingDetails: access.canViewAccountingDetails,
+        canViewPayrollDetails: access.canViewPayrollDetails,
+      }),
       isOpeningBalance: Boolean(row.is_opening_balance),
       openingAsOfDate: row.opening_as_of_date ? String(row.opening_as_of_date) : null,
       openingPreviouslyRepaid: Number(row.opening_previously_repaid ?? 0),
@@ -820,50 +887,43 @@ export async function getNonSalesReceivableDetail(
       status: String(installment.installment_status),
       daysOverdue: installment.days_overdue == null ? null : Number(installment.days_overdue),
     })),
-    transactions: (transactionsResult.data ?? []).map((transaction) => ({
-      id: String(transaction.id),
-      transactionType: String(transaction.transaction_type),
-      direction: String(transaction.direction),
-      amount: Number(transaction.amount),
-      effectiveDate: String(transaction.effective_date),
-      paymentMethod: transaction.payment_method ? String(transaction.payment_method) : null,
-      source: String(transaction.source),
-      operationId: String(transaction.operation_id),
-      reversalOfTransactionId: transaction.reversal_of_transaction_id
-        ? String(transaction.reversal_of_transaction_id)
-        : null,
-      notes: transaction.notes ? String(transaction.notes) : null,
-      metadata: transaction.metadata as Record<string, unknown>,
-      createdBy: String(transaction.created_by),
-      createdAt: String(transaction.created_at),
-    })),
-    accountingPostings: (accountingResult.data ?? []).map((posting) =>
-      mapAccountingReconciliationRow(posting as unknown as ReceivableAccountingReconciliationViewRow),
+    transactions: (transactionsResult.data ?? []).map((transaction) =>
+      sanitizeReportingTransaction(transaction as unknown as Record<string, unknown>, {
+        canViewAccountingDetails: access.canViewAccountingDetails,
+        canViewPayrollDetails: access.canViewPayrollDetails,
+      }),
     ),
-    audit: (auditResult.data ?? []).map((entry) => ({
-      id: String(entry.id),
-      actorId: entry.actor_id ? String(entry.actor_id) : null,
-      actorRole: entry.actor_role ? String(entry.actor_role) : null,
-      action: String(entry.action),
-      description: entry.description ? String(entry.description) : null,
-      oldValues: entry.old_values as Record<string, unknown> | null,
-      newValues: entry.new_values as Record<string, unknown> | null,
-      metadata: entry.metadata as Record<string, unknown> | null,
-      createdAt: String(entry.created_at),
-    })),
+    accountingPostings: accountingRows.map((posting) =>
+      mapAccountingReconciliationRow(
+        posting as unknown as ReceivableAccountingReconciliationViewRow,
+        { canViewPayrollDetails: access.canViewPayrollDetails },
+      ),
+    ),
+    audit: (auditResult.data ?? [])
+      .map((entry) => sanitizeReportingAuditEntry(
+        entry as unknown as Record<string, unknown>,
+        {
+          canViewAccountingDetails: access.canViewAccountingDetails,
+          canViewPayrollDetails: access.canViewPayrollDetails,
+        },
+      ))
+      .filter((entry): entry is ReportingAuditEntry => entry !== null),
+    canViewAccountingDetails: access.canViewAccountingDetails,
+    canViewPayrollDetails: access.canViewPayrollDetails,
   };
 }
 
 export async function getReceivableAccountingReconciliation(
   params: { q?: string; page?: string; pageSize?: string },
-  access: Pick<ReceivablesAccess, "canViewLoans">,
+  access: Pick<ReceivablesAccess, "canViewReceivables" | "canViewLoans" | "canViewAccountingDetails" | "canViewPayrollDetails">,
 ) {
-  if (!access.canViewLoans) {
+  if (!access.canViewReceivables || !access.canViewLoans || !access.canViewAccountingDetails) {
     return { rows: [], count: 0, page: 1, pageSize: 25, search: "" };
   }
-  const page = Math.max(1, Number.parseInt(params.page ?? "1", 10) || 1);
-  const pageSize = Math.min(100, Math.max(10, Number.parseInt(params.pageSize ?? "25", 10) || 25));
-  const search = String(params.q ?? "").trim().slice(0, 80).replace(/[%,().]/g, " ").replace(/\s+/g, " ");
+  const normalized = normalizeReportingListParams(params);
+  const page = normalized.page;
+  const pageSize = Math.max(10, normalized.pageSize);
+  const search = normalized.search.slice(0, 80);
   const db = createSupabaseAdminClient();
   let query = db
     .from("receivable_accounting_reconciliation_v")
@@ -874,11 +934,15 @@ export async function getReceivableAccountingReconciliation(
   const result = await query
     .order("effective_date", { ascending: false })
     .order("created_at", { ascending: false })
+    .order("receivable_transaction_id", { ascending: true })
     .range((page - 1) * pageSize, page * pageSize - 1);
   if (result.error) throw new Error("Unable to load Accounting reconciliation.");
   return {
     rows: (result.data ?? []).map((row) =>
-      mapAccountingReconciliationRow(row as unknown as ReceivableAccountingReconciliationViewRow),
+      mapAccountingReconciliationRow(
+        row as unknown as ReceivableAccountingReconciliationViewRow,
+        { canViewPayrollDetails: access.canViewPayrollDetails },
+      ),
     ),
     count: result.count ?? 0,
     page,
@@ -888,7 +952,9 @@ export async function getReceivableAccountingReconciliation(
 }
 
 export async function getReceivablePartyOptions(
-  access: Pick<ReceivablesAccess, "canManageAccounts">,
+  access: Pick<ReceivablesAccess, "canViewReceivables" | "canViewLoans"> & {
+    canManageAccounts?: boolean;
+  },
 ) {
   const empty = {
     employees: [],
@@ -898,7 +964,7 @@ export async function getReceivablePartyOptions(
     crmContacts: [],
     externalParties: [],
   };
-  if (!access.canManageAccounts) return empty;
+  if (!access.canViewReceivables || !access.canViewLoans || !access.canManageAccounts) return empty;
   const db = createSupabaseAdminClient();
   const [employees, customers, suppliers, crmCompanies, crmContacts, externalParties] =
     await Promise.all([

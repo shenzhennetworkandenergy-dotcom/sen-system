@@ -4,7 +4,7 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { ReceivablesNavigation } from "@/components/receivables/ReceivablesNavigation";
 import { requirePermission } from "@/lib/auth/permissions";
 import { getReceivablesDashboard } from "@/lib/receivables/data";
-import { resolveSalesVisibilityScope } from "@/lib/sales/visibility";
+import { resolveReceivablesReportScope } from "@/lib/receivables/reporting-access";
 
 export const dynamic = "force-dynamic";
 
@@ -28,20 +28,11 @@ function metricCard(label: string, value: string, tone = "border-blue-200") {
 export default async function ReceivablesPage() {
   await connection();
   const { profile, permissions } = await requirePermission("receivables.view");
-  const isAdmin = profile.role === "admin";
-  const canViewCustomer = isAdmin || permissions.has("receivables.view_customer");
-  const canViewLoans = isAdmin || permissions.has("receivables.view_loans");
-  const salesScope = resolveSalesVisibilityScope({
-    role: profile.role,
-    status: profile.status,
-    profileId: profile.id,
-    permissions,
-  });
-  const data = await getReceivablesDashboard({
-    canViewCustomer,
-    canViewLoans,
-    salesScope,
-  });
+  const reportScope = resolveReceivablesReportScope({ profile, permissions });
+  const isAdmin = reportScope.isAdmin;
+  const canViewCustomer = reportScope.canViewCustomerReceivables;
+  const canViewLoans = reportScope.canViewLoans;
+  const data = await getReceivablesDashboard(reportScope);
 
   return (
     <DashboardShell

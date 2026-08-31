@@ -10,6 +10,7 @@ import {
 import { ReceivablesNavigation } from "@/components/receivables/ReceivablesNavigation";
 import { requireAllPermissions } from "@/lib/auth/permissions";
 import { getNonSalesReceivables, getReceivablePartyOptions } from "@/lib/receivables/data";
+import { resolveReceivablesReportScope } from "@/lib/receivables/reporting-access";
 
 export const dynamic = "force-dynamic";
 
@@ -34,13 +35,17 @@ export default async function ReceivableLoansPage({
     "receivables.view_loans",
   ]);
   const params = await searchParams;
-  const isAdmin = profile.role === "admin";
-  const canViewCustomer = isAdmin || permissions.has("receivables.view_customer");
+  const reportScope = resolveReceivablesReportScope({ profile, permissions });
+  const isAdmin = reportScope.isAdmin;
+  const canViewCustomer = reportScope.canViewCustomerReceivables;
   const canCreate = isAdmin || permissions.has("receivables.create");
   const canManageOpening = isAdmin || permissions.has("receivables.manage_opening");
   const [data, rawOptions] = await Promise.all([
-    getNonSalesReceivables(params, { canViewLoans: true }),
-    getReceivablePartyOptions({ canManageAccounts: canCreate || canManageOpening }),
+    getNonSalesReceivables(params, reportScope),
+    getReceivablePartyOptions({
+      ...reportScope,
+      canManageAccounts: canCreate || canManageOpening,
+    }),
   ]);
   const options: ReceivablePartyOptions = {
     employees: rawOptions.employees.map((item) => ({
@@ -76,7 +81,7 @@ export default async function ReceivableLoansPage({
       title="Loans & Advances"
       subtitle="Non-Sales receivable accounts and opening balances. Financial posting is intentionally deferred."
     >
-      <ReceivablesNavigation canViewCustomer={canViewCustomer} canViewLoans />
+      <ReceivablesNavigation canViewCustomer={canViewCustomer} canViewLoans={reportScope.canViewLoans} />
       <section className="mb-5 rounded-2xl border bg-white p-4 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>

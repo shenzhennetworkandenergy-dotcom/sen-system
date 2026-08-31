@@ -7,6 +7,7 @@ import { ReceivableOperations } from "@/components/receivables/ReceivableOperati
 import { ReceivablesNavigation } from "@/components/receivables/ReceivablesNavigation";
 import { requireAllPermissions } from "@/lib/auth/permissions";
 import { getNonSalesReceivableDetail } from "@/lib/receivables/data";
+import { resolveReceivablesReportScope } from "@/lib/receivables/reporting-access";
 
 export const dynamic = "force-dynamic";
 
@@ -48,10 +49,11 @@ export default async function ReceivableLoanDetailPage({
     "receivables.view_loans",
   ]);
   const { id } = await params;
-  const detail = await getNonSalesReceivableDetail(id, { canViewLoans: true });
+  const reportScope = resolveReceivablesReportScope({ profile, permissions });
+  const detail = await getNonSalesReceivableDetail(id, reportScope);
   if (!detail) notFound();
-  const isAdmin = profile.role === "admin";
-  const canViewCustomer = isAdmin || permissions.has("receivables.view_customer");
+  const isAdmin = reportScope.isAdmin;
+  const canViewCustomer = reportScope.canViewCustomerReceivables;
   const operationPermissions = {
     canCreate: isAdmin || permissions.has("receivables.create"),
     canApprove: isAdmin || permissions.has("receivables.approve"),
@@ -76,6 +78,19 @@ export default async function ReceivableLoanDetailPage({
   };
   const approvedExposure = detail.account.existingExposure
     + (detail.account.approvedAmount ?? detail.account.requestedAmount);
+  // Pass only the fields the interactive client component needs.  The full
+  // server DTO contains borrower/audit metadata that must not be serialized
+  // into the browser merely because the component's TypeScript type narrows it.
+  const operationAccount = {
+    id: detail.account.id,
+    status: detail.account.status,
+    requestedAmount: detail.account.requestedAmount,
+    approvedAmount: detail.account.approvedAmount,
+    outstandingAmount: detail.account.outstandingAmount,
+    installmentCount: detail.account.installmentCount,
+    installmentAmount: detail.account.installmentAmount,
+    firstDueDate: detail.account.firstDueDate,
+  };
 
   return (
     <DashboardShell
@@ -86,8 +101,8 @@ export default async function ReceivableLoanDetailPage({
     >
       <ReceivablesNavigation
         canViewCustomer={canViewCustomer}
-        canViewLoans
-        canReconcile={isAdmin || (permissions.has("accounting.view") && permissions.has("receivables.view_loans"))}
+        canViewLoans={reportScope.canViewLoans}
+        canReconcile={reportScope.canViewAccountingDetails}
       />
       <Link href="/admin/receivables/loans" className="mb-4 inline-flex font-semibold text-blue-800 hover:underline">
         ← Back to Loans & Advances
@@ -159,15 +174,16 @@ export default async function ReceivableLoanDetailPage({
 
       <section className="mt-5">
         <ReceivableOperations
-          account={detail.account}
+          account={operationAccount}
           permissions={operationPermissions}
           operationIds={operationIds}
           transactions={detail.transactions}
           accountingPostings={detail.accountingPostings}
+          canViewAccountingDetails={reportScope.canViewAccountingDetails}
         />
       </section>
 
-      <section className="mt-5 rounded-2xl border border-indigo-200 bg-indigo-50/40 p-5 shadow-sm">
+      {reportScope.canViewAccountingDetails ? <section className="mt-5 rounded-2xl border border-indigo-200 bg-indigo-50/40 p-5 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold text-indigo-950">Accounting &amp; Cash Book Reconciliation</h2>
@@ -178,7 +194,12 @@ export default async function ReceivableLoanDetailPage({
         {detail.accountingPostings.length ? (
           <div className="mt-4 overflow-x-auto"><table className="w-full min-w-[760px] text-left text-sm"><thead className="bg-white/80"><tr>{["Date","Movement","Treatment","Posting status","Journal","Cash Book"].map((head) => <th key={head} className="p-3">{head}</th>)}</tr></thead><tbody>{detail.accountingPostings.map((posting) => <tr key={posting.receivableTransactionId} className="border-t border-indigo-100"><td className="p-3">{posting.effectiveDate}</td><td className="p-3">{label(posting.transactionType)} · {posting.direction === "increase" ? "+" : "−"}{money(posting.amount, posting.currency)}</td><td className="p-3">{posting.accountingTreatment ? label(posting.accountingTreatment) : "Not set"}</td><td className="p-3"><span className={`rounded-full px-2 py-1 text-xs font-semibold ${posting.postingStatus === "posted" ? "bg-green-100 text-green-800" : posting.postingStatus === "needs_review" ? "bg-amber-100 text-amber-900" : posting.postingStatus === "reversed" ? "bg-slate-200 text-slate-700" : "bg-blue-100 text-blue-800"}`}>{label(posting.postingStatus)}</span></td><td className="p-3">{posting.journalEntryNumber ?? "—"}</td><td className="p-3">{posting.cashbookEntryId ? "Linked" : "—"}</td></tr>)}</tbody></table></div>
         ) : <p className="mt-4 text-sm text-indigo-900">No accounting posting links exist yet. Opening balances remain intentionally unposted.</p>}
-      </section>
+      </section> : (
+        <section className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-5 shadow-sm">
+          <h2 className="text-lg font-semibold text-slate-800">Accounting &amp; Cash Book Reconciliation</h2>
+          <p className="mt-1 text-sm text-slate-600">Accounting and Cash Book details are restricted to users with Accounting visibility.</p>
+        </section>
+      )}
 
       <section className="mt-5 rounded-2xl border bg-white p-5 shadow-sm">
         <h2 className="text-lg font-semibold text-[var(--primary)]">Immutable Transaction History</h2>
