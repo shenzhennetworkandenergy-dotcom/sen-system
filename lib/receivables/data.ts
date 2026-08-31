@@ -122,6 +122,8 @@ function mapAccountingReconciliationRow(
     row as unknown as Record<string, unknown>,
     visibility,
   );
+  const payrollLinkHidden = !visibility.canViewPayrollDetails
+    && (protectedLink.source === "payroll-linked" || protectedLink.paymentMethod === "payroll-linked");
   return {
     receivableAccountId: String(row.receivable_account_id),
     receivableNumber: String(row.receivable_number),
@@ -136,15 +138,19 @@ function mapAccountingReconciliationRow(
     paymentMethod: protectedLink.paymentMethod,
     source: protectedLink.source,
     accountingTreatment: row.accounting_treatment ? String(row.accounting_treatment) : null,
-    postingId: row.posting_id ? String(row.posting_id) : null,
+    postingId: payrollLinkHidden ? null : row.posting_id ? String(row.posting_id) : null,
     postingStatus: String(row.posting_status),
     postingType: row.posting_type ? String(row.posting_type) : null,
-    postingOperationId: row.posting_operation_id ? String(row.posting_operation_id) : null,
-    journalEntryId: row.journal_entry_id ? String(row.journal_entry_id) : null,
-    journalEntryNumber: row.journal_entry_number ? String(row.journal_entry_number) : null,
-    cashbookEntryId: row.cashbook_entry_id ? String(row.cashbook_entry_id) : null,
-    accountingDate: row.accounting_date ? String(row.accounting_date) : null,
-    reversalOfPostingId: row.reversal_of_posting_id
+    postingOperationId: payrollLinkHidden ? null : row.posting_operation_id ? String(row.posting_operation_id) : null,
+    journalEntryId: payrollLinkHidden ? null : row.journal_entry_id ? String(row.journal_entry_id) : null,
+    journalEntryNumber: payrollLinkHidden ? null : row.journal_entry_number ? String(row.journal_entry_number) : null,
+    cashbookEntryId: payrollLinkHidden ? null : row.cashbook_entry_id ? String(row.cashbook_entry_id) : null,
+    accountingDate: payrollLinkHidden ? null : row.accounting_date ? String(row.accounting_date) : null,
+    // A reversal posting can point at a Payroll-linked original even when
+    // the reversal row itself has a generic source.  Keep that identifier
+    // behind the Payroll detail boundary until a dedicated target lookup is
+    // available.
+    reversalOfPostingId: !visibility.canViewPayrollDetails ? null : row.reversal_of_posting_id
       ? String(row.reversal_of_posting_id)
       : null,
     notes: protectedLink.notes,
@@ -734,10 +740,14 @@ export async function getNonSalesReceivableDetail(
 ) {
   if (!access.canViewReceivables || !access.canViewLoans || !UUID_PATTERN.test(accountId)) return null;
   const db = createSupabaseAdminClient();
-  const canViewProtectedDetails = access.canViewAccountingDetails || access.canViewPayrollDetails;
+  // Protected transaction/audit payload is only fetched when both authorities
+  // are present.  An Accounting viewer without Payroll detail authority still
+  // gets the operational account and posting state, but not Payroll-linked
+  // identifiers, notes or metadata through the service-role query.
+  const canViewProtectedDetails = access.canViewAccountingDetails && access.canViewPayrollDetails;
   const transactionColumns = canViewProtectedDetails
     ? "id,transaction_type,direction,amount,effective_date,payment_method,source,operation_id,reversal_of_transaction_id,notes,metadata,created_by,created_at"
-    : "id,transaction_type,direction,amount,effective_date,payment_method,source,operation_id,reversal_of_transaction_id,notes,created_by,created_at";
+    : "id,transaction_type,direction,amount,effective_date,payment_method,source,reversal_of_transaction_id,created_at";
   const auditColumns = canViewProtectedDetails
     ? "id,actor_id,actor_role,action,description,old_values,new_values,metadata,created_at"
     : "id,actor_id,actor_role,action,description,created_at";
@@ -778,9 +788,12 @@ export async function getNonSalesReceivableDetail(
   let accountingRows: unknown[] = [];
   let accountingError: { code?: string; message?: string } | null = null;
   if (access.canViewAccountingDetails) {
+    const accountingColumns = access.canViewPayrollDetails
+      ? "*"
+      : "receivable_account_id,receivable_number,borrower_name,category,currency,receivable_transaction_id,transaction_type,direction,amount,effective_date,payment_method,source,accounting_treatment,posting_status,posting_type,notes,created_at";
     const accountingResult = await db
       .from("receivable_accounting_reconciliation_v")
-      .select("*")
+      .select(accountingColumns)
       .eq("receivable_account_id", accountId)
       .order("effective_date", { ascending: false })
       .order("created_at", { ascending: false })
@@ -888,12 +901,19 @@ export async function getNonSalesReceivableDetail(
       status: String(installment.installment_status),
       daysOverdue: installment.days_overdue == null ? null : Number(installment.days_overdue),
     })),
-    transactions: (transactionsResult.data ?? []).map((transaction) =>
-      sanitizeReportingTransaction(transaction as unknown as Record<string, unknown>, {
+    transactions: (transactionsResult.data ?? []).map((transaction) => {
+      const sanitized = sanitizeReportingTransaction(transaction as unknown as Record<string, unknown>, {
         canViewAccountingDetails: access.canViewAccountingDetails,
         canViewPayrollDetails: access.canViewPayrollDetails,
-      }),
-    ),
+      });
+      // The raw reversal target UUID is a protected linkage when either
+      // Accounting or Payroll detail authority is absent.  Admin/full-detail
+      // viewers retain the immutable relationship; operational viewers still
+      // see the reversal movement itself without the sensitive target ID.
+      return access.canViewAccountingDetails && access.canViewPayrollDetails
+        ? sanitized
+        : { ...sanitized, reversalOfTransactionId: null };
+    }),
     accountingPostings: accountingRows.map((posting) =>
       mapAccountingReconciliationRow(
         posting as unknown as ReceivableAccountingReconciliationViewRow,

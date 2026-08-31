@@ -81,7 +81,7 @@ export default async function ReceivableLoansPage({
       title="Loans & Advances"
       subtitle="Non-Sales receivable accounts and opening balances. Financial posting is intentionally deferred."
     >
-      <ReceivablesNavigation canViewCustomer={canViewCustomer} canViewLoans={reportScope.canViewLoans} />
+      <ReceivablesNavigation canViewCustomer={canViewCustomer} canViewLoans={reportScope.canViewLoans} canViewReports={reportScope.canViewReceivables} />
       <section className="mb-5 rounded-2xl border bg-white p-4 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>

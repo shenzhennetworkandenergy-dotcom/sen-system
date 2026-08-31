@@ -4,10 +4,12 @@ export function ReceivablesNavigation({
   canViewCustomer,
   canViewLoans,
   canReconcile = false,
+  canViewReports = false,
 }: {
   canViewCustomer: boolean;
   canViewLoans: boolean;
   canReconcile?: boolean;
+  canViewReports?: boolean;
 }) {
   const items = [
     { label: "Receivables Dashboard", href: routes.adminReceivables, visible: true },
@@ -25,6 +27,11 @@ export function ReceivablesNavigation({
       label: "Accounting Reconciliation",
       href: "/admin/receivables/reconciliation",
       visible: canReconcile,
+    },
+    {
+      label: "Reports",
+      href: routes.adminReceivableReports,
+      visible: canViewReports,
     },
   ];
   return (

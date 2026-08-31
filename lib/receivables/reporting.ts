@@ -422,7 +422,12 @@ export function sanitizeReportingTransaction(
   const isPayrollLinked = normalizedSource.includes("payroll")
     || /salary[\s_-]*deduction/.test(normalizedPaymentMethod)
     || normalizedPaymentMethod.includes("payroll");
-  const isAccountingLinked = normalizedSource.includes("accounting");
+  // Phase 5 currently emits `accounting`, but future posting/reconciliation
+  // sources may use journal/cashbook/posting aliases.  Use the same token
+  // matcher as metadata/text sanitization so an accounting-hidden viewer
+  // cannot receive a protected operation id or source label through an alias.
+  const isAccountingPaymentMethod = hasAccountingToken(paymentMethod == null ? "" : String(paymentMethod));
+  const isAccountingLinked = hasAccountingToken(source) || isAccountingPaymentMethod;
   const hidePayroll = isPayrollLinked && !visibility.canViewPayrollDetails;
   const hideAccounting = isAccountingLinked && !visibility.canViewAccountingDetails;
   const rawNotes = raw.notes == null ? null : String(raw.notes);
@@ -434,7 +439,9 @@ export function sanitizeReportingTransaction(
     effectiveDate: String(raw.effectiveDate ?? raw.effective_date ?? ""),
     paymentMethod: hidePayroll
       ? "payroll-linked"
-      : sanitizeReportingRepaymentMethod(paymentMethod, visibility),
+      : isAccountingPaymentMethod && !visibility.canViewAccountingDetails
+        ? "financial-linked"
+        : sanitizeReportingRepaymentMethod(paymentMethod, visibility),
     source: hidePayroll ? "payroll-linked" : hideAccounting ? "financial-linked" : source,
     operationId: hidePayroll
       ? "payroll-linked"

@@ -9,11 +9,15 @@ import { resolveReceivablesReportScope } from "@/lib/receivables/reporting-acces
 export const dynamic = "force-dynamic";
 
 function money(value: number, currency: string) {
-  return new Intl.NumberFormat("en-BD", {
-    style: "currency",
-    currency,
-    maximumFractionDigits: 2,
-  }).format(value);
+  try {
+    return new Intl.NumberFormat("en-BD", {
+      style: "currency",
+      currency,
+      maximumFractionDigits: 2,
+    }).format(value);
+  } catch {
+    return `${currency} ${value.toFixed(2)}`;
+  }
 }
 
 function metricCard(label: string, value: string, tone = "border-blue-200") {
@@ -41,7 +45,7 @@ export default async function ReceivablesPage() {
       title="Receivables"
       subtitle="Operational control centre for money owed to SEN. Accounting remains the authoritative financial ledger."
     >
-      <ReceivablesNavigation canViewCustomer={canViewCustomer} canViewLoans={canViewLoans} />
+      <ReceivablesNavigation canViewCustomer={canViewCustomer} canViewLoans={canViewLoans} canViewReports={reportScope.canViewReceivables} />
       {!canViewCustomer && !canViewLoans ? (
         <p className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-amber-950">
           You can open Receivables, but no financial category has been assigned to you.
@@ -75,7 +79,7 @@ export default async function ReceivablesPage() {
               );
               return customer ? (
                 <div className="mt-3 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  {metricCard("Customer current", money(customer.currentOutstanding, summary.currency), "border-blue-200")}
+                  {metricCard("Customer current / due soon", money(customer.currentOutstanding, summary.currency), "border-blue-200")}
                   {metricCard("Customer no due date", money(customer.noDueDate, summary.currency), "border-slate-200")}
                   {metricCard("Collected this month", money(customer.collectedThisMonth, summary.currency), "border-green-200")}
                   {metricCard("Customer records", String(customer.recordCount), "border-cyan-200")}

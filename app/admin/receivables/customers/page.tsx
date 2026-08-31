@@ -64,7 +64,7 @@ export default async function CustomerReceivablesPage({
       title="Customer Receivables"
       subtitle="Read-only outstanding derived from existing Sales invoices and successful Sales payments."
     >
-      <ReceivablesNavigation canViewCustomer={canViewCustomer} canViewLoans={canViewLoans} />
+      <ReceivablesNavigation canViewCustomer={canViewCustomer} canViewLoans={canViewLoans} canViewReports={reportScope.canViewReceivables} />
       <div className="mb-4 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-950">
         Record customer collections through the existing Sales → Record Payment workflow. This page does not create another payment or Accounting entry.
       </div>

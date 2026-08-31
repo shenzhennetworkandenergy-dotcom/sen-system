@@ -103,6 +103,7 @@ export default async function ReceivableLoanDetailPage({
         canViewCustomer={canViewCustomer}
         canViewLoans={reportScope.canViewLoans}
         canReconcile={reportScope.canViewAccountingDetails}
+        canViewReports={reportScope.canViewReceivables}
       />
       <Link href="/admin/receivables/loans" className="mb-4 inline-flex font-semibold text-blue-800 hover:underline">
         ← Back to Loans & Advances
