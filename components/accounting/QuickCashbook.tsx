@@ -19,6 +19,8 @@ type Entry = {
   transactionAt: string;
   description: string;
   remark: string;
+  salePaymentId?: string | null;
+  journalEntryNumber?: string | null;
 };
 
 const field = "mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none transition focus:border-blue-600 focus:ring-2 focus:ring-blue-100";
@@ -46,6 +48,8 @@ export function QuickCashbook({
   day,
   canCreate,
   canCreateDescription,
+  showReference = false,
+  readOnly = false,
 }: {
   selectedDate: string;
   defaultOccurredAt: string;
@@ -53,9 +57,22 @@ export function QuickCashbook({
   descriptions: Description[];
   entries: Entry[];
   summary: { opening: number; income: number; expense: number; net: number; closing: number };
-  day: { openingBalance: number; closingBalance: number; isClosed: boolean; closedAt: string | null };
+  day: {
+    openingBalance: number;
+    closingBalance: number;
+    isClosed: boolean;
+    closedAt: string | null;
+    businessDate?: string;
+    auditStatus?: string;
+    correctionReason?: string | null;
+    reviewedAt?: string | null;
+    reviewedBy?: string | null;
+    reviewedByName?: string | null;
+  };
   canCreate: boolean;
   canCreateDescription: boolean;
+  showReference?: boolean;
+  readOnly?: boolean;
 }) {
   const [transactionType, setTransactionType] = useState<TransactionType>("income");
   const filteredDescriptions = useMemo(
@@ -99,20 +116,20 @@ export function QuickCashbook({
           <p className="text-xs font-bold uppercase tracking-[0.18em] text-blue-700">Accounting · Daily cash</p>
           <h2 className="mt-1 text-2xl font-bold text-slate-950">কুইক ক্যাশবুক ও ক্যাশ ক্লোজিং সিস্টেম</h2>
         </div>
-        <form method="get" className="flex flex-wrap items-end gap-2 rounded-xl border border-blue-200 bg-blue-50 p-2">
+        {!readOnly ? <form method="get" className="flex flex-wrap items-end gap-2 rounded-xl border border-blue-200 bg-blue-50 p-2">
           <label className="text-xs font-bold text-slate-700">Specific day
             <input name="cashbook_date" type="date" defaultValue={selectedDate} required className="mt-1 block rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" />
           </label>
           <button className="rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-bold text-white hover:bg-blue-800">View daily balance</button>
-        </form>
+        </form> : null}
       </div>
 
-      <form action={setCashbookOpeningBalanceAction} className="mb-4 grid items-end gap-3 rounded-xl border border-sky-200 bg-sky-50 p-4 sm:grid-cols-[1fr_12rem_auto] print:hidden">
+      {!readOnly ? <form action={setCashbookOpeningBalanceAction} className="mb-4 grid items-end gap-3 rounded-xl border border-sky-200 bg-sky-50 p-4 sm:grid-cols-[1fr_12rem_auto] print:hidden">
         <input type="hidden" name="cashbook_date" value={selectedDate} />
         <label htmlFor="cashbook-opening-balance" className="text-sm font-bold text-blue-800 sm:col-span-1">পূর্বের ক্যাশ ব্যালেন্স (Opening Cash / Previous Balance)</label>
         <input id="cashbook-opening-balance" name="opening_balance" type="number" min="0" step="0.01" defaultValue={day.openingBalance.toFixed(2)} disabled={day.isClosed || !canCreate} className={field} required />
         <button disabled={day.isClosed || !canCreate} className="rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50">Save balance</button>
-      </form>
+      </form> : null}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <article className="rounded-xl bg-slate-700 p-4 text-center text-white">
@@ -129,7 +146,9 @@ export function QuickCashbook({
         </article>
       </div>
 
-      {canCreate ? (
+      <AuditStatusMessage day={day} />
+
+      {canCreate && !readOnly ? (
         <div className="print:hidden">
           {canCreateDescription ? <div className="mt-5 flex justify-end">
             <details className="group w-full rounded-xl border bg-white p-3 sm:w-auto sm:min-w-[30rem]">
@@ -150,9 +169,7 @@ export function QuickCashbook({
             </details>
           </div> : null}
 
-          {day.isClosed ? (
-            <p className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-center font-bold text-amber-900">This cashbook day is closed. Its statement is locked for audit.</p>
-          ) : (
+          {!day.isClosed ? (
             <form action={createCashbookEntryAction} className="mt-4 grid gap-3 rounded-xl border border-slate-200 bg-white p-4 md:grid-cols-2 xl:grid-cols-[1.1fr_1.4fr_1fr_1.2fr_1.2fr_auto]">
               <input type="hidden" name="cashbook_date" value={selectedDate} />
               <label className="text-xs font-bold">Transaction type
@@ -181,7 +198,7 @@ export function QuickCashbook({
               </label>
               <button disabled={!filteredDescriptions.length} className="self-end rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white disabled:opacity-50">এন্ট্রি যোগ করুন</button>
             </form>
-          )}
+          ) : null}
 
           <div className="mt-5 flex flex-wrap justify-end gap-3">
             {!day.isClosed ? (
@@ -211,8 +228,8 @@ export function QuickCashbook({
         </header>
 
         <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <StatementTable title="INCOME (আয় সমূহ)" entries={incomeEntries} emptyLabel="No income" />
-          <StatementTable title="EXPENSE (ব্যয় / খরচ সমূহ)" entries={expenseEntries} emptyLabel="No expense" />
+          <StatementTable title="INCOME (আয় সমূহ)" entries={incomeEntries} emptyLabel="No income" showReference={showReference} />
+          <StatementTable title="EXPENSE (ব্যয় / খরচ সমূহ)" entries={expenseEntries} emptyLabel="No expense" showReference={showReference} />
         </div>
 
         <div className="mt-4 overflow-hidden rounded-lg border border-slate-300 text-sm">
@@ -231,21 +248,39 @@ export function QuickCashbook({
   );
 }
 
-function StatementTable({ title, entries, emptyLabel }: { title: string; entries: Entry[]; emptyLabel: string }) {
+function StatementTable({ title, entries, emptyLabel, showReference }: { title: string; entries: Entry[]; emptyLabel: string; showReference: boolean }) {
   const total = entries.reduce((sum, entry) => sum + entry.amount, 0);
   return (
     <div className="overflow-hidden rounded-lg border border-slate-300">
       <h4 className="bg-slate-100 p-2 text-center text-sm font-black">{title}</h4>
       <table className="w-full text-xs">
-        <thead><tr className="border-t bg-slate-50"><th className="p-2 text-left">খাত / বিবরণ</th><th className="text-left">মেথড</th><th className="pr-2 text-right">পরিমাণ (৳)</th></tr></thead>
+        <thead><tr className="border-t bg-slate-50"><th className="p-2 text-left">খাত / বিবরণ</th>{showReference ? <th className="text-left">Reference</th> : null}<th className="text-left">মেথড</th><th className="pr-2 text-right">পরিমাণ (৳)</th></tr></thead>
         <tbody>
-          {entries.map((entry) => <tr key={entry.id} className="border-t"><td className="p-2"><strong>{entry.description}</strong><span className="ml-2 text-[10px] text-slate-500">{dhakaTime(entry.transactionAt)}</span>{entry.remark ? <p className="mt-1 text-[11px] text-slate-600">{entry.remark}</p> : null}</td><td>{paymentLabels[entry.paymentMethod]}</td><td className="pr-2 text-right font-bold">{money(entry.amount)}</td></tr>)}
-          {!entries.length ? <tr className="border-t"><td colSpan={3} className="p-3 text-center text-slate-500">{emptyLabel}</td></tr> : null}
+          {entries.map((entry) => <tr key={entry.id} className="border-t"><td className="p-2"><strong>{entry.description}</strong><span className="ml-2 text-[10px] text-slate-500">{dhakaTime(entry.transactionAt)}</span>{entry.remark ? <p className="mt-1 text-[11px] text-slate-600">{entry.remark}</p> : null}</td>{showReference ? <td>{entry.journalEntryNumber || (entry.salePaymentId ? `Payment ${entry.salePaymentId.slice(0, 8)}` : "—")}</td> : null}<td>{paymentLabels[entry.paymentMethod]}</td><td className="pr-2 text-right font-bold">{money(entry.amount)}</td></tr>)}
+          {!entries.length ? <tr className="border-t"><td colSpan={showReference ? 4 : 3} className="p-3 text-center text-slate-500">{emptyLabel}</td></tr> : null}
         </tbody>
-        <tfoot><tr className="border-t bg-slate-50 font-black"><td colSpan={2} className="p-2">Total</td><td className="pr-2 text-right">{money(total)}</td></tr></tfoot>
+        <tfoot><tr className="border-t bg-slate-50 font-black"><td colSpan={showReference ? 3 : 2} className="p-2">Total</td><td className="pr-2 text-right">{money(total)}</td></tr></tfoot>
       </table>
     </div>
   );
+}
+
+function AuditStatusMessage({ day }: { day: { isClosed: boolean; auditStatus?: string; correctionReason?: string | null; reviewedAt?: string | null; reviewedBy?: string | null; reviewedByName?: string | null } }) {
+  if (!day.isClosed) return null;
+  const status = String(day.auditStatus ?? "PENDING_AUDIT").trim().toUpperCase();
+  if (status === "CORRECTION_REQUIRED") {
+    return <div role="status" className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-center font-bold text-amber-900"><p>Admin requested correction.</p>{day.correctionReason ? <p className="mt-1 text-sm font-medium">Correction reason: {day.correctionReason}</p> : null}</div>;
+  }
+  if (status === "APPROVED") {
+    const reviewer = day.reviewedByName || day.reviewedBy;
+    const reviewed = [reviewer ? `Reviewed by ${reviewer}` : null, day.reviewedAt ? `on ${formatDhakaDateTime(day.reviewedAt)}` : null].filter(Boolean).join(" ");
+    return <div role="status" className="mt-4 rounded-xl border border-emerald-300 bg-emerald-50 p-4 text-center font-bold text-emerald-900"><p>Cashbook audited and approved.</p>{reviewed ? <p className="mt-1 text-sm font-medium">{reviewed}</p> : null}</div>;
+  }
+  return <p role="status" className="mt-4 rounded-xl border border-blue-300 bg-blue-50 p-4 text-center font-bold text-blue-900">Cashbook closed and waiting for Admin audit.</p>;
+}
+
+function formatDhakaDateTime(value: string) {
+  return new Intl.DateTimeFormat("en-BD", { timeZone: "Asia/Dhaka", dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 }
 
 function StatementTotal({ label, value, closing = false }: { label: string; value: number; closing?: boolean }) {

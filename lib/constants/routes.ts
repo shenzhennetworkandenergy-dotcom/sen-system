@@ -26,6 +26,7 @@ export const routes = {
   adminSuppliers: "/admin/suppliers",
   adminSupplierCategories: "/admin/supplier-categories",
   adminAccounting: "/admin/accounting",
+  adminAccountingAudit: "/admin/accounting/audit",
   adminHr: "/admin/hr",
   adminHrEmployees: "/admin/hr/employees",
   adminHrNewEmployee: "/admin/hr/employees/new",

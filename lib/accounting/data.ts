@@ -2,6 +2,15 @@ import "server-only";
 import { summarizeCashbookEntries } from "@/lib/accounting/cashbook";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
+const normalizeAuditStatus = (value: unknown, isClosed: boolean) => {
+  const status = String(value ?? "").trim().toUpperCase();
+  if (!isClosed) return "OPEN";
+  if (["PENDING_AUDIT", "CORRECTION_REQUIRED", "APPROVED"].includes(status)) return status;
+  return "PENDING_AUDIT";
+};
+
+type ActorNameRow = { id: string; full_name: string | null; company_name: string | null; email: string | null };
+
 export async function getAccountingDashboard(selectedDate: string, options: { includeLedger?: boolean } = {}) {
   const db = createSupabaseAdminClient();
   const includeLedger = options.includeLedger ?? true;
@@ -11,7 +20,7 @@ export async function getAccountingDashboard(selectedDate: string, options: { in
     includeLedger ? db.from("journal_entries").select("id,entry_number,entry_date,description,status,currency,reference_type,posted_at,created_at").order("entry_date", { ascending: false }).limit(100) : emptyResult,
     includeLedger ? db.from("journal_lines").select("journal_entry_id,debit,credit") : emptyResult,
     db.from("cashbook_days")
-      .select("business_date,opening_balance,closing_balance,is_closed,closed_at")
+      .select("business_date,opening_balance,closing_balance,is_closed,closed_at,closed_by,audit_status,reviewed_at,reviewed_by,review_comment,correction_reason,correction_requested_at,correction_requested_by")
       .lte("business_date", selectedDate)
       .or(`business_date.eq.${selectedDate},is_closed.eq.true`)
       .order("business_date", { ascending: false })
@@ -50,6 +59,22 @@ export async function getAccountingDashboard(selectedDate: string, options: { in
 
   const latestDay = cashbookDays.data?.[0];
   const selectedDay = latestDay?.business_date === selectedDate ? latestDay : null;
+  let actorNames = new Map<string, ActorNameRow>();
+  const actorIds = [selectedDay?.closed_by, selectedDay?.reviewed_by, selectedDay?.correction_requested_by]
+    .filter((id): id is string => Boolean(id));
+  if (actorIds.length) {
+    const { data: people, error: peopleError } = await db
+      .from("profiles")
+      .select("id,full_name,company_name,email")
+      .in("id", [...new Set(actorIds)]);
+    if (peopleError) throw new Error("Unable to load accounting data.");
+    actorNames = new Map(((people ?? []) as ActorNameRow[]).map((person) => [person.id, person]));
+  }
+  const actorName = (id: string | null | undefined) => {
+    if (!id) return null;
+    const person = actorNames.get(id);
+    return person?.full_name?.trim() || person?.company_name?.trim() || person?.email?.trim() || null;
+  };
   const openingBalance = selectedDay
     ? Number(selectedDay.opening_balance)
     : latestDay?.is_closed
@@ -70,10 +95,22 @@ export async function getAccountingDashboard(selectedDate: string, options: { in
       entries: dailyEntries,
       summary,
       day: {
+        businessDate: selectedDay?.business_date ?? selectedDate,
         openingBalance,
         closingBalance: selectedDay?.is_closed ? Number(selectedDay.closing_balance) : summary.closing,
         isClosed: selectedDay?.is_closed ?? false,
         closedAt: selectedDay?.closed_at ?? null,
+        closedBy: selectedDay?.closed_by ?? null,
+        closedByName: actorName(selectedDay?.closed_by),
+        auditStatus: normalizeAuditStatus(selectedDay?.audit_status, Boolean(selectedDay?.is_closed)),
+        correctionReason: selectedDay?.correction_reason ?? null,
+        correctionRequestedAt: selectedDay?.correction_requested_at ?? null,
+        correctionRequestedBy: selectedDay?.correction_requested_by ?? null,
+        correctionRequestedByName: actorName(selectedDay?.correction_requested_by),
+        reviewedAt: selectedDay?.reviewed_at ?? null,
+        reviewedBy: selectedDay?.reviewed_by ?? null,
+        reviewedByName: actorName(selectedDay?.reviewed_by),
+        reviewComment: selectedDay?.review_comment ?? null,
       },
     },
   };
