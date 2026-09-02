@@ -11,14 +11,14 @@ export async function getAccountingDashboard(selectedDate: string, options: { in
     includeLedger ? db.from("journal_entries").select("id,entry_number,entry_date,description,status,currency,reference_type,posted_at,created_at").order("entry_date", { ascending: false }).limit(100) : emptyResult,
     includeLedger ? db.from("journal_lines").select("journal_entry_id,debit,credit") : emptyResult,
     db.from("cashbook_days")
-      .select("business_date,opening_balance,closing_balance,is_closed,closed_at")
+      .select("business_date,opening_balance,closing_balance,is_closed,closed_at,audit_status,reviewed_at,reviewed_by,review_comment")
       .lte("business_date", selectedDate)
       .or(`business_date.eq.${selectedDate},is_closed.eq.true`)
       .order("business_date", { ascending: false })
       .limit(1),
     db.from("cashbook_descriptions").select("id,name,transaction_type,is_active").eq("is_active", true).order("transaction_type").order("name"),
     db.from("cashbook_entries")
-      .select("id,transaction_type,amount,payment_method,transaction_at,business_date,journal_entry_id,remark,sale_payment_id,source_payment_method,cashbook_descriptions(name),journal_entries!cashbook_entries_journal_entry_id_fkey(entry_number)")
+      .select("id,transaction_type,amount,payment_method,transaction_at,business_date,journal_entry_id,remark,sale_payment_id,source_payment_method,cashbook_descriptions(id,name),journal_entries!cashbook_entries_journal_entry_id_fkey(entry_number)")
       .eq("business_date", selectedDate)
       .order("transaction_at", { ascending: false }),
   ]);
@@ -32,7 +32,7 @@ export async function getAccountingDashboard(selectedDate: string, options: { in
     totals.set(line.journal_entry_id, current);
   }
   const dailyEntries = (cashbookEntries.data ?? []).map((entry) => {
-    const relatedDescription = entry.cashbook_descriptions as unknown as { name: string } | { name: string }[] | null;
+    const relatedDescription = entry.cashbook_descriptions as unknown as { id: string; name: string } | { id: string; name: string }[] | null;
     const relatedJournal = entry.journal_entries as unknown as { entry_number: string } | { entry_number: string }[] | null;
     return {
       id: entry.id,
@@ -51,6 +51,9 @@ export async function getAccountingDashboard(selectedDate: string, options: { in
       description: Array.isArray(relatedDescription)
         ? relatedDescription[0]?.name ?? ""
         : relatedDescription?.name ?? "",
+      descriptionId: Array.isArray(relatedDescription)
+        ? relatedDescription[0]?.id ?? ""
+        : relatedDescription?.id ?? "",
     };
   });
 
@@ -80,6 +83,10 @@ export async function getAccountingDashboard(selectedDate: string, options: { in
         closingBalance: selectedDay?.is_closed ? Number(selectedDay.closing_balance) : summary.closing,
         isClosed: selectedDay?.is_closed ?? false,
         closedAt: selectedDay?.closed_at ?? null,
+        auditStatus: (selectedDay?.audit_status ?? "OPEN") as "OPEN" | "PENDING_AUDIT" | "APPROVED",
+        reviewedAt: selectedDay?.reviewed_at ?? null,
+        reviewedBy: selectedDay?.reviewed_by ?? null,
+        reviewComment: selectedDay?.review_comment ?? null,
       },
     },
   };

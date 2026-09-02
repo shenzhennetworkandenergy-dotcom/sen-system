@@ -125,6 +125,107 @@ export async function createCashbookEntryAction(form: FormData) {
   redirect(destination("success", "Cashbook entry saved and posted to the ledger.", selectedDate));
 }
 
+export async function addPendingCashbookEntryAction(form: FormData) {
+  const { profile } = await requirePermission("accounting.audit_cashbook");
+  const selectedDate = normalizeCashbookDate(form.get("cashbook_date"));
+  let failure: string | null = null;
+  try {
+    const input = normalizeCashbookEntryInput({
+      descriptionId: form.get("description_id"),
+      remark: form.get("remark"),
+      amount: form.get("amount"),
+      paymentMethod: form.get("payment_method"),
+      occurredAt: form.get("occurred_at"),
+    });
+    const { error } = await createSupabaseAdminClient().rpc("add_pending_cashbook_entry", {
+      actor_profile_id: profile.id,
+      requested_description_id: input.descriptionId,
+      requested_remark: input.remark,
+      requested_amount: input.amount,
+      requested_payment_method: input.paymentMethod,
+      requested_occurred_at: input.occurredAt ? toCashbookTimestamp(input.occurredAt, selectedDate) : null,
+      requested_business_date: selectedDate,
+    });
+    if (error) throw error;
+  } catch (error) {
+    console.error("Pending cashbook audit entry creation failed", { message: error instanceof Error ? error.message : "Unknown error" });
+    failure = error instanceof Error ? error.message : "Unable to add this audit entry.";
+  }
+  if (failure) redirect(destination("error", failure, selectedDate));
+  revalidatePath(path);
+  redirect(destination("success", "Audit entry saved and posted to the ledger.", selectedDate));
+}
+
+export async function editPendingCashbookEntryAction(form: FormData) {
+  const { profile } = await requirePermission("accounting.audit_cashbook");
+  const selectedDate = normalizeCashbookDate(form.get("cashbook_date"));
+  let failure: string | null = null;
+  try {
+    const input = normalizeCashbookEntryInput({
+      descriptionId: form.get("description_id"),
+      remark: form.get("remark"),
+      amount: form.get("amount"),
+      paymentMethod: form.get("payment_method"),
+      occurredAt: form.get("occurred_at"),
+    });
+    const { error } = await createSupabaseAdminClient().rpc("edit_pending_cashbook_entry", {
+      actor_profile_id: profile.id,
+      requested_entry_id: String(form.get("entry_id") ?? ""),
+      requested_description_id: input.descriptionId,
+      requested_remark: input.remark,
+      requested_amount: input.amount,
+      requested_payment_method: input.paymentMethod,
+      requested_occurred_at: input.occurredAt ? toCashbookTimestamp(input.occurredAt, selectedDate) : null,
+    });
+    if (error) throw error;
+  } catch (error) {
+    console.error("Pending cashbook audit entry update failed", { message: error instanceof Error ? error.message : "Unknown error" });
+    failure = error instanceof Error ? error.message : "Unable to update this audit entry.";
+  }
+  if (failure) redirect(destination("error", failure, selectedDate));
+  revalidatePath(path);
+  redirect(destination("success", "Cashbook entry and linked journal updated.", selectedDate));
+}
+
+export async function removePendingCashbookEntryAction(form: FormData) {
+  const { profile } = await requirePermission("accounting.audit_cashbook");
+  const selectedDate = normalizeCashbookDate(form.get("cashbook_date"));
+  let failure: string | null = null;
+  try {
+    const { error } = await createSupabaseAdminClient().rpc("remove_pending_cashbook_entry", {
+      actor_profile_id: profile.id,
+      requested_entry_id: String(form.get("entry_id") ?? ""),
+    });
+    if (error) throw error;
+  } catch (error) {
+    console.error("Pending cashbook audit entry removal failed", { message: error instanceof Error ? error.message : "Unknown error" });
+    failure = error instanceof Error ? error.message : "Unable to remove this audit entry.";
+  }
+  if (failure) redirect(destination("error", failure, selectedDate));
+  revalidatePath(path);
+  redirect(destination("success", "Cashbook entry and linked journal removed.", selectedDate));
+}
+
+export async function approveCashbookAuditAction(form: FormData) {
+  const { profile } = await requirePermission("accounting.audit_cashbook");
+  const selectedDate = normalizeCashbookDate(form.get("cashbook_date"));
+  let failure: string | null = null;
+  try {
+    const { error } = await createSupabaseAdminClient().rpc("approve_cashbook_audit", {
+      actor_profile_id: profile.id,
+      requested_business_date: selectedDate,
+      requested_comment: String(form.get("review_comment") ?? "").trim() || null,
+    });
+    if (error) throw error;
+  } catch (error) {
+    console.error("Cashbook audit approval failed", { message: error instanceof Error ? error.message : "Unknown error" });
+    failure = error instanceof Error ? error.message : "Unable to approve this cashbook audit.";
+  }
+  if (failure) redirect(destination("error", failure, selectedDate));
+  revalidatePath(path);
+  redirect(destination("success", "Cashbook audit approved.", selectedDate));
+}
+
 export async function createJournalAction(form: FormData) {
   const { profile } = await requirePermission("accounting.create_entry");
   let failure: string | null = null;

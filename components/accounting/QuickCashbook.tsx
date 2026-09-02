@@ -2,9 +2,13 @@
 
 import { useMemo, useState } from "react";
 import {
+  addPendingCashbookEntryAction,
+  approveCashbookAuditAction,
   closeCashbookDayAction,
   createCashbookDescriptionAction,
   createCashbookEntryAction,
+  editPendingCashbookEntryAction,
+  removePendingCashbookEntryAction,
   setCashbookOpeningBalanceAction,
 } from "@/app/admin/accounting/actions";
 import { formatReceiptMethodForAccounting } from "@/lib/sales/payment-accounting";
@@ -19,6 +23,7 @@ type Entry = {
   paymentMethod: PaymentMethod;
   transactionAt: string;
   description: string;
+  descriptionId: string;
   remark: string;
   sourcePaymentMethod: string | null;
   salePaymentId: string | null;
@@ -49,6 +54,7 @@ export function QuickCashbook({
   summary,
   day,
   canCreate,
+  canAudit,
   canCreateDescription,
 }: {
   selectedDate: string;
@@ -57,8 +63,9 @@ export function QuickCashbook({
   descriptions: Description[];
   entries: Entry[];
   summary: { opening: number; income: number; expense: number; net: number; closing: number };
-  day: { openingBalance: number; closingBalance: number; isClosed: boolean; closedAt: string | null };
+  day: { openingBalance: number; closingBalance: number; isClosed: boolean; closedAt: string | null; auditStatus: "OPEN" | "PENDING_AUDIT" | "APPROVED"; reviewedAt: string | null; reviewedBy: string | null; reviewComment: string | null };
   canCreate: boolean;
+  canAudit: boolean;
   canCreateDescription: boolean;
 }) {
   const [transactionType, setTransactionType] = useState<TransactionType>("income");
@@ -68,6 +75,8 @@ export function QuickCashbook({
   );
   const incomeEntries = entries.filter((entry) => entry.transactionType === "income");
   const expenseEntries = entries.filter((entry) => entry.transactionType === "expense");
+  const auditMode = canAudit && day.isClosed && day.auditStatus === "PENDING_AUDIT";
+  const entryAction = auditMode ? addPendingCashbookEntryAction : createCashbookEntryAction;
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4 shadow-sm sm:p-6">
@@ -154,10 +163,12 @@ export function QuickCashbook({
             </details>
           </div> : null}
 
-          {day.isClosed ? (
-            <p className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-center font-bold text-amber-900">This cashbook day is closed. Its statement is locked for audit.</p>
+          {day.isClosed && !auditMode ? (
+            <p className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-center font-bold text-amber-900">{day.auditStatus === "APPROVED" ? "This cashbook audit is approved and permanently locked." : "This cashbook day is closed. Its statement is locked for audit."}</p>
           ) : (
-            <form action={createCashbookEntryAction} className="mt-4 grid gap-3 rounded-xl border border-slate-200 bg-white p-4 md:grid-cols-2 xl:grid-cols-[1.1fr_1.4fr_1fr_1.2fr_1.2fr_auto]">
+            <>
+            {auditMode ? <p className="mt-4 rounded-xl border border-blue-300 bg-blue-50 p-4 text-center font-bold text-blue-900">ADMIN AUDIT MODE · This closed day may be corrected until approval.</p> : null}
+            <form action={entryAction} className="mt-4 grid gap-3 rounded-xl border border-slate-200 bg-white p-4 md:grid-cols-2 xl:grid-cols-[1.1fr_1.4fr_1fr_1.2fr_1.2fr_auto]">
               <input type="hidden" name="cashbook_date" value={selectedDate} />
               <label className="text-xs font-bold">Transaction type
                 <select value={transactionType} onChange={(event) => setTransactionType(event.target.value as TransactionType)} className={field}>
@@ -185,7 +196,29 @@ export function QuickCashbook({
               </label>
               <button disabled={!filteredDescriptions.length} className="self-end rounded-lg bg-blue-700 px-5 py-2.5 text-sm font-bold text-white disabled:opacity-50">এন্ট্রি যোগ করুন</button>
             </form>
+            </>
           )}
+
+          {auditMode ? <div className="mt-4 space-y-3 rounded-xl border border-blue-200 bg-white p-4">
+            <h3 className="font-bold text-blue-900">Audit existing entries</h3>
+            {entries.map((entry) => entry.salePaymentId ? null : <form key={entry.id} action={editPendingCashbookEntryAction} className="grid gap-3 rounded-lg border p-3 md:grid-cols-2 xl:grid-cols-[1.4fr_1fr_1fr_1.2fr_1.4fr_auto]">
+              <input type="hidden" name="cashbook_date" value={selectedDate} />
+              <input type="hidden" name="entry_id" value={entry.id} />
+              <label className="text-xs font-bold">খাত/বিবরণ
+                <select name="description_id" defaultValue={entry.descriptionId} className={field} required>
+                  {descriptions.filter((description) => description.transactionType === entry.transactionType).map((description) => <option key={description.id} value={description.id}>{description.name}</option>)}
+                </select>
+              </label>
+              <label className="text-xs font-bold">Amount (৳)<input name="amount" type="number" min="0.01" step="0.01" defaultValue={entry.amount} className={field} required /></label>
+              <label className="text-xs font-bold">Method<select name="payment_method" defaultValue={entry.paymentMethod} className={field} required>{paymentMethods.map((method) => <option key={method} value={method}>{paymentLabels[method]}</option>)}</select></label>
+              <label className="text-xs font-bold">Date and time<input name="occurred_at" type="datetime-local" defaultValue={new Date(new Date(entry.transactionAt).getTime() + 6 * 60 * 60 * 1000).toISOString().slice(0, 16)} className={field} required /></label>
+              <label className="text-xs font-bold">Short remark<textarea name="remark" maxLength={240} rows={2} defaultValue={entry.remark} className={`${field} resize-y`} /></label>
+              <div className="flex items-center gap-2 self-end">
+                <button className="rounded-lg bg-blue-700 px-4 py-2.5 text-sm font-bold text-white">Save correction</button>
+                <button formAction={removePendingCashbookEntryAction} className="rounded-lg border border-red-300 bg-red-50 px-4 py-2.5 text-sm font-bold text-red-700">Remove entry</button>
+              </div>
+            </form>)}
+          </div> : null}
 
           <div className="mt-5 flex flex-wrap justify-end gap-3">
             {!day.isClosed ? (
@@ -193,7 +226,11 @@ export function QuickCashbook({
                 <input type="hidden" name="cashbook_date" value={selectedDate} />
                 <button className="rounded-lg bg-amber-500 px-5 py-2.5 text-sm font-bold text-white hover:bg-amber-600">দিনের হিসাব ক্লোজ করুন (Close Today)</button>
               </form>
-            ) : null}
+            ) : auditMode ? <form action={approveCashbookAuditAction} className="flex flex-wrap items-end gap-3 rounded-xl border border-emerald-300 bg-emerald-50 p-3">
+              <input type="hidden" name="cashbook_date" value={selectedDate} />
+              <label className="text-xs font-bold text-emerald-900">Review comment<input name="review_comment" maxLength={240} className={field} /></label>
+              <button className="rounded-lg bg-emerald-700 px-5 py-2.5 text-sm font-bold text-white hover:bg-emerald-800">APPROVE AUDIT</button>
+            </form> : null}
           </div>
         </div>
       ) : null}

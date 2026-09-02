@@ -24,6 +24,7 @@ export default async function AccountingPage({ searchParams }: { searchParams: P
   const canViewLedger = profile.role === "admin" || permissions.has("accounting.view");
   const data = await getAccountingDashboard(selectedDate, { includeLedger: canViewLedger });
   const canManageCashbook = profile.role === "admin" || permissions.has("accounting.create_entry") || permissions.has("accounting.manage_cashbook");
+  const canAuditCashbook = profile.role === "admin" || permissions.has("accounting.audit_cashbook");
   const canCreateJournal = profile.role === "admin" || permissions.has("accounting.create_entry");
   const canPost = profile.role === "admin" || permissions.has("accounting.approve_entry");
   const posted = data.entries.filter((entry) => entry.status === "posted");
@@ -39,6 +40,7 @@ export default async function AccountingPage({ searchParams }: { searchParams: P
       summary={data.cashbook.summary}
       day={data.cashbook.day}
       canCreate={canManageCashbook}
+      canAudit={canAuditCashbook}
       canCreateDescription={profile.role === "admin"}
     />
     {canViewLedger ? <><section className="mb-6 mt-6 grid gap-3 sm:grid-cols-3">
