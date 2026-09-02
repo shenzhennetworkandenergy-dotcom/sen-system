@@ -13,12 +13,17 @@ const stockOutMigrationUrl = new URL(
   "../supabase/migrations/202608220001_employee_stock_out_product_release.sql",
   import.meta.url,
 );
+const cashbookAuditMigrationUrl = new URL(
+  "../supabase/migrations/202609010001_accounting_cashbook_audit.sql",
+  import.meta.url,
+);
 const outputUrl = new URL("../database/native/schema.sql", import.meta.url);
-const [raw, purchaseCarrierMigration, dailyClosingMigration, stockOutMigration] = await Promise.all([
+const [raw, purchaseCarrierMigration, dailyClosingMigration, stockOutMigration, cashbookAuditMigration] = await Promise.all([
   readFile(rawUrl, "utf8"),
   readFile(purchaseCarrierMigrationUrl, "utf8"),
   readFile(dailyClosingMigrationUrl, "utf8"),
   readFile(stockOutMigrationUrl, "utf8"),
+  readFile(cashbookAuditMigrationUrl, "utf8"),
 ]);
 
 const withoutAuthForeignKey = raw.replace(
@@ -46,7 +51,7 @@ const grants = `\n-- Native application service access. Browser users never rece
 
 await writeFile(
   outputUrl,
-  `${bootstrapWithExtensions}${nativeSchema.trim()}\n\n${purchaseCarrierMigration.trim()}\n\n${dailyClosingMigration.trim()}\n\n${stockOutMigration.trim()}\n${grants}`,
+  `${bootstrapWithExtensions}${nativeSchema.trim()}\n\n${purchaseCarrierMigration.trim()}\n\n${dailyClosingMigration.trim()}\n\n${stockOutMigration.trim()}\n\n${cashbookAuditMigration.trim()}\n${grants}`,
   "utf8",
 );
 console.log("Native PostgreSQL schema generated without the Supabase Auth foreign key.");
