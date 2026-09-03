@@ -389,8 +389,8 @@ export default async function SaleDetail({
               <input name="internal_note" placeholder="Internal note" className={field} />
             </form>
             <div className="mt-3 overflow-x-auto">
-              <table className="w-full min-w-[760px] text-left text-sm">
-                <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Received by</th><th>Accounting</th></tr></thead>
+              <table className="w-full min-w-[860px] text-left text-sm">
+                <thead><tr><th>Date</th><th>Amount</th><th>Method</th><th>Reference</th><th>Received by</th><th>Accounting</th><th>Receipt</th></tr></thead>
                 <tbody>
                   {payments.map((payment) => {
                     const receiver = payment.profiles as { full_name: string | null; email: string };
@@ -410,6 +410,16 @@ export default async function SaleDetail({
                           ) : (
                             <span className="text-xs text-[var(--muted-text)]">Historical payment · not backfilled</span>
                           )}
+                        </td>
+                        <td className="py-2">
+                          <Link
+                            href={`/admin/sales/${saleId}/payments/${payment.id}/receipt`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-block rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-800"
+                          >
+                            Print Money Receipt
+                          </Link>
                         </td>
                       </tr>
                     );
