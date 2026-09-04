@@ -69,7 +69,7 @@ export default async function PayrollVoucherPage({ params }: { params: Promise<{
   const remainingEarnings = Math.max(0, voucher.grossPay - voucher.baseSalary - listedEarnings);
   const remainingDeductions = Math.max(0, voucher.deductions - listedDeductions);
   if (remainingEarnings > 0) earnings.push({ name: "Other Earnings", amount: remainingEarnings });
-  if (remainingDeductions > 0) deductions.push({ name: "Other Deductions", amount: remainingDeductions });
+  if (remainingDeductions > 0) deductions.push({ id: "other-deductions", type: "deduction", name: "Other Deductions", amount: remainingDeductions });
 
   return <main className="min-h-screen bg-slate-200 p-5 text-slate-950 print:bg-white print:p-0">
     <style>{`
