@@ -168,6 +168,94 @@ export async function getHrPayroll() {
   return checked("Unable to load payroll.",result) ?? [];
 }
 
+type VoucherRelation<T> = T | T[] | null | undefined;
+
+function voucherRelation<T>(value: VoucherRelation<T>) {
+  return Array.isArray(value) ? value[0] ?? null : value ?? null;
+}
+
+type VoucherPayrollRow = {
+  id: string;
+  period_start: string;
+  period_end: string;
+  base_salary: number | string;
+  gross_pay: number | string;
+  deductions: number | string;
+  net_pay: number | string;
+  currency: string;
+  status: string;
+  notes: string | null;
+  created_at: string;
+  created_by: string;
+  approved_by: string | null;
+  hr_payroll_components: Array<{ id: string; component_type: string; name: string; amount: number | string }> | null;
+  hr_employee_records: VoucherRelation<{
+    employee_number: string;
+    job_title: string;
+    employment_type: string;
+    hire_date: string;
+    profiles: VoucherRelation<{ full_name: string | null }>;
+    hr_departments: VoucherRelation<{ name: string }>;
+    hr_designations: VoucherRelation<{ name: string }>;
+    work_locations: VoucherRelation<{ name: string }>;
+  }>;
+};
+
+export async function getHrPayrollVoucher(payrollId: string) {
+  const db = createSupabaseAdminClient();
+  const result = await db.from("hr_payroll_records").select(
+    "id,period_start,period_end,base_salary,gross_pay,deductions,net_pay,currency,status,notes,created_at,created_by,approved_by,hr_payroll_components(id,component_type,name,amount),hr_employee_records(employee_number,job_title,employment_type,hire_date,profiles:profiles!hr_employee_records_profile_id_fkey(full_name),hr_departments(name),hr_designations(name),work_locations(name))",
+  ).eq("id", payrollId).maybeSingle();
+  const row = checked("Unable to load payroll voucher.", result) as VoucherPayrollRow | null;
+  if (!row) return null;
+
+  const actorIds = [row.created_by, row.approved_by].filter((id): id is string => Boolean(id));
+  const actorsResult = actorIds.length
+    ? await db.from("profiles").select("id,full_name,email").in("id", actorIds)
+    : { data: [], error: null };
+  const actors = checked("Unable to load payroll voucher signatories.", actorsResult) ?? [];
+  const actorNames = new Map(actors.map((actor) => [actor.id, actor.full_name || actor.email || "—"]));
+  const employee = voucherRelation(row.hr_employee_records);
+  if (!employee) return null;
+  const profile = voucherRelation(employee.profiles);
+  const department = voucherRelation(employee.hr_departments);
+  const designation = voucherRelation(employee.hr_designations);
+  const location = voucherRelation(employee.work_locations);
+  const components = row.hr_payroll_components ?? [];
+
+  return {
+    id: row.id,
+    voucherNumber: `SPV-${row.period_end.replaceAll("-", "")}-${row.id.replaceAll("-", "").slice(0, 8).toUpperCase()}`,
+    periodStart: row.period_start,
+    periodEnd: row.period_end,
+    voucherDate: row.created_at,
+    baseSalary: Number(row.base_salary),
+    grossPay: Number(row.gross_pay),
+    deductions: Number(row.deductions),
+    netPay: Number(row.net_pay),
+    currency: row.currency,
+    status: row.status,
+    notes: row.notes,
+    components: components.map((component) => ({
+      id: component.id,
+      type: component.component_type === "deduction" ? "deduction" as const : "earning" as const,
+      name: component.name,
+      amount: Number(component.amount),
+    })),
+    employee: {
+      number: employee.employee_number,
+      name: profile?.full_name || employee.employee_number,
+      designation: designation?.name || employee.job_title,
+      department: department?.name || "—",
+      joiningDate: employee.hire_date,
+      employmentType: employee.employment_type,
+      workLocation: location?.name || "—",
+    },
+    preparedBy: actorNames.get(row.created_by) || "—",
+    approvedBy: row.approved_by ? actorNames.get(row.approved_by) || "—" : "—",
+  };
+}
+
 export async function getHrPerformance() {
   const db = createSupabaseAdminClient();
   const [reviews, goals] = await Promise.all([
