@@ -136,3 +136,76 @@ export async function advanceCargoStatusAction(jobId: string, form: FormData) {
   }
   go(path, "success", "Cargo status updated.");
 }
+
+export async function verifyCargoPackageChinaReceiveAction(jobId: string, packageId: string, form: FormData) {
+  const { profile } = await requireProfile(["admin"]);
+  const path = `/admin/cargo-tracking/${jobId}`;
+  try {
+    const { error } = await createSupabaseAdminClient().rpc("verify_cargo_package_china_receive", {
+      actor_profile_id: profile.id,
+      requested_job_id: jobId,
+      requested_package_id: packageId,
+      requested_event_at: optional(form, "event_at"),
+    });
+    if (error) throw new Error(error.message || "Unable to verify package China receipt.");
+  } catch (error) {
+    go(path, "error", error instanceof Error ? error.message : "Unable to verify package China receipt.");
+  }
+  go(path, "success", "Package China receipt verified.");
+}
+
+export async function assignCargoPackageLocationAction(jobId: string, packageId: string, form: FormData) {
+  const { profile } = await requireProfile(["admin"]);
+  const path = `/admin/cargo-tracking/${jobId}`;
+  try {
+    const locationId = uuidOrNull(form, "location_id");
+    if (!locationId) throw new Error("Choose a warehouse location.");
+    const { error } = await createSupabaseAdminClient().rpc("assign_cargo_package_location", {
+      actor_profile_id: profile.id,
+      requested_job_id: jobId,
+      requested_package_id: packageId,
+      requested_location_id: locationId,
+    });
+    if (error) throw new Error(error.message || "Unable to assign package location.");
+  } catch (error) {
+    go(path, "error", error instanceof Error ? error.message : "Unable to assign package location.");
+  }
+  go(path, "success", "Package warehouse location assigned.");
+}
+
+export async function verifyCargoPackageReadyAction(jobId: string, packageId: string, form: FormData) {
+  const { profile } = await requireProfile(["admin"]);
+  const path = `/admin/cargo-tracking/${jobId}`;
+  try {
+    const { error } = await createSupabaseAdminClient().rpc("verify_cargo_package_ready", {
+      actor_profile_id: profile.id,
+      requested_job_id: jobId,
+      requested_package_id: packageId,
+      requested_event_at: optional(form, "event_at"),
+    });
+    if (error) throw new Error(error.message || "Unable to verify package readiness.");
+  } catch (error) {
+    go(path, "error", error instanceof Error ? error.message : "Unable to verify package readiness.");
+  }
+  go(path, "success", "Package ready-for-customer verification completed.");
+}
+
+export async function verifyCargoHandoverAction(jobId: string, form: FormData) {
+  const { profile } = await requireProfile(["admin"]);
+  const path = `/admin/cargo-tracking/${jobId}`;
+  try {
+    const recipient = value(form, "recipient");
+    if (!recipient) throw new Error("Handover recipient is required.");
+    const { error } = await createSupabaseAdminClient().rpc("verify_cargo_job_handover", {
+      actor_profile_id: profile.id,
+      requested_job_id: jobId,
+      requested_recipient: recipient,
+      requested_reference: optional(form, "reference"),
+      requested_event_at: optional(form, "event_at"),
+    });
+    if (error) throw new Error(error.message || "Unable to verify cargo handover.");
+  } catch (error) {
+    go(path, "error", error instanceof Error ? error.message : "Unable to verify cargo handover.");
+  }
+  go(path, "success", "Cargo handover verified.");
+}

@@ -23,7 +23,7 @@ function one<T>(value: T | T[] | null): T | null {
   return Array.isArray(value) ? value[0] ?? null : value;
 }
 
-export async function getCargoJobs(filters: { tracking?: string; customer?: string } = {}) {
+export async function getCargoJobs(filters: { tracking?: string; customer?: string; cargoId?: string } = {}) {
   const db = createSupabaseAdminClient();
   const customerSearch = filters.customer?.trim().slice(0, 200) ?? "";
   let customerIds: string[] | null = null;
@@ -35,12 +35,27 @@ export async function getCargoJobs(filters: { tracking?: string; customer?: stri
     customerIds = (matchingCustomers ?? []).map((customer) => customer.id);
     if (!customerIds.length) return [];
   }
+  const identifierSearch = filters.cargoId?.trim().slice(0, 80) ?? "";
+  let identifierJobIds: string[] | null = null;
+  if (identifierSearch) {
+    const [matchingJobs, matchingPackages] = await Promise.all([
+      db.from("cargo_shipping_jobs").select("id").ilike("internal_cargo_id", `%${identifierSearch}%`).limit(200),
+      db.from("cargo_shipping_packages").select("job_id").ilike("package_identifier", `%${identifierSearch}%`).limit(200),
+    ]);
+    if (matchingJobs.error || matchingPackages.error) throw new Error("Unable to search cargo identifiers.");
+    identifierJobIds = Array.from(new Set([
+      ...(matchingJobs.data ?? []).map((job) => job.id),
+      ...(matchingPackages.data ?? []).map((item) => item.job_id),
+    ]));
+    if (!identifierJobIds.length) return [];
+  }
   let query = db.from("cargo_shipping_jobs")
-    .select("id,customer_id,courier_tracking_number,goods_summary,shipping_method,current_status,created_at,updated_at,profiles!cargo_shipping_jobs_customer_id_fkey(id,full_name,email,company_name),carrier:purchase_carriers!cargo_shipping_jobs_carrier_id_fkey(id,name)")
+    .select("id,internal_cargo_id,customer_id,courier_tracking_number,goods_summary,shipping_method,current_status,created_at,updated_at,profiles!cargo_shipping_jobs_customer_id_fkey(id,full_name,email,company_name),carrier:purchase_carriers!cargo_shipping_jobs_carrier_id_fkey(id,name)")
     .order("updated_at", { ascending: false }).order("created_at", { ascending: false }).limit(200);
   const trackingSearch = filters.tracking?.trim().slice(0, 160) ?? "";
   if (trackingSearch) query = query.ilike("courier_tracking_number", `%${trackingSearch}%`);
   if (customerIds) query = query.in("customer_id", customerIds);
+  if (identifierJobIds) query = query.in("id", identifierJobIds);
   const { data, error } = await query;
   if (error) throw new Error("Unable to load cargo tracking jobs.");
   return (data ?? []).map((row) => ({ ...row, customer: one(row.profiles), carrier: one(row.carrier) }));
@@ -78,7 +93,7 @@ export async function getCargoJob(jobId: string) {
   const db = createSupabaseAdminClient();
   const [job, packages, events, options] = await Promise.all([
     db.from("cargo_shipping_jobs").select("*,profiles!cargo_shipping_jobs_customer_id_fkey(id,full_name,email,phone,company_name),carrier:purchase_carriers!cargo_shipping_jobs_carrier_id_fkey(id,name),china_warehouse:warehouses!cargo_shipping_jobs_china_warehouse_id_fkey(id,code,name,address),bangladesh_warehouse:warehouses!cargo_shipping_jobs_bangladesh_warehouse_id_fkey(id,code,name,address),warehouse_locations!cargo_shipping_jobs_bangladesh_location_id_fkey(id,code,name)").eq("id", jobId).maybeSingle(),
-    db.from("cargo_shipping_packages").select("id,sequence_number,description,quantity,unit,weight,dimensions,cbm").eq("job_id", jobId).order("sequence_number"),
+    db.from("cargo_shipping_packages").select("id,package_identifier,sequence_number,description,quantity,unit,weight,dimensions,cbm,warehouse_location_id,china_received_at,china_received_by,ready_verified_at,ready_verified_by,handed_over_at,handed_over_by,warehouse_location:warehouse_locations!cargo_shipping_packages_warehouse_location_id_fkey(id,warehouse_id,code,name)").eq("job_id", jobId).order("sequence_number"),
     db.from("cargo_shipping_events").select("id,status,event_at,note,warehouses(id,code,name),warehouse_locations(id,code,name),profiles!cargo_shipping_events_actor_id_fkey(id,full_name,email)").eq("job_id", jobId).order("event_at", { ascending: false }).order("created_at", { ascending: false }),
     getCargoOptions(),
   ]);
@@ -93,7 +108,10 @@ export async function getCargoJob(jobId: string) {
       bangladeshWarehouse: one(job.data.bangladesh_warehouse),
       bangladeshLocation: one(job.data.warehouse_locations),
     },
-    packages: packages.data ?? [],
+    packages: (packages.data ?? []).map((item) => ({
+      ...item,
+      warehouseLocation: one(item.warehouse_location),
+    })),
     events: (events.data ?? []).map((event) => ({
       ...event,
       warehouse: one(event.warehouses),
@@ -102,4 +120,11 @@ export async function getCargoJob(jobId: string) {
     })),
     ...options,
   };
+}
+
+export async function getCargoPackageLabel(jobId: string, packageId: string) {
+  const data = await getCargoJob(jobId);
+  if (!data) return null;
+  const cargoPackage = data.packages.find((item) => item.id === packageId);
+  return cargoPackage ? { ...data, cargoPackage } : null;
 }
