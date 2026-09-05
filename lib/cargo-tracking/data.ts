@@ -10,6 +10,10 @@ export const cargoStatuses = [
 
 export type CargoStatus = (typeof cargoStatuses)[number];
 
+export const cargoPackageUnits = [
+  "Piece", "Carton", "Box", "Wooden Box", "Pallet", "Bag/Sack", "Roll", "Set",
+] as const;
+
 export const nextCargoStatus = (status: CargoStatus) => {
   const index = cargoStatuses.indexOf(status);
   return index >= 0 && index < cargoStatuses.length - 1 ? cargoStatuses[index + 1] : null;
@@ -79,14 +83,25 @@ export async function getCargoSearchSuggestions() {
 
 export async function getCargoOptions() {
   const db = createSupabaseAdminClient();
-  const [customers, warehouses, locations, carriers] = await Promise.all([
+  const [customers, chinaWarehouses, bangladeshWarehouses, carriers] = await Promise.all([
     db.from("profiles").select("id,full_name,email,phone,company_name").eq("role", "customer").eq("status", "active").order("full_name").limit(500),
-    db.from("warehouses").select("id,code,name,country_code,address").eq("is_active", true).order("name"),
-    db.from("warehouse_locations").select("id,warehouse_id,code,name").eq("is_active", true).order("code"),
+    db.from("warehouses").select("id,code,name,country_code,address").eq("is_active", true).eq("country_code", "CN").order("name"),
+    db.from("warehouses").select("id,code,name,country_code,address").eq("is_active", true).eq("country_code", "BD").order("name"),
     db.from("purchase_carriers").select("id,name").eq("status", "active").order("name"),
   ]);
-  if (customers.error || warehouses.error || locations.error || carriers.error) throw new Error("Unable to load cargo tracking options.");
-  return { customers: customers.data ?? [], warehouses: warehouses.data ?? [], locations: locations.data ?? [], carriers: carriers.data ?? [] };
+  if (customers.error || chinaWarehouses.error || bangladeshWarehouses.error || carriers.error) throw new Error("Unable to load cargo tracking options.");
+  const bangladeshWarehouseIds = (bangladeshWarehouses.data ?? []).map((warehouse) => warehouse.id);
+  const locations = bangladeshWarehouseIds.length
+    ? await db.from("warehouse_locations").select("id,warehouse_id,code,name").eq("is_active", true).in("warehouse_id", bangladeshWarehouseIds).order("code")
+    : { data: [], error: null };
+  if (locations.error) throw new Error("Unable to load cargo tracking options.");
+  return {
+    customers: customers.data ?? [],
+    chinaWarehouses: chinaWarehouses.data ?? [],
+    bangladeshWarehouses: bangladeshWarehouses.data ?? [],
+    locations: locations.data ?? [],
+    carriers: carriers.data ?? [],
+  };
 }
 
 export async function getCargoJob(jobId: string) {
