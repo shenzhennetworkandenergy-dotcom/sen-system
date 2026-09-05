@@ -36,14 +36,14 @@ export async function getCargoJobs(filters: { tracking?: string; customer?: stri
     if (!customerIds.length) return [];
   }
   let query = db.from("cargo_shipping_jobs")
-    .select("id,customer_id,courier_tracking_number,goods_summary,shipping_method,current_status,created_at,updated_at,profiles!cargo_shipping_jobs_customer_id_fkey(id,full_name,email,company_name)")
+    .select("id,customer_id,courier_tracking_number,goods_summary,shipping_method,current_status,created_at,updated_at,profiles!cargo_shipping_jobs_customer_id_fkey(id,full_name,email,company_name),carrier:purchase_carriers!cargo_shipping_jobs_carrier_id_fkey(id,name)")
     .order("updated_at", { ascending: false }).order("created_at", { ascending: false }).limit(200);
   const trackingSearch = filters.tracking?.trim().slice(0, 160) ?? "";
   if (trackingSearch) query = query.ilike("courier_tracking_number", `%${trackingSearch}%`);
   if (customerIds) query = query.in("customer_id", customerIds);
   const { data, error } = await query;
   if (error) throw new Error("Unable to load cargo tracking jobs.");
-  return (data ?? []).map((row) => ({ ...row, customer: one(row.profiles) }));
+  return (data ?? []).map((row) => ({ ...row, customer: one(row.profiles), carrier: one(row.carrier) }));
 }
 
 export async function getCargoSearchSuggestions() {
@@ -64,19 +64,20 @@ export async function getCargoSearchSuggestions() {
 
 export async function getCargoOptions() {
   const db = createSupabaseAdminClient();
-  const [customers, warehouses, locations] = await Promise.all([
+  const [customers, warehouses, locations, carriers] = await Promise.all([
     db.from("profiles").select("id,full_name,email,phone,company_name").eq("role", "customer").eq("status", "active").order("full_name").limit(500),
     db.from("warehouses").select("id,code,name,country_code,address").eq("is_active", true).order("name"),
     db.from("warehouse_locations").select("id,warehouse_id,code,name").eq("is_active", true).order("code"),
+    db.from("purchase_carriers").select("id,name").eq("status", "active").order("name"),
   ]);
-  if (customers.error || warehouses.error || locations.error) throw new Error("Unable to load cargo tracking options.");
-  return { customers: customers.data ?? [], warehouses: warehouses.data ?? [], locations: locations.data ?? [] };
+  if (customers.error || warehouses.error || locations.error || carriers.error) throw new Error("Unable to load cargo tracking options.");
+  return { customers: customers.data ?? [], warehouses: warehouses.data ?? [], locations: locations.data ?? [], carriers: carriers.data ?? [] };
 }
 
 export async function getCargoJob(jobId: string) {
   const db = createSupabaseAdminClient();
   const [job, packages, events, options] = await Promise.all([
-    db.from("cargo_shipping_jobs").select("*,profiles!cargo_shipping_jobs_customer_id_fkey(id,full_name,email,phone,company_name),china_warehouse:warehouses!cargo_shipping_jobs_china_warehouse_id_fkey(id,code,name,address),bangladesh_warehouse:warehouses!cargo_shipping_jobs_bangladesh_warehouse_id_fkey(id,code,name,address),warehouse_locations!cargo_shipping_jobs_bangladesh_location_id_fkey(id,code,name)").eq("id", jobId).maybeSingle(),
+    db.from("cargo_shipping_jobs").select("*,profiles!cargo_shipping_jobs_customer_id_fkey(id,full_name,email,phone,company_name),carrier:purchase_carriers!cargo_shipping_jobs_carrier_id_fkey(id,name),china_warehouse:warehouses!cargo_shipping_jobs_china_warehouse_id_fkey(id,code,name,address),bangladesh_warehouse:warehouses!cargo_shipping_jobs_bangladesh_warehouse_id_fkey(id,code,name,address),warehouse_locations!cargo_shipping_jobs_bangladesh_location_id_fkey(id,code,name)").eq("id", jobId).maybeSingle(),
     db.from("cargo_shipping_packages").select("id,sequence_number,description,quantity,unit,weight,dimensions,cbm").eq("job_id", jobId).order("sequence_number"),
     db.from("cargo_shipping_events").select("id,status,event_at,note,warehouses(id,code,name),warehouse_locations(id,code,name),profiles!cargo_shipping_events_actor_id_fkey(id,full_name,email)").eq("job_id", jobId).order("event_at", { ascending: false }).order("created_at", { ascending: false }),
     getCargoOptions(),
@@ -87,6 +88,7 @@ export async function getCargoJob(jobId: string) {
     job: {
       ...job.data,
       customer: one(job.data.profiles),
+      carrier: one(job.data.carrier),
       chinaWarehouse: one(job.data.china_warehouse),
       bangladeshWarehouse: one(job.data.bangladesh_warehouse),
       bangladeshLocation: one(job.data.warehouse_locations),
