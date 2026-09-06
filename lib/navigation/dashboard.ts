@@ -28,6 +28,7 @@ export const adminNavigation: DashboardNavigationItem[] = [
   {key:"purchasing",label:"Purchasing",route:routes.adminPurchasing,group:"Procurement and Finance",iconKey:"purchasing",requiredPermission:"purchasing.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"suppliers",label:"Suppliers",route:routes.adminSuppliers,group:"Procurement and Finance",iconKey:"suppliers",requiredPermission:"suppliers.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"warehouse-expenses",label:"Warehouse Expenses",route:"/admin/warehouse-expenses",group:"Procurement and Finance",iconKey:"accounting",requiredPermission:null,implemented:true,adminVisible:true,employeeVisible:false},
+  {key:"rmb-payments",label:"RMB Payments",route:"/admin/rmb-payments",group:"Procurement and Finance",iconKey:"accounting",requiredPermission:null,implemented:true,adminVisible:true,employeeVisible:false},
   {key:"accounting",label:"Accounting",route:routes.adminAccounting,group:"Procurement and Finance",iconKey:"accounting",requiredPermission:"accounting.view",alternativePermissions:["accounting.manage_cashbook"],implemented:true,adminVisible:true,employeeVisible:true},
   {key:"receivables",label:"Receivables",route:routes.adminReceivables,group:"Procurement and Finance",iconKey:"accounting",requiredPermission:"receivables.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"hr",label:"HR",route:routes.adminHr,group:"Organization",iconKey:"hr",requiredPermission:null,implemented:true,adminVisible:true,employeeVisible:false},
