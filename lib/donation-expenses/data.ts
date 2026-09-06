@@ -179,6 +179,7 @@ export async function getDonationExpenseDetail(id: string) {
   if (expense.proof_path) {
     const { data, error } = await db.storage.from(DONATION_BUCKET).createSignedUrl(expense.proof_path, 900);
     assertNoError(error, "Unable to open donation proof");
+    if (!data) throw new Error("Unable to open donation proof");
     proofUrl = data.signedUrl;
   }
   return { expense, events: (eventsResult.data ?? []) as { id:string; status:string; event_at:string; note:string|null }[], proofUrl };
