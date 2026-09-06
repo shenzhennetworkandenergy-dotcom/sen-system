@@ -1,25 +1,27 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import { DashboardShell } from "@/components/dashboard/Shell";
-import { requireProfile } from "@/lib/auth/session";
+import { isAdmin, requirePermission } from "@/lib/auth/permissions";
 import { cargoLabel, getCargoJobs, getCargoSearchSuggestions } from "@/lib/cargo-tracking/data";
 
 export const dynamic = "force-dynamic";
 
 export default async function CargoTrackingPage({ searchParams }: { searchParams: Promise<{ tracking?: string; customer?: string; cargoId?: string }> }) {
   await connection();
-  await requireProfile(["admin"]);
+  const { profile, permissions } = await requirePermission("cargo.view");
+  const admin = isAdmin(profile);
+  const canCreate = admin || permissions.has("cargo.create");
   const params = await searchParams;
   const [jobs, suggestions] = await Promise.all([
     getCargoJobs({ tracking: params.tracking, customer: params.customer, cargoId: params.cargoId }),
     getCargoSearchSuggestions(),
   ]);
-  return <DashboardShell admin title="Cargo Tracking" subtitle="China to Bangladesh service cargo, packages and operational history.">
+  return <DashboardShell admin={admin} employeePermissions={admin ? undefined : permissions} title="Cargo Tracking" subtitle="China to Bangladesh service cargo, packages and operational history.">
     <div className="mb-4 grid gap-3 rounded-xl border bg-[var(--surface)] p-4 lg:grid-cols-[1fr_1fr_1fr_auto] lg:items-end">
       <form className="space-y-1"><label htmlFor="tracking-search" className="block text-sm font-bold">Tracking Number Search</label><div className="flex gap-2"><input id="tracking-search" name="tracking" list="cargo-tracking-suggestions" defaultValue={params.tracking} placeholder="Enter any part of tracking number" autoComplete="off" className="min-w-0 flex-1 rounded-lg border px-3 py-2" /><button className="rounded-lg border px-4 py-2 font-semibold">Search</button></div><datalist id="cargo-tracking-suggestions">{suggestions.tracking.map((job) => <option key={job.id} value={job.courier_tracking_number} label={job.customer?.full_name || job.customer?.company_name || job.customer?.email || "Customer"} />)}</datalist></form>
       <form className="space-y-1"><label htmlFor="customer-search" className="block text-sm font-bold">Customer Search</label><div className="flex gap-2"><input id="customer-search" name="customer" list="cargo-customer-suggestions" defaultValue={params.customer} placeholder="Enter any part of customer name" autoComplete="off" className="min-w-0 flex-1 rounded-lg border px-3 py-2" /><button className="rounded-lg border px-4 py-2 font-semibold">Search</button></div><datalist id="cargo-customer-suggestions">{suggestions.customers.map((customer) => <option key={customer.id} value={customer.full_name || customer.company_name || customer.email} label={customer.company_name || customer.email} />)}</datalist></form>
       <form className="space-y-1"><label htmlFor="cargo-id-search" className="block text-sm font-bold">Cargo / Package ID Search</label><div className="flex gap-2"><input id="cargo-id-search" name="cargoId" defaultValue={params.cargoId} placeholder="Internal Cargo ID or Package ID" autoComplete="off" className="min-w-0 flex-1 rounded-lg border px-3 py-2" /><button className="rounded-lg border px-4 py-2 font-semibold">Search</button></div></form>
-      <Link href="/admin/cargo-tracking/new" className="rounded-lg bg-[var(--primary)] px-4 py-2 text-center font-semibold text-[var(--primary-foreground)]">Create Cargo Job</Link>
+      {canCreate ? <Link href="/admin/cargo-tracking/new" className="rounded-lg bg-[var(--primary)] px-4 py-2 text-center font-semibold text-[var(--primary-foreground)]">Create Cargo Job</Link> : <span />}
     </div>
     <div className="overflow-x-auto rounded-xl border bg-[var(--surface)]">
       <table className="w-full min-w-[1180px] text-left text-sm"><thead className="bg-[var(--muted-surface)]"><tr><th className="p-3">Cargo ID</th><th>Tracking number</th><th>Customer</th><th>Goods</th><th>Method</th><th>Carrier</th><th>Status</th><th>Created / Updated</th><th /></tr></thead><tbody>

@@ -3,9 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth/session";
+import { requirePermission } from "@/lib/auth/permissions";
 import { normalizeBasicCustomerInput } from "@/lib/customers/basic";
 import { createBasicCustomerRecord } from "@/lib/customers/create-basic";
-import { cargoPackageUnits, nextCargoStatus, type CargoStatus } from "@/lib/cargo-tracking/data";
+import { cargoPackageUnits, cargoPermissionForStatus, nextCargoStatus, type CargoStatus } from "@/lib/cargo-tracking/data";
 import { normalizePurchaseCarrier } from "@/lib/purchasing/carriers";
 import { writeAuditLog } from "@/lib/audit/log";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -133,7 +134,7 @@ export async function createCargoCarrierAction(form: FormData) {
 }
 
 export async function createCargoJobAction(_previousState: CargoJobFormState, form: FormData): Promise<CargoJobFormState> {
-  const { profile } = await requireProfile(["admin"]);
+  const { profile } = await requirePermission("cargo.create");
   const submitted = readCargoJobValues(form);
   let jobId: string;
   try {
@@ -188,11 +189,11 @@ export async function createCargoJobAction(_previousState: CargoJobFormState, fo
 }
 
 export async function advanceCargoStatusAction(jobId: string, form: FormData) {
-  const { profile } = await requireProfile(["admin"]);
+  const requestedStatus = value(form, "status") as CargoStatus;
+  const { profile } = await requirePermission(cargoPermissionForStatus(requestedStatus));
   const path = `/admin/cargo-tracking/${jobId}`;
   try {
     const db = createSupabaseAdminClient();
-    const requestedStatus = value(form, "status");
     const { data: job, error: jobError } = await db.from("cargo_shipping_jobs")
       .select("current_status,bangladesh_warehouse_id").eq("id", jobId).maybeSingle();
     if (jobError || !job) throw new Error("Cargo job not found.");
@@ -223,7 +224,7 @@ export async function advanceCargoStatusAction(jobId: string, form: FormData) {
 }
 
 export async function verifyCargoPackageChinaReceiveAction(jobId: string, packageId: string, form: FormData) {
-  const { profile } = await requireProfile(["admin"]);
+  const { profile } = await requirePermission("cargo.china_receive");
   const path = `/admin/cargo-tracking/${jobId}`;
   try {
     const { error } = await createSupabaseAdminClient().rpc("verify_cargo_package_china_receive", {
@@ -240,7 +241,7 @@ export async function verifyCargoPackageChinaReceiveAction(jobId: string, packag
 }
 
 export async function assignCargoPackageLocationAction(jobId: string, packageId: string, form: FormData) {
-  const { profile } = await requireProfile(["admin"]);
+  const { profile } = await requirePermission("cargo.assign_location");
   const path = `/admin/cargo-tracking/${jobId}`;
   try {
     const locationId = uuidOrNull(form, "location_id");
@@ -265,7 +266,7 @@ export async function assignCargoPackageLocationAction(jobId: string, packageId:
 }
 
 export async function verifyCargoPackageReadyAction(jobId: string, packageId: string, form: FormData) {
-  const { profile } = await requireProfile(["admin"]);
+  const { profile } = await requirePermission("cargo.mark_ready");
   const path = `/admin/cargo-tracking/${jobId}`;
   try {
     const { error } = await createSupabaseAdminClient().rpc("verify_cargo_package_ready", {
@@ -282,7 +283,7 @@ export async function verifyCargoPackageReadyAction(jobId: string, packageId: st
 }
 
 export async function verifyCargoHandoverAction(jobId: string, form: FormData) {
-  const { profile } = await requireProfile(["admin"]);
+  const { profile } = await requirePermission("cargo.handover");
   const path = `/admin/cargo-tracking/${jobId}`;
   try {
     const recipient = value(form, "recipient");

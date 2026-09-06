@@ -10,6 +10,14 @@ export const cargoStatuses = [
 
 export type CargoStatus = (typeof cargoStatuses)[number];
 
+export const cargoPermissionKeys = [
+  "cargo.view", "cargo.create", "cargo.china_receive", "cargo.china_dispatch",
+  "cargo.bd_receive", "cargo.assign_location", "cargo.mark_ready", "cargo.handover",
+  "cargo.close",
+] as const;
+
+export type CargoPermissionKey = (typeof cargoPermissionKeys)[number];
+
 export const cargoPackageUnits = [
   "Piece", "Carton", "Box", "Wooden Box", "Pallet", "Bag/Sack", "Roll", "Set",
 ] as const;
@@ -17,6 +25,15 @@ export const cargoPackageUnits = [
 export const nextCargoStatus = (status: CargoStatus) => {
   const index = cargoStatuses.indexOf(status);
   return index >= 0 && index < cargoStatuses.length - 1 ? cargoStatuses[index + 1] : null;
+};
+
+export const cargoPermissionForStatus = (status: CargoStatus): CargoPermissionKey => {
+  if (["expected_china", "received_china"].includes(status)) return "cargo.china_receive";
+  if (["dispatched_china", "in_transit"].includes(status)) return "cargo.china_dispatch";
+  if (["arrived_bangladesh", "received_bd_warehouse"].includes(status)) return "cargo.bd_receive";
+  if (status === "ready_for_customer") return "cargo.mark_ready";
+  if (["handed_over", "delivered"].includes(status)) return "cargo.handover";
+  return "cargo.close";
 };
 
 export const cargoLabel = (value: string) => value === "expected_china"

@@ -1,7 +1,7 @@
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
 import QRCode from "qrcode";
-import { requireProfile } from "@/lib/auth/session";
+import { requirePermission } from "@/lib/auth/permissions";
 import { cargoLabel, getCargoPackageLabel } from "@/lib/cargo-tracking/data";
 import { PrintButton } from "./PrintButton";
 
@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 export default async function CargoPackageLabelPage({ params }: { params: Promise<{ jobId: string; packageId: string }> }) {
   await connection();
-  await requireProfile(["admin"]);
+  await requirePermission("cargo.view");
   const { jobId, packageId } = await params;
   const data = await getCargoPackageLabel(jobId, packageId);
   if (!data) notFound();
