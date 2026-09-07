@@ -337,3 +337,25 @@ export async function advanceRmbPaymentAction(jobId: string, form: FormData) {
   revalidatePath(`/admin/rmb-payments/${jobId}`);
   redirect(`/admin/rmb-payments/${jobId}?success=${encodeURIComponent("RMB payment status updated.")}`);
 }
+
+export async function setRmbActiveRateAction(form: FormData) {
+  const { profile } = await requireProfile(["admin"]);
+  const currency = text(form, "currency_code", 5).toUpperCase();
+  const rate = text(form, "rate_bdt", 40);
+  try {
+    if (!currency || !/^\d+(?:\.\d{1,6})?$/.test(rate) || Number(rate) <= 0) {
+      throw new Error("Choose a currency and enter a positive rate (up to 6 decimals).");
+    }
+    const { error } = await createSupabaseAdminClient().rpc("set_rmb_active_rate", {
+      actor_profile_id: profile.id,
+      requested_currency_code: currency,
+      requested_rate: rate,
+    });
+    if (error) throw new Error(error.message);
+    revalidatePath("/admin/rmb-payments");
+    redirect(`/admin/rmb-payments?success=${encodeURIComponent("Active RMB rate saved.")}`);
+  } catch (error) {
+    if (error && typeof error === "object" && "digest" in error) throw error;
+    redirect(`/admin/rmb-payments?error=${encodeURIComponent(message(error))}`);
+  }
+}

@@ -41,6 +41,11 @@ const modules = [
     href: "/account/messages",
     description: "Chat securely with the SEN team.",
   },
+  {
+    label: "RMB Requests",
+    href: "/account/rmb-payments",
+    description: "Create and follow your China payment-service requests.",
+  },
 ];
 
 export default async function AccountPage() {

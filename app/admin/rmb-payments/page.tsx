@@ -3,7 +3,8 @@ import { connection } from "next/server";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { requireProfile } from "@/lib/auth/session";
-import { getRmbPaymentWorkspace, rmbStatusLabels } from "@/lib/rmb-payments/data";
+import { getRmbActiveRates, getRmbPaymentWorkspace, getRmbSetupOptions, rmbStatusLabels } from "@/lib/rmb-payments/data";
+import { setRmbActiveRateAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -18,8 +19,20 @@ export default async function RmbPaymentsPage() {
   await connection();
   await requireProfile(["admin"]);
   const jobs = await getRmbPaymentWorkspace();
+  const [{ currencies }, rates] = await Promise.all([getRmbSetupOptions(), getRmbActiveRates()]);
 
   return <DashboardShell admin title="RMB / China Payment Service" subtitle="Operational foreign-currency payment-service records. No accounting posting is created.">
+    <section className="mb-5 rounded-xl border bg-[var(--surface)] p-5">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div><h2 className="text-lg font-bold">Active RMB rates</h2><p className="text-sm text-[var(--muted-text)]">Set the read-only customer rate. Existing jobs keep their applied snapshot.</p></div>
+        <form action={setRmbActiveRateAction} className="flex flex-wrap items-end gap-2">
+          <label className="text-sm font-semibold">Currency<select name="currency_code" required className="mt-1 block rounded-lg border px-3 py-2">{currencies.map((currency) => <option key={currency.code} value={currency.code}>{currency.code} · {currency.name}</option>)}</select></label>
+          <label className="text-sm font-semibold">BDT rate<input name="rate_bdt" type="number" min="0.000001" step="0.000001" required className="mt-1 block rounded-lg border px-3 py-2" /></label>
+          <button className="rounded-lg bg-[var(--primary)] px-4 py-2 font-semibold text-white">Save active rate</button>
+        </form>
+      </div>
+      {rates.length ? <div className="mt-4 flex flex-wrap gap-2">{rates.map((rate) => <span key={rate.id} className="rounded-full bg-emerald-50 px-3 py-1 text-sm font-semibold text-emerald-800">{rate.currency_code}: {money(rate.rate_bdt, 6)} BDT</span>)}</div> : <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">Set a rate before accepting customer requests.</p>}
+    </section>
     <div className="mb-4 flex justify-end">
       <Link href="/admin/rmb-payments/new" className="rounded-lg bg-[var(--primary)] px-4 py-2 font-semibold text-white">Create RMB Job</Link>
     </div>

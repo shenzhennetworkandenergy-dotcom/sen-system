@@ -3,6 +3,8 @@ import "server-only";
 import type { CustomerSearchOption } from "@/lib/customers/search";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
+const proofBucket = "rmb-payment-proofs";
+
 export type RmbCurrencyOption = { code: string; name: string; symbol: string };
 export const rmbPaymentMethodContexts = ["CUSTOMER_PAYMENT", "CHINA_PAYMENT", "BOTH"] as const;
 export type RmbPaymentMethodContext = (typeof rmbPaymentMethodContexts)[number];
@@ -92,6 +94,27 @@ export type RmbPaymentEvent = {
   actor_name: string;
 };
 
+export type RmbRateOption = {
+  id: string;
+  currency_code: string;
+  rate_bdt: number;
+  effective_at: string;
+  is_active: boolean;
+};
+
+export type RmbCustomerJobListItem = Pick<
+  RmbPaymentJob,
+  "id" | "job_reference" | "foreign_currency" | "foreign_amount" | "agreed_bdt_rate" | "calculated_bdt_payable" | "current_status" | "created_at" | "updated_at"
+>;
+
+export type RmbCustomerJobDetail = {
+  job: RmbPaymentJob;
+  events: Array<Pick<RmbPaymentEvent, "id" | "status" | "event_at">>;
+  customerProofUrl: string | null;
+  chinaProofUrl: string | null;
+  destinationQrUrl: string | null;
+};
+
 export async function getRmbCustomerOptions(): Promise<CustomerSearchOption[]> {
   const db = createSupabaseAdminClient();
   const { data, error } = await db
@@ -116,6 +139,91 @@ export async function getRmbSetupOptions() {
     currencies: (currencies.data ?? []) as RmbCurrencyOption[],
     methods: (methods.data ?? []) as RmbPaymentMethodOption[],
   };
+}
+
+export async function getRmbActiveRates(): Promise<RmbRateOption[]> {
+  const db = createSupabaseAdminClient();
+  const { data, error } = await db
+    .from("rmb_rate_history")
+    .select("id,currency_code,rate_bdt,effective_at,is_active")
+    .eq("is_active", true)
+    .order("currency_code");
+  if (error) throw new Error("Unable to load RMB active rates.");
+  return (data ?? []) as RmbRateOption[];
+}
+
+export async function getRmbCustomerRequestOptions() {
+  const db = createSupabaseAdminClient();
+  const [{ data: currencies, error: currencyError }, { data: rates, error: rateError }, { data: methods, error: methodError }] = await Promise.all([
+    db.from("rmb_currencies").select("code,name,symbol").eq("is_active", true).order("code"),
+    db.from("rmb_rate_history").select("id,currency_code,rate_bdt,effective_at,is_active").eq("is_active", true).order("currency_code"),
+    db.from("rmb_payment_methods").select("id,name,context,method_type").eq("is_active", true).order("name"),
+  ]);
+  if (currencyError || rateError || methodError) throw new Error("Unable to load RMB request options.");
+  return {
+    currencies: (currencies ?? []) as RmbCurrencyOption[],
+    rates: (rates ?? []) as RmbRateOption[],
+    methods: (methods ?? []) as RmbPaymentMethodOption[],
+  };
+}
+
+export async function getRmbCustomerJobs(customerId: string): Promise<RmbCustomerJobListItem[]> {
+  const db = createSupabaseAdminClient();
+  const { data, error } = await db
+    .from("rmb_payment_jobs")
+    .select("id,job_reference,foreign_currency,foreign_amount,agreed_bdt_rate,calculated_bdt_payable,current_status,created_at,updated_at")
+    .eq("customer_id", customerId)
+    .order("updated_at", { ascending: false });
+  if (error) throw new Error("Unable to load your RMB requests.");
+  return (data ?? []) as RmbCustomerJobListItem[];
+}
+
+async function customerSignedProof(path: string | null, allowed: boolean) {
+  if (!path || !allowed) return null;
+  const db = createSupabaseAdminClient();
+  const { data, error } = await db.storage.from(proofBucket).createSignedUrl(path, 900);
+  return error ? null : data.signedUrl;
+}
+
+export async function getRmbCustomerJob(jobId: string, customerId: string): Promise<RmbCustomerJobDetail | null> {
+  const db = createSupabaseAdminClient();
+  const { data: rawJob, error: jobError } = await db
+    .from("rmb_payment_jobs")
+    .select("*")
+    .eq("id", jobId)
+    .eq("customer_id", customerId)
+    .maybeSingle();
+  if (jobError) throw new Error("Unable to load your RMB request.");
+  if (!rawJob) return null;
+  const job = rawJob as RmbPaymentJob;
+  const { data: rawEvents, error: eventError } = await db
+    .from("rmb_payment_events")
+    .select("id,status,event_at")
+    .eq("job_id", job.id)
+    .order("event_at", { ascending: false })
+    .order("created_at", { ascending: false });
+  if (eventError) throw new Error("Unable to load your RMB request history.");
+  const customerProofUrl = await customerSignedProof(job.customer_payment_proof_path, true);
+  const chinaProofVisible = ["PAYEE_PAID", "COMPLETED", "CLOSED"].includes(job.current_status);
+  const [chinaProofUrl, destinationQrUrl] = await Promise.all([
+    customerSignedProof(job.china_payment_proof_path, chinaProofVisible),
+    customerSignedProof(job.china_destination_qr_path, true),
+  ]);
+  return {
+    job,
+    events: (rawEvents ?? []) as Array<Pick<RmbPaymentEvent, "id" | "status" | "event_at">>,
+    customerProofUrl,
+    chinaProofUrl,
+    destinationQrUrl,
+  };
+}
+
+export async function getRmbCustomerProofPath(jobId: string, customerId: string, kind: "customer" | "china" | "destination") {
+  const db = createSupabaseAdminClient();
+  const { data, error } = await db.from("rmb_payment_jobs").select("customer_payment_proof_path,china_payment_proof_path,china_destination_qr_path,current_status").eq("id", jobId).eq("customer_id", customerId).maybeSingle();
+  if (error || !data) return null;
+  if (kind === "china" && !["PAYEE_PAID", "COMPLETED", "CLOSED"].includes(data.current_status)) return null;
+  return kind === "customer" ? data.customer_payment_proof_path : kind === "china" ? data.china_payment_proof_path : data.china_destination_qr_path;
 }
 
 export async function getRmbPaymentWorkspace(): Promise<RmbPaymentListItem[]> {
