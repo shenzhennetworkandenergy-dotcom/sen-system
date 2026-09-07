@@ -76,6 +76,7 @@ export type RmbPaymentJob = {
   china_cash_recipient_name: string | null;
   china_cash_recipient_contact: string | null;
   china_cash_instruction_note: string | null;
+  customer_instruction: string | null;
   note: string | null;
   current_status: RmbStatus;
   created_at: string;
