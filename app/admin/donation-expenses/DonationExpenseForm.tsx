@@ -8,6 +8,7 @@ export function DonationExpenseForm({ beneficiaries, categories, paymentMethods,
   const beneficiaryId = reminder?.beneficiary_id ?? selectedBeneficiaryId ?? "";
   return <form action={createDonationExpenseAction} className="grid gap-4 md:grid-cols-2">
     {reminder ? <input type="hidden" name="monthly_support_id" value={reminder.id} /> : null}
+    {reminder ? <p className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900 md:col-span-2">Regular monthly support for {new Intl.DateTimeFormat("en-GB", { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${reminder.support_month}T00:00:00Z`))}. The amount and details are prefilled and may be adjusted before creation.</p> : null}
     <label className="grid gap-1 text-sm font-medium md:col-span-2">Beneficiary
       <select name="beneficiary_id" required defaultValue={beneficiaryId} className="rounded-lg border bg-background px-3 py-2">
         <option value="">Select beneficiary</option>

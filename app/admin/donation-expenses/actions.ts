@@ -174,11 +174,14 @@ export async function advanceDonationExpenseStatusAction(expenseId: string, next
 }
 
 export async function skipDonationReminderAction(reminderId: string, form: FormData) {
-  await requireProfile(["admin"]);
+  const { profile } = await requireProfile(["admin"]);
   const db = createSupabaseAdminClient();
-  const { data, error } = await db.from("donation_monthly_support").update({ status: "SKIPPED", skipped_at: new Date().toISOString() })
-    .eq("id", reminderId).eq("status", "PENDING").select("id").maybeSingle();
-  if (error || !data) finish("/admin/donation-expenses", "error", error?.message ?? "Reminder is no longer pending.");
+  const { error } = await db.rpc("skip_donation_monthly_support_reminder", {
+    requested_reminder_id: reminderId,
+    requested_actor_id: profile.id,
+    requested_note: nullable(text(form, "note")),
+  });
+  if (error) finish("/admin/donation-expenses", "error", error.message);
   finish("/admin/donation-expenses", "success", `Monthly support skipped${text(form, "note") ? `: ${text(form, "note")}` : "."}`);
 }
 

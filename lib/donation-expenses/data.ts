@@ -33,8 +33,16 @@ export type DonationExpense = {
 export type MonthlySupportReminder = {
   id: string; beneficiary_id: string; support_month: string; reminder_day_of_month: number; amount: number;
   category_id: string | null; payment_method_id: string | null; purpose: string | null; status: string;
-  expense_id: string | null; beneficiary?: DonationBeneficiary; category?: DonationOption | null;
+  expense_id: string | null; completed_at: string | null; skipped_at: string | null; skip_note: string | null;
+  skipped_by: string | null; beneficiary?: DonationBeneficiary; category?: DonationOption | null;
   payment_method?: DonationOption | null;
+};
+
+export type DonationReminderDisplayStatus = "DUE" | "OVERDUE" | "UPCOMING" | "COMPLETED" | "SKIPPED";
+export type DonationReminderRow = MonthlySupportReminder & {
+  dueDate: string;
+  displayStatus: DonationReminderDisplayStatus;
+  lastPaymentDate: string | null;
 };
 
 function assertNoError(error: { message: string } | null, context: string) {
@@ -73,18 +81,37 @@ export async function getDonationDashboard(search?: string) {
   const db = createSupabaseAdminClient();
   const today = new Date();
   const month = `${today.toISOString().slice(0, 7)}-01`;
-  const [options, expensesResult, remindersResult] = await Promise.all([
+  const [options, expensesResult, remindersResult, completedPaymentsResult] = await Promise.all([
     getDonationOptions(),
     db.from("donation_expenses")
       .select("*, beneficiary:donation_beneficiaries(*), category:donation_expense_categories(id,name), payment_method:donation_payment_methods(id,name)")
       .order("donation_date", { ascending: false }).order("created_at", { ascending: false }).limit(50),
     db.from("donation_monthly_support")
-      .select("*, beneficiary:donation_beneficiaries(*), category:donation_expense_categories(id,name), payment_method:donation_payment_methods(id,name)")
-      .eq("support_month", month).eq("status", "PENDING").lte("reminder_day_of_month", today.getUTCDate())
+      .select("*, beneficiary:donation_beneficiaries(*, relationship_type:donation_relationship_types(id,name)), category:donation_expense_categories(id,name), payment_method:donation_payment_methods(id,name)")
+      .eq("support_month", month)
       .order("reminder_day_of_month"),
+    db.from("donation_expenses")
+      .select("beneficiary_id,donation_date")
+      .in("status", ["COMPLETED", "CLOSED"])
+      .order("donation_date", { ascending: false }),
   ]);
   assertNoError(expensesResult.error, "Unable to load donation expenses");
   assertNoError(remindersResult.error, "Unable to load monthly support reminders");
+  assertNoError(completedPaymentsResult.error, "Unable to load monthly support payment history");
+  const lastPaymentByBeneficiary = new Map<string, string>();
+  for (const payment of completedPaymentsResult.data ?? []) {
+    if (!lastPaymentByBeneficiary.has(payment.beneficiary_id)) {
+      lastPaymentByBeneficiary.set(payment.beneficiary_id, payment.donation_date);
+    }
+  }
+  const todayText = today.toISOString().slice(0, 10);
+  const reminders = ((remindersResult.data ?? []) as unknown as MonthlySupportReminder[]).map((item): DonationReminderRow => {
+    const dueDate = `${item.support_month.slice(0, 8)}${String(item.reminder_day_of_month).padStart(2, "0")}`;
+    const displayStatus: DonationReminderDisplayStatus = item.status === "COMPLETED" || item.status === "SKIPPED"
+      ? item.status
+      : dueDate < todayText ? "OVERDUE" : dueDate === todayText ? "DUE" : "UPCOMING";
+    return { ...item, dueDate, displayStatus, lastPaymentDate: lastPaymentByBeneficiary.get(item.beneficiary_id) ?? null };
+  });
   const term = (search ?? "").trim().toLowerCase();
   const matchedBeneficiaries = term
     ? options.beneficiaries.filter((item) => [item.name, item.beneficiary_reference, item.phone ?? ""]
@@ -93,7 +120,8 @@ export async function getDonationDashboard(search?: string) {
   return {
     ...options,
     expenses: (expensesResult.data ?? []) as unknown as DonationExpense[],
-    reminders: (remindersResult.data ?? []) as unknown as MonthlySupportReminder[],
+    reminders,
+    dueReminderCount: reminders.filter((item) => item.displayStatus === "DUE" || item.displayStatus === "OVERDUE").length,
     matchedBeneficiaries,
   };
 }

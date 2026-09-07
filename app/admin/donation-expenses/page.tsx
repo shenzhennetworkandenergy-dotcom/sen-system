@@ -9,6 +9,7 @@ import { DonationExpenseForm } from "./DonationExpenseForm";
 export const dynamic = "force-dynamic";
 const money = (value: number) => new Intl.NumberFormat("en-BD", { style: "currency", currency: "BDT" }).format(value);
 const date = (value: string) => new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T00:00:00Z`));
+const reminderTone = (status: string) => status === "OVERDUE" ? "border-red-200 bg-red-50 text-red-900" : status === "DUE" ? "border-orange-200 bg-orange-50 text-orange-900" : status === "UPCOMING" ? "border-blue-200 bg-blue-50 text-blue-900" : status === "COMPLETED" ? "border-green-200 bg-green-50 text-green-900" : "border-slate-200 bg-slate-50 text-slate-700";
 
 export default async function DonationExpensesPage({ searchParams }: { searchParams: Promise<{ search?: string; beneficiary?: string; reminder?: string; success?: string; error?: string }> }) {
   await connection(); await requireProfile(["admin"]);
@@ -20,14 +21,12 @@ export default async function DonationExpensesPage({ searchParams }: { searchPar
     {params.error ? <p className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-red-900">{params.error}</p> : null}
 
     <section className="mb-6 rounded-xl border bg-[var(--surface)] p-5">
-      <div className="flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-xl font-semibold">{workspace.reminders.length} Monthly Support Due</h2><p className="text-sm text-[var(--muted-text)]">Pending reminders due this month.</p></div><Link href="/admin/donation-expenses/beneficiaries" className="rounded-lg border px-4 py-2 font-semibold">Beneficiaries</Link></div>
-      <div className="mt-4 grid gap-3 lg:grid-cols-2">
-        {workspace.reminders.map((item) => <article key={item.id} className="rounded-lg border p-4">
-          <strong>{item.beneficiary?.name}</strong><p className="text-sm text-[var(--muted-text)]">{item.beneficiary?.beneficiary_reference} · {money(Number(item.amount))} · Day {item.reminder_day_of_month}</p>
-          <p className="mt-1 text-sm">{item.purpose || "Regular monthly support"}</p>
-          <div className="mt-3 flex gap-2"><Link href={`/admin/donation-expenses?beneficiary=${item.beneficiary_id}&reminder=${item.id}#create-donation`} className="rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-semibold text-[var(--primary-foreground)]">Create Payment</Link><form action={skipDonationReminderAction.bind(null, item.id)}><button className="rounded-lg border px-3 py-2 text-sm font-semibold">Skip</button></form></div>
-        </article>)}
-        {!workspace.reminders.length ? <p className="text-sm text-[var(--muted-text)]">No monthly support is due today.</p> : null}
+      <div className="flex flex-wrap items-center justify-between gap-3"><div className="flex flex-wrap items-center gap-3"><div><h2 className="text-xl font-semibold">Monthly Support Due</h2><p className="text-sm text-[var(--muted-text)]">Current-month reminders and their latest state.</p></div><span className="inline-flex min-w-7 items-center justify-center rounded-full bg-red-600 px-2 py-1 text-sm font-bold text-white" aria-label={`${workspace.dueReminderCount} monthly supports due or overdue`}>{workspace.dueReminderCount}</span></div><Link href="/admin/donation-expenses/beneficiaries" className="rounded-lg border px-4 py-2 font-semibold">Beneficiaries</Link></div>
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full text-left text-sm"><thead><tr className="border-b"><th className="p-2">Beneficiary</th><th className="p-2">Relationship</th><th className="p-2">Default Amount</th><th className="p-2">Due Date</th><th className="p-2">Status</th><th className="p-2">Last Payment</th><th className="p-2">Action</th></tr></thead><tbody>
+          {workspace.reminders.map((item) => <tr key={item.id} className="border-b last:border-0"><td className="p-2"><strong>{item.beneficiary?.name}</strong><span className="block text-xs text-[var(--muted-text)]">{item.beneficiary?.beneficiary_reference}</span></td><td className="p-2">{item.beneficiary?.relationship_type?.name || item.beneficiary?.relationship_group || "—"}</td><td className="p-2">{money(Number(item.amount))}</td><td className="p-2">{date(item.dueDate)}</td><td className="p-2"><span className={`inline-flex rounded-full border px-2 py-1 text-xs font-semibold ${reminderTone(item.displayStatus)}`}>{item.displayStatus}</span>{item.displayStatus === "SKIPPED" && item.skip_note ? <span className="mt-1 block max-w-48 text-xs text-[var(--muted-text)]">{item.skip_note}</span> : null}</td><td className="p-2">{item.lastPaymentDate ? date(item.lastPaymentDate) : "—"}</td><td className="p-2">{item.status === "PENDING" ? <div className="flex min-w-56 flex-col gap-2"><Link href={`/admin/donation-expenses?beneficiary=${item.beneficiary_id}&reminder=${item.id}#create-donation`} className="w-fit rounded-lg bg-[var(--primary)] px-3 py-2 text-xs font-semibold text-[var(--primary-foreground)]">Create Payment</Link><form action={skipDonationReminderAction.bind(null, item.id)} className="flex gap-2"><input name="note" placeholder="Optional skip note" className="min-w-0 rounded-lg border bg-background px-2 py-1 text-xs" /><button className="rounded-lg border px-2 py-1 text-xs font-semibold">Skip</button></form></div> : item.expense_id ? <Link href={`/admin/donation-expenses/${item.expense_id}`} className="font-semibold text-[var(--primary)]">Open Payment</Link> : "—"}</td></tr>)}
+        </tbody></table>
+        {!workspace.reminders.length ? <p className="py-5 text-sm text-[var(--muted-text)]">No monthly support reminders for this month.</p> : null}
       </div>
     </section>
 
