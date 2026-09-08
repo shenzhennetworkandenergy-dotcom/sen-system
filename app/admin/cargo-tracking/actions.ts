@@ -10,6 +10,7 @@ import { cargoPackageUnits, cargoPermissionForStatus, nextCargoStatus, type Carg
 import { normalizePurchaseCarrier } from "@/lib/purchasing/carriers";
 import { writeAuditLog } from "@/lib/audit/log";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 const value = (form: FormData, key: string) => String(form.get(key) ?? "").trim();
 const optional = (form: FormData, key: string) => value(form, key) || null;
@@ -300,4 +301,73 @@ export async function verifyCargoHandoverAction(jobId: string, form: FormData) {
     go(path, "error", error instanceof Error ? error.message : "Unable to verify cargo handover.");
   }
   go(path, "success", "Cargo handover verified.");
+}
+
+export async function createCargoCustomerRequestAction(form: FormData) {
+  const { profile } = await requireProfile(["customer"]);
+  const packages = [{
+    description: value(form, "package_description"),
+    quantity: value(form, "package_quantity") || "1",
+    unit: value(form, "package_unit") || "Piece",
+    weight: value(form, "package_weight"),
+    dimensions: value(form, "package_dimensions"),
+    cbm: value(form, "package_cbm"),
+  }];
+  const payload = {
+    tracking_number: value(form, "tracking_number"), goods_summary: value(form, "goods_summary"),
+    shipping_method: value(form, "shipping_method") || "air", customer_reference: value(form, "customer_reference"),
+    contact_person: value(form, "contact_person"), contact_phone: value(form, "contact_phone"),
+    service_location: value(form, "service_location"), preferred_date: value(form, "preferred_date"),
+    customer_instruction: value(form, "customer_instruction"), note: value(form, "note"), packages,
+  };
+  try {
+    const { data, error } = await createSupabaseServerClient().then((db) => db.rpc("create_cargo_customer_request", { actor_profile_id: profile.id, requested_payload: payload }));
+    if (error || !data) throw new Error(error?.message || "Unable to create Cargo request.");
+    revalidatePath("/account/cargo");
+    redirect(`/account/cargo/${data}`);
+  } catch (error) {
+    if (error && typeof error === "object" && "digest" in error) throw error;
+    redirect(`/account/cargo/new?error=${encodeURIComponent(error instanceof Error ? error.message : "Unable to create Cargo request.")}`);
+  }
+}
+
+export async function setCargoActiveRateAction(form: FormData) {
+  const { profile } = await requireProfile(["admin"]);
+  const method = value(form, "shipping_method");
+  const rate = Number(value(form, "rate_bdt_per_kg"));
+  if (!Number.isFinite(rate) || rate <= 0) go("/admin/cargo-tracking", "error", "Rate must be greater than zero.");
+  try {
+    const { error } = await createSupabaseAdminClient().rpc("set_cargo_active_rate", { actor_profile_id: profile.id, requested_shipping_method: method, requested_rate: rate });
+    if (error) throw new Error(error.message);
+  } catch (error) { go("/admin/cargo-tracking", "error", error instanceof Error ? error.message : "Unable to save Cargo rate."); }
+  go("/admin/cargo-tracking", "success", "Cargo rate saved.");
+}
+
+export async function generateCargoInvoiceAction(jobId: string, form: FormData) {
+  const { profile } = await requireProfile(["admin"]);
+  try {
+    const weight = Number(value(form, "final_billable_weight_kg"));
+    const rateId = value(form, "rate_id");
+    const { error } = await createSupabaseAdminClient().rpc("generate_cargo_invoice", { actor_profile_id: profile.id, requested_job_id: jobId, requested_weight: weight, requested_rate_id: rateId });
+    if (error) throw new Error(error.message);
+  } catch (error) { go(`/admin/cargo-tracking/${jobId}`, "error", error instanceof Error ? error.message : "Unable to generate Cargo invoice."); }
+  go(`/admin/cargo-tracking/${jobId}`, "success", "Cargo invoice generated.");
+}
+
+export async function setCargoInvoiceVisibilityAction(jobId: string, invoiceId: string, visible: boolean) {
+  const { profile } = await requireProfile(["admin"]);
+  try {
+    const { error } = await createSupabaseAdminClient().rpc("set_cargo_invoice_visibility", { actor_profile_id: profile.id, requested_invoice_id: invoiceId, requested_visible: visible });
+    if (error) throw new Error(error.message);
+  } catch (error) { go(`/admin/cargo-tracking/${jobId}`, "error", error instanceof Error ? error.message : "Unable to update invoice visibility."); }
+  go(`/admin/cargo-tracking/${jobId}`, "success", visible ? "Invoice shown to customer." : "Invoice hidden from customer.");
+}
+
+export async function confirmCargoPaymentAction(jobId: string, invoiceId: string, form: FormData) {
+  const { profile } = await requireProfile(["admin"]);
+  try {
+    const { error } = await createSupabaseAdminClient().rpc("confirm_cargo_invoice_payment", { actor_profile_id: profile.id, requested_invoice_id: invoiceId, requested_method: optional(form, "payment_method"), requested_reference: optional(form, "payment_reference"), requested_note: optional(form, "payment_note"), requested_proof_path: null });
+    if (error) throw new Error(error.message);
+  } catch (error) { go(`/admin/cargo-tracking/${jobId}`, "error", error instanceof Error ? error.message : "Unable to confirm Cargo payment."); }
+  go(`/admin/cargo-tracking/${jobId}`, "success", "Cargo payment confirmed.");
 }

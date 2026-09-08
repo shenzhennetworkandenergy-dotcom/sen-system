@@ -46,6 +46,11 @@ const modules = [
     href: "/account/rmb-payments",
     description: "Create and follow your China payment-service requests.",
   },
+  {
+    label: "Cargo",
+    href: "/account/cargo",
+    description: "Create and track your Cargo requests and invoices.",
+  },
 ];
 
 export default async function AccountPage() {

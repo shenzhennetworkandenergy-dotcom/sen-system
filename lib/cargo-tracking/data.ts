@@ -123,13 +123,15 @@ export async function getCargoOptions() {
 
 export async function getCargoJob(jobId: string) {
   const db = createSupabaseAdminClient();
-  const [job, packages, events, options] = await Promise.all([
+  const [job, packages, events, options, invoice, rates] = await Promise.all([
     db.from("cargo_shipping_jobs").select("*,profiles!cargo_shipping_jobs_customer_id_fkey(id,full_name,email,phone,company_name),carrier:purchase_carriers!cargo_shipping_jobs_carrier_id_fkey(id,name),china_warehouse:warehouses!cargo_shipping_jobs_china_warehouse_id_fkey(id,code,name,address),bangladesh_warehouse:warehouses!cargo_shipping_jobs_bangladesh_warehouse_id_fkey(id,code,name,address),warehouse_locations!cargo_shipping_jobs_bangladesh_location_id_fkey(id,code,name)").eq("id", jobId).maybeSingle(),
     db.from("cargo_shipping_packages").select("id,package_identifier,sequence_number,description,quantity,unit,weight,dimensions,cbm,warehouse_location_id,china_received_at,china_received_by,ready_verified_at,ready_verified_by,handed_over_at,handed_over_by,warehouse_location:warehouse_locations!cargo_shipping_packages_warehouse_location_id_fkey(id,warehouse_id,code,name)").eq("job_id", jobId).order("sequence_number"),
     db.from("cargo_shipping_events").select("id,status,event_at,note,warehouses(id,code,name),warehouse_locations(id,code,name),profiles!cargo_shipping_events_actor_id_fkey(id,full_name,email)").eq("job_id", jobId).order("event_at", { ascending: false }).order("created_at", { ascending: false }),
     getCargoOptions(),
+    db.from("cargo_invoices").select("*").eq("cargo_job_id", jobId).maybeSingle(),
+    db.from("cargo_rates").select("id,shipping_method,rate_bdt_per_kg,is_active,effective_at").order("shipping_method"),
   ]);
-  if (job.error || packages.error || events.error) throw new Error("Unable to load cargo tracking job.");
+  if (job.error || packages.error || events.error || invoice.error || rates.error) throw new Error("Unable to load cargo tracking job.");
   if (!job.data) return null;
   return {
     job: {
@@ -150,8 +152,37 @@ export async function getCargoJob(jobId: string) {
       location: one(event.warehouse_locations),
       actor: one(event.profiles),
     })),
+    invoice: invoice.data ?? null,
+    rates: rates.data ?? [],
     ...options,
   };
+}
+
+export async function getCustomerCargoJobs(customerId: string) {
+  const db = createSupabaseAdminClient();
+  const { data, error } = await db.from("cargo_shipping_jobs")
+    .select("id,internal_cargo_id,courier_tracking_number,goods_summary,shipping_method,current_status,created_at,updated_at,cargo_invoices(id,invoice_number,total_amount,payment_status,customer_visible)")
+    .eq("customer_id", customerId).order("updated_at", { ascending: false });
+  if (error) throw new Error("Unable to load Cargo requests.");
+  return data ?? [];
+}
+
+export async function getCustomerCargoJob(jobId: string, customerId: string) {
+  const db = createSupabaseAdminClient();
+  const [{ data: job, error: jobError }, { data: packages }, { data: events }, { data: invoice }] = await Promise.all([
+    db.from("cargo_shipping_jobs").select("*,profiles!cargo_shipping_jobs_customer_id_fkey(id,full_name,email,phone,company_name),china_warehouse:warehouses!cargo_shipping_jobs_china_warehouse_id_fkey(id,code,name,address),bangladesh_warehouse:warehouses!cargo_shipping_jobs_bangladesh_warehouse_id_fkey(id,code,name,address),cargo_invoices(*)").eq("id", jobId).eq("customer_id", customerId).maybeSingle(),
+    db.from("cargo_shipping_packages").select("id,package_identifier,sequence_number,description,quantity,unit,weight,dimensions,cbm").eq("job_id", jobId).order("sequence_number"),
+    db.from("cargo_shipping_events").select("id,status,event_at,note").eq("job_id", jobId).order("event_at", { ascending: false }),
+    db.from("cargo_invoices").select("*").eq("cargo_job_id", jobId).eq("customer_id", customerId).eq("customer_visible", true).maybeSingle(),
+  ]);
+  if (jobError || !job) return null;
+  return { job: { ...job, customer: one(job.profiles), chinaWarehouse: one(job.china_warehouse), bangladeshWarehouse: one(job.bangladesh_warehouse) }, packages: packages ?? [], events: events ?? [], invoice: invoice ?? null };
+}
+
+export async function getCargoRates() {
+  const { data, error } = await createSupabaseAdminClient().from("cargo_rates").select("id,shipping_method,rate_bdt_per_kg,is_active,effective_at").order("shipping_method");
+  if (error) throw new Error("Unable to load Cargo rates.");
+  return data ?? [];
 }
 
 export async function getCargoPackageLabel(jobId: string, packageId: string) {
