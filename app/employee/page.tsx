@@ -57,6 +57,12 @@ export default async function EmployeePage() {
         <a href={routes.employeeHr} className="mt-4 inline-block rounded-lg bg-blue-700 px-4 py-2 font-semibold text-white">Open My HR</a>
       </section>
 
+      <section className="mt-6 rounded-xl border border-emerald-200 bg-emerald-50 p-6">
+        <h2 className="text-xl font-semibold text-emerald-950">Employee Loans</h2>
+        <p className="mt-2 text-emerald-900">Apply for a loan, review your loan status, and access agreements and disbursement records.</p>
+        <a href={routes.employeeLoans} className="mt-4 inline-block rounded-lg bg-emerald-700 px-4 py-2 font-semibold text-white">Open My Loans</a>
+      </section>
+
       <section className="mt-6 rounded-xl border bg-[var(--surface)] p-6">
         <h2 className="text-xl font-semibold">Permitted modules</h2>
         {permittedModules.length ? (

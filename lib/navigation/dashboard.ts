@@ -28,6 +28,7 @@ export const adminNavigation: DashboardNavigationItem[] = [
   {key:"suppliers",label:"Suppliers",route:routes.adminSuppliers,group:"Procurement and Finance",iconKey:"suppliers",requiredPermission:"suppliers.view",implemented:true,adminVisible:true,employeeVisible:true},
   {key:"accounting",label:"Accounting",route:routes.adminAccounting,group:"Procurement and Finance",iconKey:"accounting",requiredPermission:"accounting.view",alternativePermissions:["accounting.manage_cashbook"],implemented:true,adminVisible:true,employeeVisible:true},
   {key:"accounting-audit",label:"Cashbook Audit",route:routes.adminAccountingAudit,group:"Procurement and Finance",iconKey:"accounting",requiredPermission:"accounting.audit_cashbook",implemented:true,adminVisible:true,employeeVisible:true},
+  {key:"employee-loans",label:"Employee Loans",route:routes.adminReceivableLoans,group:"Procurement and Finance",iconKey:"accounting",requiredPermission:"receivables.view_loans",implemented:true,adminVisible:true,employeeVisible:false},
   {key:"hr",label:"HR",route:routes.adminHr,group:"Organization",iconKey:"hr",requiredPermission:null,implemented:true,adminVisible:true,employeeVisible:false},
   {key:"manufacturing",label:"Manufacturing",route:null,group:"Organization",iconKey:"manufacturing",requiredPermission:"manufacturing.view",implemented:false,adminVisible:true,employeeVisible:false},
   {key:"projects",label:"Projects",route:null,group:"Organization",iconKey:"projects",requiredPermission:"projects.view",implemented:false,adminVisible:true,employeeVisible:false},
@@ -43,6 +44,7 @@ export const employeeNavigation: DashboardNavigationItem[] = [
   {key:"employee-profile",label:"My workplace",route:routes.employeeProfile,group:"Workspace",iconKey:"locations",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
   {key:"employee-activity",label:"My Activity",route:routes.employeeActivity,group:"Workspace",iconKey:"activity",requiredPermission:"activity.view_own",implemented:true,adminVisible:false,employeeVisible:true},
   {key:"employee-hr",label:"My HR",route:routes.employeeHr,group:"Workspace",iconKey:"hr",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
+  {key:"employee-loans",label:"My Loans",route:routes.employeeLoans,group:"Workspace",iconKey:"accounting",requiredPermission:null,implemented:true,adminVisible:false,employeeVisible:true},
   {key:"receive-new-stock",moduleKey:"inventory",label:"নতুন পণ্য রিসিভ / Receive Stock",route:"/employee/inventory/receive",group:"Inventory and Logistics",iconKey:"inventory",requiredPermission:"inventory.receive_new_stock",implemented:true,adminVisible:false,employeeVisible:true},
   ...adminNavigation.filter((item)=>item.employeeVisible),
 ];
