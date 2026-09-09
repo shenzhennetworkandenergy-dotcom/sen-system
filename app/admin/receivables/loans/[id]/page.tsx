@@ -3,10 +3,12 @@ import { notFound } from "next/navigation";
 import { connection } from "next/server";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
+import { EmployeeLoanAdminPanel } from "@/components/receivables/EmployeeLoanAdminPanel";
 import { ReceivableOperations } from "@/components/receivables/ReceivableOperations";
 import { ReceivablesNavigation } from "@/components/receivables/ReceivablesNavigation";
 import { requireAllPermissions } from "@/lib/auth/permissions";
 import { getNonSalesReceivableDetail } from "@/lib/receivables/data";
+import { getAdminEmployeeLoanExtension } from "@/lib/receivables/employee-loans-data";
 import { resolveReceivablesReportScope } from "@/lib/receivables/reporting-access";
 
 export const dynamic = "force-dynamic";
@@ -50,17 +52,21 @@ export default async function ReceivableLoanDetailPage({
   ]);
   const { id } = await params;
   const reportScope = resolveReceivablesReportScope({ profile, permissions });
-  const detail = await getNonSalesReceivableDetail(id, reportScope);
+  const employeeLoanExtension = await getAdminEmployeeLoanExtension(id);
+  const detailAccess = employeeLoanExtension
+    ? { ...reportScope, canViewAccountingDetails: false, canViewPayrollDetails: false }
+    : reportScope;
+  const detail = await getNonSalesReceivableDetail(id, detailAccess);
   if (!detail) notFound();
   const isAdmin = reportScope.isAdmin;
   const canViewCustomer = reportScope.canViewCustomerReceivables;
   const operationPermissions = {
     canCreate: isAdmin || permissions.has("receivables.create"),
-    canApprove: isAdmin || permissions.has("receivables.approve"),
-    canDisburse: isAdmin || permissions.has("receivables.disburse"),
+    canApprove: !employeeLoanExtension && (isAdmin || permissions.has("receivables.approve")),
+    canDisburse: !employeeLoanExtension && (isAdmin || permissions.has("receivables.disburse")),
     canRecordRepayment: isAdmin || permissions.has("receivables.record_repayment"),
     canAdjust: isAdmin || permissions.has("receivables.adjust"),
-    canPostAccounting: isAdmin || permissions.has("accounting.create_entry"),
+    canPostAccounting: !employeeLoanExtension && (isAdmin || permissions.has("accounting.create_entry")),
   };
   const operationIds = {
     lifecycle: crypto.randomUUID(),
@@ -86,10 +92,12 @@ export default async function ReceivableLoanDetailPage({
     status: detail.account.status,
     requestedAmount: detail.account.requestedAmount,
     approvedAmount: detail.account.approvedAmount,
+    currency: detail.account.currency,
     outstandingAmount: detail.account.outstandingAmount,
     installmentCount: detail.account.installmentCount,
     installmentAmount: detail.account.installmentAmount,
     firstDueDate: detail.account.firstDueDate,
+    disbursementDate: detail.account.disbursementDate,
   };
 
   return (
@@ -173,6 +181,15 @@ export default async function ReceivableLoanDetailPage({
         ) : <p className="mt-2 text-sm text-slate-500">No installment schedule is attached to this account.</p>}
       </section>
 
+      {employeeLoanExtension ? <EmployeeLoanAdminPanel
+        account={{ ...operationAccount, receivableNumber: detail.account.receivableNumber }}
+        extension={employeeLoanExtension}
+        permissions={{
+          canApprove: isAdmin || permissions.has("receivables.approve"),
+          canDisburse: isAdmin || permissions.has("receivables.disburse"),
+        }}
+      /> : null}
+
       <section className="mt-5">
         <ReceivableOperations
           account={operationAccount}
@@ -180,11 +197,11 @@ export default async function ReceivableLoanDetailPage({
           operationIds={operationIds}
           transactions={detail.transactions}
           accountingPostings={detail.accountingPostings}
-          canViewAccountingDetails={reportScope.canViewAccountingDetails}
+          canViewAccountingDetails={reportScope.canViewAccountingDetails && !employeeLoanExtension}
         />
       </section>
 
-      {reportScope.canViewAccountingDetails ? <section className="mt-5 rounded-2xl border border-indigo-200 bg-indigo-50/40 p-5 shadow-sm">
+      {!employeeLoanExtension && (reportScope.canViewAccountingDetails ? <section className="mt-5 rounded-2xl border border-indigo-200 bg-indigo-50/40 p-5 shadow-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold text-indigo-950">Accounting &amp; Cash Book Reconciliation</h2>
@@ -200,7 +217,7 @@ export default async function ReceivableLoanDetailPage({
           <h2 className="text-lg font-semibold text-slate-800">Accounting &amp; Cash Book Reconciliation</h2>
           <p className="mt-1 text-sm text-slate-600">Accounting and Cash Book details are restricted to users with Accounting visibility.</p>
         </section>
-      )}
+      ))}
 
       <section className="mt-5 rounded-2xl border bg-white p-5 shadow-sm">
         <h2 className="text-lg font-semibold text-[var(--primary)]">Immutable Transaction History</h2>

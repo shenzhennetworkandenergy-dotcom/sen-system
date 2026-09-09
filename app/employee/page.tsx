@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { ActivityTable, type ActivityRow } from "@/components/activity/ActivityTable";
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { getPermissionCatalogue, getPermissionMatrix } from "@/lib/auth/permissions";
@@ -53,6 +54,15 @@ export default async function EmployeePage() {
         <h2 className="text-xl font-semibold text-blue-950">My HR workspace</h2>
         <p className="mt-2 text-blue-900">Review attendance and leave, submit correction requests, and follow administrator decisions.</p>
         <a href={routes.employeeHr} className="mt-4 inline-block rounded-lg bg-blue-700 px-4 py-2 font-semibold text-white">Open My HR</a>
+      </section>
+
+      <section className="mt-6 rounded-xl border border-indigo-200 bg-indigo-50 p-6">
+        <h2 className="text-xl font-semibold text-indigo-950">Employee Loans</h2>
+        <p className="mt-2 text-indigo-900">Review the loan guidance, apply using your verified employee identity, and follow your own applications and agreements.</p>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <Link href="/employee/loans/apply" className="rounded-lg bg-indigo-700 px-4 py-2 font-semibold text-white">Apply for Loan</Link>
+          <Link href="/employee/loans" className="rounded-lg border border-indigo-300 bg-white px-4 py-2 font-semibold text-indigo-900">My Loan Applications</Link>
+        </div>
       </section>
 
       {physicalReturnClaims.length ? (

@@ -65,6 +65,8 @@ export const routes = {
   employeeHrAttendanceCorrection: "/employee/hr/attendance/corrections/new",
   employeeHrLeaves: "/employee/hr/leaves",
   employeeHrNewLeave: "/employee/hr/leaves/new",
+  employeeLoans: "/employee/loans",
+  employeeLoanApply: "/employee/loans/apply",
   employeeInventoryReceive: "/employee/inventory/receive",
   employeeInventoryStockOut: "/employee/inventory/stock-out",
   accountAddresses: "/account/addresses",
