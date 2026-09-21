@@ -34,12 +34,11 @@ export default async function CashbookAuditPage() {
         <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-sm font-semibold text-blue-900">{pendingCount} Pending Audit</span>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1080px] text-left text-sm">
-          <thead><tr className="border-b"><th className="p-3">Cashbook Owner</th><th>Business Date</th><th>Opening Balance</th><th>Total Income</th><th>Total Expense</th><th>Closing Balance</th><th>Closed By</th><th>Closed At</th><th>Audit Status</th><th>Action</th></tr></thead>
+        <table className="w-full min-w-[980px] text-left text-sm">
+          <thead><tr className="border-b"><th className="p-3">Business Date</th><th>Opening Balance</th><th>Total Income</th><th>Total Expense</th><th>Closing Balance</th><th>Closed By</th><th>Closed At</th><th>Audit Status</th><th>Action</th></tr></thead>
           <tbody>
-            {days.map((day) => <tr className={`border-b last:border-0 ${day.auditStatus === "PENDING_AUDIT" ? "bg-blue-50/60" : ""}`} key={day.cashbookDayId}>
-              <td className="p-3 font-semibold">{day.cashbookOwner.name}<span className="mt-1 block text-xs font-normal text-[var(--muted-text)]">{day.cashbookScope.replaceAll("_", " ")}</span></td>
-              <td className="font-bold">{day.businessDate}</td>
+            {days.map((day) => <tr className={`border-b last:border-0 ${day.auditStatus === "PENDING_AUDIT" ? "bg-blue-50/60" : ""}`} key={day.businessDate}>
+              <td className="p-3 font-bold">{day.businessDate}</td>
               <td>{money(day.openingBalance)}</td>
               <td>{money(day.income)}</td>
               <td>{money(day.expense)}</td>
@@ -47,7 +46,7 @@ export default async function CashbookAuditPage() {
               <td>{day.closedBy.name}</td>
               <td>{dateTime(day.closedAt)}</td>
               <td><span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-bold ${statusClasses[day.auditStatus]}`}>{labels[day.auditStatus]}</span>{day.correctionReason ? <span className="mt-1 block max-w-[14rem] truncate text-xs text-amber-900" title={day.correctionReason}>Reason: {day.correctionReason}</span> : null}</td>
-              <td><a href={`/admin/accounting/audit/${encodeURIComponent(day.businessDate)}?day=${encodeURIComponent(day.cashbookDayId)}`} className="inline-flex rounded-lg border px-3 py-2 font-semibold hover:bg-slate-50">Review</a></td>
+              <td><a href={`/admin/accounting/audit/${encodeURIComponent(day.businessDate)}`} className="inline-flex rounded-lg border px-3 py-2 font-semibold hover:bg-slate-50">Review</a></td>
             </tr>)}
           </tbody>
         </table>
