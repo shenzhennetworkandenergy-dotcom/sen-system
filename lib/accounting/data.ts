@@ -11,44 +11,25 @@ const normalizeAuditStatus = (value: unknown, isClosed: boolean) => {
 
 type ActorNameRow = { id: string; full_name: string | null; company_name: string | null; email: string | null };
 
-export async function getAccountingDashboard(
-  selectedDate: string,
-  options: { includeLedger?: boolean; cashbookOwnerId?: string; cashbookDayId?: string },
-) {
+export async function getAccountingDashboard(selectedDate: string, options: { includeLedger?: boolean } = {}) {
   const db = createSupabaseAdminClient();
   const includeLedger = options.includeLedger ?? true;
-  const cashbookOwnerId = options.cashbookOwnerId ?? null;
-  const cashbookDayId = options.cashbookDayId ?? null;
-  if (!cashbookOwnerId && !cashbookDayId) throw new Error("Cashbook identity is required.");
   const emptyResult = Promise.resolve({ data: [], error: null });
-  const dayFields = "cashbook_day_id,cashbook_scope,cashbook_owner_id,business_date,opening_balance,closing_balance,is_closed,closed_at,closed_by,audit_status,reviewed_at,reviewed_by,review_comment,correction_reason,correction_requested_at,correction_requested_by";
-  let cashbookDaysQuery = db.from("cashbook_days").select(dayFields);
-  let cashbookEntriesQuery = db.from("cashbook_entries")
-    .select("id,cashbook_day_id,cashbook_scope,cashbook_owner_id,transaction_type,amount,payment_method,transaction_at,business_date,journal_entry_id,remark,sale_payment_id,source_payment_method,cashbook_descriptions(name),journal_entries!cashbook_entries_journal_entry_id_fkey(entry_number)");
-  if (cashbookDayId) {
-    cashbookDaysQuery = cashbookDaysQuery.eq("cashbook_day_id", cashbookDayId).limit(1);
-    cashbookEntriesQuery = cashbookEntriesQuery.eq("cashbook_day_id", cashbookDayId).order("transaction_at", { ascending: false });
-  } else {
-    cashbookDaysQuery = cashbookDaysQuery
-      .eq("cashbook_scope", "PERSONAL")
-      .eq("cashbook_owner_id", cashbookOwnerId as string)
-      .lte("business_date", selectedDate)
-      .or(`business_date.eq.${selectedDate},is_closed.eq.true`)
-      .order("business_date", { ascending: false })
-      .limit(1);
-    cashbookEntriesQuery = cashbookEntriesQuery
-      .eq("cashbook_scope", "PERSONAL")
-      .eq("cashbook_owner_id", cashbookOwnerId as string)
-      .eq("business_date", selectedDate)
-      .order("transaction_at", { ascending: false });
-  }
   const [accounts, entries, lines, cashbookDays, cashbookDescriptions, cashbookEntries] = await Promise.all([
     includeLedger ? db.from("accounting_accounts").select("id,code,name,account_type,currency,is_active").order("code") : emptyResult,
     includeLedger ? db.from("journal_entries").select("id,entry_number,entry_date,description,status,currency,reference_type,posted_at,created_at").order("entry_date", { ascending: false }).limit(100) : emptyResult,
     includeLedger ? db.from("journal_lines").select("journal_entry_id,debit,credit") : emptyResult,
-    cashbookDaysQuery,
+    db.from("cashbook_days")
+      .select("business_date,opening_balance,closing_balance,is_closed,closed_at,closed_by,audit_status,reviewed_at,reviewed_by,review_comment,correction_reason,correction_requested_at,correction_requested_by")
+      .lte("business_date", selectedDate)
+      .or(`business_date.eq.${selectedDate},is_closed.eq.true`)
+      .order("business_date", { ascending: false })
+      .limit(1),
     db.from("cashbook_descriptions").select("id,name,transaction_type,is_active").eq("is_active", true).order("transaction_type").order("name"),
-    cashbookEntriesQuery,
+    db.from("cashbook_entries")
+      .select("id,transaction_type,amount,payment_method,transaction_at,business_date,journal_entry_id,remark,cashbook_descriptions(name)")
+      .eq("business_date", selectedDate)
+      .order("transaction_at", { ascending: false }),
   ]);
   const error = accounts.error ?? entries.error ?? lines.error ?? cashbookDays.error ?? cashbookDescriptions.error ?? cashbookEntries.error;
   if (error) throw new Error("Unable to load accounting data.");
@@ -105,7 +86,6 @@ export async function getAccountingDashboard(
     accounts: accounts.data ?? [],
     entries: (entries.data ?? []).map((entry) => ({ ...entry, ...(totals.get(entry.id) ?? { debit: 0, credit: 0 }) })),
     cashbook: {
-      ownerId: cashbookOwnerId ?? selectedDay?.cashbook_owner_id ?? null,
       selectedDate,
       descriptions: (cashbookDescriptions.data ?? []).map((description) => ({
         id: description.id,
