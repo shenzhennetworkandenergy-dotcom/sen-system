@@ -12,8 +12,12 @@ export const CASHBOOK_AUDIT_STATUSES = [
 ] as const;
 
 export type CashbookAuditStatus = (typeof CASHBOOK_AUDIT_STATUSES)[number];
+export type CashbookScope = "LEGACY_GLOBAL" | "LEGACY_ATTRIBUTED" | "PERSONAL";
 export type CashbookAuditActor = { id: string | null; name: string };
 export type CashbookAuditDay = {
+  cashbookDayId: string;
+  cashbookScope: CashbookScope;
+  cashbookOwner: CashbookAuditActor;
   businessDate: string;
   openingBalance: number;
   income: number;
@@ -34,6 +38,9 @@ export type CashbookAuditDay = {
 export type CashbookAuditStatement = Awaited<ReturnType<typeof getAccountingDashboard>>["cashbook"];
 
 type CashbookDayRow = {
+  cashbook_day_id: string;
+  cashbook_scope: CashbookScope;
+  cashbook_owner_id: string | null;
   business_date: string;
   opening_balance: number | string;
   closing_balance: number | string | null;
@@ -50,7 +57,7 @@ type CashbookDayRow = {
 };
 
 type CashbookAmountRow = {
-  business_date: string;
+  cashbook_day_id: string;
   transaction_type: string;
   amount: number | string;
 };
@@ -63,6 +70,9 @@ type PersonRow = {
 };
 
 const DAY_FIELDS = [
+  "cashbook_day_id",
+  "cashbook_scope",
+  "cashbook_owner_id",
   "business_date",
   "opening_balance",
   "closing_balance",
@@ -85,6 +95,15 @@ export function parseCashbookAuditDate(value: unknown): string | null {
   return normalizeCashbookDate(candidate, "") === candidate ? candidate : null;
 }
 
+export function parseCashbookOwnerId(value: unknown): string | null {
+  const candidate = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(candidate)
+    ? candidate
+    : null;
+}
+
+export const parseCashbookDayId = parseCashbookOwnerId;
+
 export function normalizeCashbookAuditStatus(value: unknown, isClosed: boolean): CashbookAuditStatus {
   const status = String(value ?? "").trim().toUpperCase();
   if (!isClosed) return "OPEN";
@@ -96,10 +115,11 @@ export function normalizeCashbookAuditStatus(value: unknown, isClosed: boolean):
 function summarize(entries: CashbookAmountRow[]) {
   const totals = new Map<string, { income: number; expense: number }>();
   for (const entry of entries) {
-    const total = totals.get(entry.business_date) ?? { income: 0, expense: 0 };
+    const key = entry.cashbook_day_id;
+    const total = totals.get(key) ?? { income: 0, expense: 0 };
     if (String(entry.transaction_type).toLowerCase() === "income") total.income += Number(entry.amount) || 0;
     else total.expense += Number(entry.amount) || 0;
-    totals.set(entry.business_date, total);
+    totals.set(key, total);
   }
   return totals;
 }
@@ -128,7 +148,13 @@ function toAuditDay(
   totals: { income: number; expense: number },
   people: Map<string, PersonRow>,
 ): CashbookAuditDay {
+  const cashbookOwner = row.cashbook_scope === "LEGACY_GLOBAL"
+    ? { id: null, name: "Legacy Global Cashbook" }
+    : actor(row.cashbook_owner_id, people);
   return {
+    cashbookDayId: row.cashbook_day_id,
+    cashbookScope: row.cashbook_scope,
+    cashbookOwner,
     businessDate: row.business_date,
     openingBalance: Number(row.opening_balance) || 0,
     income: Number(totals.income) || 0,
@@ -157,35 +183,57 @@ export async function getCashbookAuditDays(): Promise<CashbookAuditDay[]> {
   if (error) throw new Error("Unable to load cashbook audit days.");
 
   const days = (data ?? []) as unknown as CashbookDayRow[];
-  const dates = days.map((day) => day.business_date);
+  const dayIds = days.map((day) => day.cashbook_day_id);
   let entries: CashbookAmountRow[] = [];
-  if (dates.length) {
+  if (dayIds.length) {
     const result = await db
       .from("cashbook_entries")
-      .select("business_date,transaction_type,amount")
-      .in("business_date", dates);
+      .select("cashbook_day_id,transaction_type,amount")
+      .in("cashbook_day_id", dayIds);
     if (result.error) throw new Error("Unable to load cashbook audit days.");
     entries = (result.data ?? []) as unknown as CashbookAmountRow[];
   }
 
   const totals = summarize(entries);
-  const people = await peopleFor(days.flatMap((day) => [day.closed_by, day.reviewed_by, day.correction_requested_by]));
-  return days.map((day) => toAuditDay(day, totals.get(day.business_date) ?? { income: 0, expense: 0 }, people));
+  const people = await peopleFor(days.flatMap((day) => [
+    day.cashbook_owner_id,
+    day.closed_by,
+    day.reviewed_by,
+    day.correction_requested_by,
+  ]));
+  return days.map((day) => toAuditDay(
+    day,
+    totals.get(day.cashbook_day_id) ?? { income: 0, expense: 0 },
+    people,
+  ));
 }
 
-export async function getCashbookAuditDay(value: unknown): Promise<{ day: CashbookAuditDay; statement: CashbookAuditStatement } | null> {
+export async function getCashbookAuditDay(
+  dayValue: unknown,
+  value: unknown,
+): Promise<{ day: CashbookAuditDay; statement: CashbookAuditStatement } | null> {
+  const cashbookDayId = parseCashbookDayId(dayValue);
   const date = parseCashbookAuditDate(value);
-  if (!date) return null;
+  if (!cashbookDayId || !date) return null;
 
   const db = createSupabaseAdminClient();
   const [{ data, error }, dashboard] = await Promise.all([
-    db.from("cashbook_days").select(DAY_FIELDS).eq("business_date", date).maybeSingle(),
-    getAccountingDashboard(date, { includeLedger: false }),
+    db.from("cashbook_days")
+      .select(DAY_FIELDS)
+      .eq("cashbook_day_id", cashbookDayId)
+      .eq("business_date", date)
+      .maybeSingle(),
+    getAccountingDashboard(date, { includeLedger: false, cashbookDayId }),
   ]);
   if (error || !data || !(data as unknown as CashbookDayRow).is_closed) return null;
 
   const row = data as unknown as CashbookDayRow;
-  const people = await peopleFor([row.closed_by, row.reviewed_by, row.correction_requested_by]);
+  const people = await peopleFor([
+    row.cashbook_owner_id,
+    row.closed_by,
+    row.reviewed_by,
+    row.correction_requested_by,
+  ]);
   const day = toAuditDay(row, {
     income: dashboard.cashbook.summary.income,
     expense: dashboard.cashbook.summary.expense,

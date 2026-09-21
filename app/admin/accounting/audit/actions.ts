@@ -2,20 +2,26 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { parseCashbookAuditDate } from "@/lib/accounting/audit";
+import { parseCashbookAuditDate, parseCashbookDayId } from "@/lib/accounting/audit";
 import { requirePermission } from "@/lib/auth/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 const listPath = "/admin/accounting/audit";
 const accountingPath = "/admin/accounting";
 
-function detailPath(date: string) {
+function detailRoute(date: string) {
   return `${listPath}/${encodeURIComponent(date)}`;
 }
 
-function redirectError(date: string | null, message: string): never {
-  const target = date ? detailPath(date) : listPath;
-  redirect(`${target}?error=${encodeURIComponent(message)}`);
+function detailPath(dayId: string, date: string) {
+  return `${detailRoute(date)}?day=${encodeURIComponent(dayId)}`;
+}
+
+function redirectError(dayId: string | null, date: string | null, message: string): never {
+  const target = dayId && date
+    ? `${detailPath(dayId, date)}&error=${encodeURIComponent(message)}`
+    : `${listPath}?error=${encodeURIComponent(message)}`;
+  redirect(target);
 }
 
 function safeRpcMessage(message: string | undefined, fallback: string) {
@@ -24,41 +30,43 @@ function safeRpcMessage(message: string | undefined, fallback: string) {
 
 export async function approveCashbookAuditAction(form: FormData) {
   const { profile } = await requirePermission("accounting.audit_cashbook");
+  const cashbookDayId = parseCashbookDayId(form.get("cashbook_day_id"));
   const date = parseCashbookAuditDate(form.get("business_date"));
-  if (!date) redirectError(null, "A valid business date is required.");
+  if (!cashbookDayId || !date) redirectError(null, null, "A valid cashbook day and business date are required.");
   const comment = String(form.get("review_comment") ?? "").trim();
-  if (comment.length > 1000) redirectError(date, "Review comment cannot exceed 1000 characters.");
+  if (comment.length > 1000) redirectError(cashbookDayId, date, "Review comment cannot exceed 1000 characters.");
 
   const { error } = await createSupabaseAdminClient().rpc("approve_cashbook_audit", {
     actor_profile_id: profile.id,
-    requested_business_date: date,
+    requested_cashbook_day_id: cashbookDayId,
     requested_comment: comment || null,
   });
-  if (error) redirectError(date, safeRpcMessage(error.message, "Unable to approve this cashbook audit."));
+  if (error) redirectError(cashbookDayId, date, safeRpcMessage(error.message, "Unable to approve this cashbook audit."));
 
   revalidatePath(listPath);
-  revalidatePath(detailPath(date));
+  revalidatePath(detailRoute(date));
   revalidatePath(accountingPath);
-  redirect(`${detailPath(date)}?success=${encodeURIComponent("Cashbook audit approved.")}`);
+  redirect(`${detailPath(cashbookDayId, date)}&success=${encodeURIComponent("Cashbook audit approved.")}`);
 }
 
 export async function requestCashbookCorrectionAction(form: FormData) {
   const { profile } = await requirePermission("accounting.audit_cashbook");
+  const cashbookDayId = parseCashbookDayId(form.get("cashbook_day_id"));
   const date = parseCashbookAuditDate(form.get("business_date"));
-  if (!date) redirectError(null, "A valid business date is required.");
+  if (!cashbookDayId || !date) redirectError(null, null, "A valid cashbook day and business date are required.");
   const reason = String(form.get("reason") ?? "").trim();
-  if (!reason) redirectError(date, "Correction reason is required.");
-  if (reason.length > 1000) redirectError(date, "Correction reason cannot exceed 1000 characters.");
+  if (!reason) redirectError(cashbookDayId, date, "Correction reason is required.");
+  if (reason.length > 1000) redirectError(cashbookDayId, date, "Correction reason cannot exceed 1000 characters.");
 
   const { error } = await createSupabaseAdminClient().rpc("request_cashbook_correction", {
     actor_profile_id: profile.id,
-    requested_business_date: date,
+    requested_cashbook_day_id: cashbookDayId,
     requested_reason: reason,
   });
-  if (error) redirectError(date, safeRpcMessage(error.message, "Unable to request correction."));
+  if (error) redirectError(cashbookDayId, date, safeRpcMessage(error.message, "Unable to request correction."));
 
   revalidatePath(listPath);
-  revalidatePath(detailPath(date));
+  revalidatePath(detailRoute(date));
   revalidatePath(accountingPath);
-  redirect(`${detailPath(date)}?success=${encodeURIComponent("Correction requested.")}`);
+  redirect(`${detailPath(cashbookDayId, date)}&success=${encodeURIComponent("Correction requested.")}`);
 }

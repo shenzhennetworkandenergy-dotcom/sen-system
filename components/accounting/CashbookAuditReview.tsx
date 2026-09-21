@@ -49,8 +49,10 @@ export function CashbookAuditReview({ day, statement }: { day: CashbookAuditDay;
     </div>
 
     <section className="rounded-2xl border bg-[var(--surface)] p-5">
-      <h2 className="text-xl font-bold">Daily Cash Statement · {day.businessDate}</h2>
+      <h2 className="text-xl font-bold">Daily Cash Statement · {day.cashbookOwner.name} · {day.businessDate}</h2>
+      <p className="mt-1 text-xs font-semibold text-[var(--muted-text)]">{day.cashbookScope.replaceAll("_", " ")}</p>
       <dl className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div><dt className="text-xs text-[var(--muted-text)]">Cashbook Owner</dt><dd className="font-bold">{day.cashbookOwner.name}</dd></div>
         <div><dt className="text-xs text-[var(--muted-text)]">Opening Balance</dt><dd className="font-bold">{money(day.openingBalance)}</dd></div>
         <div><dt className="text-xs text-[var(--muted-text)]">Total Income</dt><dd className="font-bold">{money(day.income)}</dd></div>
         <div><dt className="text-xs text-[var(--muted-text)]">Total Expense</dt><dd className="font-bold">{money(day.expense)}</dd></div>
@@ -86,10 +88,12 @@ export function CashbookAuditReview({ day, statement }: { day: CashbookAuditDay;
       <h2 className="text-lg font-bold">Record audit decision</h2>
       <div className="mt-3 flex flex-wrap items-start gap-3">
         <form action={approveCashbookAuditAction}>
+          <input type="hidden" name="cashbook_day_id" value={day.cashbookDayId} />
           <input type="hidden" name="business_date" value={day.businessDate} />
           <button className="rounded-lg bg-emerald-700 px-4 py-3 font-bold text-white hover:bg-emerald-800">Approve</button>
         </form>
         <form action={requestCashbookCorrectionAction} className="flex min-w-[min(100%,32rem)] flex-1 flex-wrap gap-2">
+          <input type="hidden" name="cashbook_day_id" value={day.cashbookDayId} />
           <input type="hidden" name="business_date" value={day.businessDate} />
           <label className="sr-only" htmlFor="cashbook-correction-reason">Correction reason</label>
           <textarea id="cashbook-correction-reason" name="reason" required minLength={1} maxLength={1000} rows={2} placeholder="Required correction reason" className="min-w-0 flex-1 rounded-lg border px-3 py-2" />
