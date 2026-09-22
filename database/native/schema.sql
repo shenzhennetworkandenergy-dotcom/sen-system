@@ -17117,9 +17117,23 @@ ALTER TABLE public.work_locations ENABLE ROW LEVEL SECURITY;
 
 \unrestrict 8xw5WTNkNeDsEs7imcTvQK6SStc1ZEzi7dTUJzAhE1MPOAJkK3Dtdkgbnbu8Mby
 
+
+
+-- Supabase Storage is replaced by the native filesystem adapter. This
+-- metadata-only catalogue lets feature migrations register their buckets.
+create schema if not exists storage;
+create table if not exists storage.buckets (
+  id text primary key,
+  name text not null,
+  public boolean not null default false,
+  file_size_limit bigint,
+  allowed_mime_types text[]
+);
+
 begin;
 
--- Extend the existing carrier master without changing historical shipment text.
+-- Additive-only carrier master fields. Existing rows and historical carrier
+-- name snapshots remain unchanged.
 alter table public.purchase_carriers
   add column if not exists phone_number text,
   add column if not exists address text,
@@ -17143,27 +17157,8 @@ end $$;
 create index if not exists purchase_inbound_shipments_carrier_id_idx
   on public.purchase_inbound_shipments(carrier_id) where carrier_id is not null;
 
--- Preserve unmatched legacy names as inactive master records, then link every
--- historical shipment that can be linked. carrier_name remains as its snapshot.
-insert into public.purchase_carriers(name,status)
-select distinct trim(shipment.carrier_name),'inactive'
-from public.purchase_inbound_shipments shipment
-where nullif(trim(shipment.carrier_name),'') is not null
-  and not exists (
-    select 1 from public.purchase_carriers carrier
-    where lower(trim(carrier.name))=lower(trim(shipment.carrier_name))
-  )
-on conflict do nothing;
-
-update public.purchase_inbound_shipments shipment
-set carrier_id=carrier.id
-from public.purchase_carriers carrier
-where shipment.carrier_id is null
-  and nullif(trim(shipment.carrier_name),'') is not null
-  and lower(trim(carrier.name))=lower(trim(shipment.carrier_name));
-
--- New application calls use a carrier ID. The established transition remains
--- available for old history/clients while this wrapper snapshots the carrier name.
+-- New application calls use a carrier ID while the established transition
+-- and every historical carrier_name snapshot remain available unchanged.
 create or replace function public.transition_purchase_inbound_shipment_with_carrier(
   actor_profile_id uuid,
   requested_order_id uuid,
@@ -19652,6 +19647,5119 @@ grant execute on function public.cancel_sales_order(uuid,uuid,text)
 grant execute on function public.confirm_physical_return_receipt(uuid,uuid,uuid,uuid,numeric,uuid[])
   to service_role;
 
+-- Atomically post actually received Sales payments to the existing Cash Book and ledger.
+
+alter table public.sale_payments
+  add column if not exists operation_id uuid,
+  add column if not exists receipt_channel text;
+
+do $$ begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname='sale_payments_receipt_channel_check'
+      and conrelid='public.sale_payments'::regclass
+  ) then
+    alter table public.sale_payments
+      add constraint sale_payments_receipt_channel_check
+      check (receipt_channel is null or receipt_channel in ('cash','bank','mfs'));
+  end if;
+end $$;
+
+create unique index if not exists sale_payments_operation_id_unique
+  on public.sale_payments(operation_id)
+  where operation_id is not null;
+
+alter table public.cashbook_entries
+  add column if not exists sale_payment_id uuid,
+  add column if not exists source_payment_method text;
+
+do $$ begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname='cashbook_entries_sale_payment_id_fkey'
+      and conrelid='public.cashbook_entries'::regclass
+  ) then
+    alter table public.cashbook_entries
+      add constraint cashbook_entries_sale_payment_id_fkey
+      foreign key (sale_payment_id)
+      references public.sale_payments(id)
+      on delete restrict;
+  end if;
+  if not exists (
+    select 1 from pg_constraint
+    where conname='cashbook_entries_source_payment_method_check'
+      and conrelid='public.cashbook_entries'::regclass
+  ) then
+    alter table public.cashbook_entries
+      add constraint cashbook_entries_source_payment_method_check
+      check (
+        source_payment_method is null
+        or source_payment_method in (
+          'cash','bank_transfer','cheque','mobile_banking','card',
+          'advance_payment','cash_on_delivery','other'
+        )
+      );
+  end if;
+end $$;
+
+create unique index if not exists cashbook_entries_sale_payment_id_unique
+  on public.cashbook_entries(sale_payment_id)
+  where sale_payment_id is not null;
+
+create or replace function public.record_sale_payment(
+  actor_profile_id uuid,
+  requested_order_id uuid,
+  requested_amount numeric,
+  requested_date date,
+  requested_method text,
+  requested_reference text,
+  requested_note text,
+  requested_operation_id uuid,
+  requested_receipt_channel text
+) returns uuid
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  payment_id uuid:=gen_random_uuid();
+  journal_id uuid:=gen_random_uuid();
+  cashbook_id uuid:=gen_random_uuid();
+  sale public.sales_orders%rowtype;
+  existing_payment public.sale_payments%rowtype;
+  sales_description public.cashbook_descriptions%rowtype;
+  actor_role public.account_role;
+  normalized_method text:=lower(trim(coalesce(requested_method,'')));
+  normalized_channel text:=lower(trim(coalesce(requested_receipt_channel,'')));
+  normalized_reference text:=nullif(left(trim(coalesce(requested_reference,'')),200),'');
+  normalized_note text:=nullif(left(trim(coalesce(requested_note,'')),1000),'');
+  normalized_amount numeric(18,2):=round(requested_amount,2);
+  effective_date date:=coalesce(requested_date,current_date);
+  payment_account_id uuid;
+  revenue_account_id uuid;
+  invoice_number text;
+  customer_name text;
+  entry_reference text;
+  entry_time timestamptz;
+  day_is_closed boolean;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'sales.record_payment');
+  if requested_operation_id is null then
+    raise exception 'A valid payment operation ID is required';
+  end if;
+  if requested_amount is null or requested_amount<=0 or normalized_amount<=0 then
+    raise exception 'Payment amount must be positive';
+  end if;
+
+  if normalized_method='credit_sale' then
+    raise exception 'Credit Sale is not a received payment. Record the actual payment method when money is received.';
+  elsif normalized_method in ('cash','cash_on_delivery') then
+    normalized_channel:='cash';
+  elsif normalized_method='mobile_banking' then
+    normalized_channel:='mfs';
+  elsif normalized_method in ('bank_transfer','cheque','card') then
+    normalized_channel:='bank';
+  elsif normalized_method in ('advance_payment','other') then
+    if normalized_channel not in ('cash','bank','mfs') then
+      raise exception 'Select the actual Cash, Bank, or MFS receiving channel';
+    end if;
+  else
+    raise exception 'Invalid received payment method';
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(
+    pg_catalog.hashtextextended(requested_operation_id::text,0)
+  );
+  select * into existing_payment
+  from public.sale_payments
+  where operation_id=requested_operation_id;
+  if existing_payment.id is not null then
+    if existing_payment.received_by is distinct from actor_profile_id
+      or existing_payment.order_id is distinct from requested_order_id
+      or round(existing_payment.amount,2) is distinct from normalized_amount
+      or existing_payment.payment_date is distinct from effective_date
+      or existing_payment.method is distinct from normalized_method
+      or existing_payment.receipt_channel is distinct from normalized_channel
+      or existing_payment.reference_number is distinct from normalized_reference
+      or existing_payment.internal_note is distinct from normalized_note
+    then
+      raise exception 'This payment operation ID was already used with different details';
+    end if;
+    if not exists(
+      select 1 from public.cashbook_entries
+      where sale_payment_id=existing_payment.id
+    ) then
+      raise exception 'This payment operation is missing its linked Accounting transaction';
+    end if;
+    return existing_payment.id;
+  end if;
+
+  select * into sale
+  from public.sales_orders
+  where id=requested_order_id
+  for update;
+  if sale.id is null or sale.status='cancelled' then
+    raise exception 'Sale is not eligible for payment';
+  end if;
+
+  perform public.lock_cashbook_timeline();
+  perform public.assert_cashbook_predecessor_closed(effective_date);
+  insert into public.cashbook_days(business_date,opening_balance,updated_by)
+  values(
+    effective_date,
+    public.cashbook_opening_balance_for(effective_date),
+    actor_profile_id
+  )
+  on conflict(business_date) do nothing;
+  select is_closed into day_is_closed
+  from public.cashbook_days
+  where business_date=effective_date
+  for update;
+  if day_is_closed then
+    raise exception 'This cashbook date is already closed. Use the authorized accounting correction process.';
+  end if;
+
+  select * into sales_description
+  from public.cashbook_descriptions
+  where lower(trim(name))='sales'
+    and transaction_type='income'
+    and is_active=true
+  order by created_at
+  limit 1;
+  if sales_description.id is null then
+    raise exception 'The active Sales income description is unavailable in Accounting';
+  end if;
+
+  select id into payment_account_id
+  from public.accounting_accounts
+  where code=case normalized_channel
+      when 'cash' then '1010'
+      when 'bank' then '1020'
+      else '1030'
+    end
+    and currency='BDT'
+    and is_active=true;
+  select id into revenue_account_id
+  from public.accounting_accounts
+  where code='4000' and currency='BDT' and is_active=true;
+  if payment_account_id is null or revenue_account_id is null then
+    raise exception 'Required Sales payment accounting account is unavailable';
+  end if;
+
+  insert into public.sale_payments(
+    id,order_id,amount,payment_date,method,reference_number,internal_note,
+    received_by,operation_id,receipt_channel
+  ) values(
+    payment_id,sale.id,normalized_amount,effective_date,normalized_method,
+    normalized_reference,normalized_note,actor_profile_id,
+    requested_operation_id,normalized_channel
+  );
+  perform public.refresh_sale_payment_totals(sale.id);
+
+  select document_number into invoice_number
+  from public.sale_documents
+  where order_id=sale.id
+    and document_type='invoice'
+    and status='generated'
+  order by revision_number desc,created_at desc
+  limit 1;
+  select coalesce(
+    nullif(trim(profile.full_name),''),
+    nullif(trim(profile.company_name),''),
+    nullif(trim(profile.email),''),
+    'Customer'
+  ) into customer_name
+  from public.profiles profile
+  where profile.id=sale.customer_profile_id;
+  entry_reference:=concat_ws(
+    ' — ',
+    'Sales Payment',
+    sale.order_number,
+    invoice_number,
+    customer_name,
+    case when normalized_reference is null then null else 'Ref: '||normalized_reference end
+  );
+
+  if effective_date=(pg_catalog.clock_timestamp() at time zone 'Asia/Dhaka')::date then
+    entry_time:=pg_catalog.clock_timestamp();
+  else
+    entry_time:=(effective_date::timestamp+time '12:00') at time zone 'Asia/Dhaka';
+  end if;
+
+  insert into public.journal_entries(
+    id,entry_number,entry_date,description,reference_type,reference_id,status,
+    currency,created_by,posted_by,posted_at
+  ) values(
+    journal_id,
+    public.next_journal_entry_number(),
+    effective_date,
+    left(entry_reference,500),
+    'payment',
+    payment_id,
+    'posted',
+    'BDT',
+    actor_profile_id,
+    actor_profile_id,
+    pg_catalog.clock_timestamp()
+  );
+  insert into public.journal_lines(
+    journal_entry_id,account_id,description,debit,credit
+  ) values
+    (journal_id,payment_account_id,left(entry_reference,500),normalized_amount,0),
+    (journal_id,revenue_account_id,left(entry_reference,500),0,normalized_amount);
+
+  insert into public.cashbook_entries(
+    id,description_id,transaction_type,amount,payment_method,transaction_at,
+    business_date,journal_entry_id,created_by,remark,
+    sale_payment_id,source_payment_method
+  ) values(
+    cashbook_id,
+    sales_description.id,
+    'income',
+    normalized_amount,
+    normalized_channel,
+    entry_time,
+    effective_date,
+    journal_id,
+    actor_profile_id,
+    left(entry_reference,240),
+    payment_id,
+    normalized_method
+  );
+
+  select role into actor_role
+  from public.profiles
+  where id=actor_profile_id;
+  insert into public.audit_logs(
+    actor_id,actor_role,target_profile_id,action,module,entity_type,entity_id,
+    description,new_values
+  ) values(
+    actor_profile_id,
+    actor_role,
+    sale.customer_profile_id,
+    'sales.payment_accounting_posted',
+    'sales',
+    'sale_payment',
+    payment_id::text,
+    'Sales payment recorded and posted to Accounting.',
+    jsonb_build_object(
+      'operation_id',requested_operation_id,
+      'sales_order_id',sale.id,
+      'cashbook_entry_id',cashbook_id,
+      'journal_entry_id',journal_id,
+      'amount',normalized_amount,
+      'payment_date',effective_date,
+      'payment_method',normalized_method,
+      'receipt_channel',normalized_channel
+    )
+  );
+  return payment_id;
+end $$;
+
+create or replace function public.record_sale_payment(
+  actor_profile_id uuid,
+  requested_order_id uuid,
+  requested_amount numeric,
+  requested_date date,
+  requested_method text,
+  requested_reference text,
+  requested_note text
+) returns uuid
+language plpgsql
+security definer
+set search_path=''
+as $$
+begin
+  return public.record_sale_payment(
+    actor_profile_id,
+    requested_order_id,
+    requested_amount,
+    requested_date,
+    requested_method,
+    requested_reference,
+    requested_note,
+    gen_random_uuid(),
+    null
+  );
+end $$;
+
+create or replace function public.prevent_received_payment_sale_cancellation()
+returns trigger
+language plpgsql
+security definer
+set search_path=''
+as $$
+begin
+  if new.status='cancelled'
+    and old.status is distinct from new.status
+    and exists(
+      select 1 from public.sale_payments
+      where order_id=new.id and status='received'
+    )
+  then
+    raise exception 'This sale has received payment and cannot be cancelled directly. The recorded payment must first be reversed/refunded through an authorized payment reversal process.';
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists prevent_received_payment_sale_cancellation
+  on public.sales_orders;
+create trigger prevent_received_payment_sale_cancellation
+before update of status on public.sales_orders
+for each row
+execute function public.prevent_received_payment_sale_cancellation();
+
+revoke all on function public.record_sale_payment(
+  uuid,uuid,numeric,date,text,text,text,uuid,text
+) from public,anon,authenticated;
+revoke all on function public.record_sale_payment(
+  uuid,uuid,numeric,date,text,text,text
+) from public,anon,authenticated;
+revoke all on function public.prevent_received_payment_sale_cancellation()
+  from public,anon,authenticated;
+grant execute on function public.record_sale_payment(
+  uuid,uuid,numeric,date,text,text,text,uuid,text
+) to service_role;
+grant execute on function public.record_sale_payment(
+  uuid,uuid,numeric,date,text,text,text
+) to service_role;
+
+grant select on public.sale_payments,public.cashbook_entries to authenticated,service_role;
+grant all on public.sale_payments,public.cashbook_entries to service_role;
+
+begin;
+
+-- Correct carrier/tracking metadata without changing the shipment lifecycle.
+-- The shipment update and its audit record are deliberately one transaction.
+create or replace function public.correct_purchase_inbound_shipment_tracking(
+  actor_profile_id uuid,
+  requested_purchase_order_id uuid,
+  requested_shipment_id uuid,
+  requested_carrier_id uuid,
+  requested_tracking_number text,
+  requested_reason text default null
+) returns uuid
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  shipment_row public.purchase_inbound_shipments%rowtype;
+  carrier_row public.purchase_carriers%rowtype;
+  actor_role public.account_role;
+  normalized_tracking_number text;
+  normalized_reason text;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'purchasing.edit');
+  perform public.assert_actor_permission(actor_profile_id,'shipments.create');
+
+  if requested_tracking_number is not null
+    and length(trim(requested_tracking_number))>200
+  then
+    raise exception 'Tracking number must be 200 characters or fewer';
+  end if;
+  if requested_reason is not null and length(trim(requested_reason))>1000 then
+    raise exception 'Correction reason must be 1000 characters or fewer';
+  end if;
+
+  normalized_tracking_number:=nullif(trim(coalesce(requested_tracking_number,'')),'');
+  normalized_reason:=nullif(trim(coalesce(requested_reason,'')),'');
+
+  select * into shipment_row
+  from public.purchase_inbound_shipments
+  where id=requested_shipment_id
+    and purchase_order_id=requested_purchase_order_id
+  for update;
+
+  if shipment_row.id is null then
+    raise exception 'Supplier inbound shipment was not found';
+  end if;
+  if shipment_row.status not in(
+    'ready_for_shipment','shipped','received','stock_received'
+  ) then
+    raise exception 'Carrier and tracking cannot be corrected for a cancelled shipment';
+  end if;
+  if nullif(trim(coalesce(shipment_row.tracking_number,'')),'') is not null
+    and normalized_tracking_number is null
+  then
+    raise exception 'An existing tracking number cannot be cleared';
+  end if;
+
+  select * into carrier_row
+  from public.purchase_carriers
+  where id=requested_carrier_id;
+
+  if carrier_row.id is null then
+    raise exception 'Select a valid carrier';
+  end if;
+  if carrier_row.status<>'active'
+    and carrier_row.id is distinct from shipment_row.carrier_id
+  then
+    raise exception 'Select an active carrier';
+  end if;
+
+  if carrier_row.id is not distinct from shipment_row.carrier_id
+    and carrier_row.name is not distinct from shipment_row.carrier_name
+    and normalized_tracking_number is not distinct from shipment_row.tracking_number
+  then
+    raise exception 'No carrier or tracking changes were provided';
+  end if;
+
+  select role into actor_role
+  from public.profiles
+  where id=actor_profile_id;
+
+  update public.purchase_inbound_shipments
+  set carrier_id=carrier_row.id,
+      carrier_name=carrier_row.name,
+      tracking_number=normalized_tracking_number,
+      updated_by=actor_profile_id
+  where id=shipment_row.id;
+
+  insert into public.audit_logs(
+    actor_id,actor_role,action,module,entity_type,entity_id,description,
+    old_values,new_values,metadata
+  ) values(
+    actor_profile_id,
+    actor_role,
+    'purchasing.inbound.tracking_corrected',
+    'purchasing',
+    'purchase_inbound_shipment',
+    shipment_row.id::text,
+    format(
+      'Supplier shipment carrier/tracking corrected: %s / %s → %s / %s.',
+      coalesce(shipment_row.carrier_name,'Not set'),
+      coalesce(shipment_row.tracking_number,'Not set'),
+      carrier_row.name,
+      coalesce(normalized_tracking_number,'Not set')
+    ),
+    jsonb_build_object(
+      'carrier_id',shipment_row.carrier_id,
+      'carrier_name',shipment_row.carrier_name,
+      'tracking_number',shipment_row.tracking_number
+    ),
+    jsonb_build_object(
+      'carrier_id',carrier_row.id,
+      'carrier_name',carrier_row.name,
+      'tracking_number',normalized_tracking_number
+    ),
+    jsonb_build_object(
+      'purchase_order_id',shipment_row.purchase_order_id,
+      'supplier_shipment_id',shipment_row.id,
+      'correction_reason',normalized_reason
+    )
+  );
+
+  return shipment_row.id;
+end $$;
+
+revoke all on function public.correct_purchase_inbound_shipment_tracking(
+  uuid,uuid,uuid,uuid,text,text
+) from public,anon,authenticated;
+grant execute on function public.correct_purchase_inbound_shipment_tracking(
+  uuid,uuid,uuid,uuid,text,text
+) to service_role;
+
+notify pgrst, 'reload schema';
+
+commit;
+
+begin;
+
+alter table public.quotation_requests
+  add column if not exists created_by uuid references public.profiles(id) on delete set null;
+
+create index if not exists quotation_requests_created_by_idx
+  on public.quotation_requests(created_by, created_at desc);
+
+insert into public.permissions(
+  module_id,key,name,description,action,is_sensitive,sort_order,is_active
+)
+select
+  m.id,
+  'quotations.view_own',
+  'View own quotations',
+  'View only quotations created by this employee.',
+  'view_own',
+  false,
+  9,
+  true
+from public.app_modules m
+where m.key='quotations'
+on conflict(key) do update set
+  module_id=excluded.module_id,
+  name=excluded.name,
+  description=excluded.description,
+  action=excluded.action,
+  is_sensitive=excluded.is_sensitive,
+  sort_order=excluded.sort_order,
+  is_active=true;
+
+commit;
+
+-- Controlled quotation outcomes and one-to-one draft Sale conversion.
+-- Existing quotation states, legacy invoice conversion, and downstream Sales
+-- fulfilment remain unchanged.
+
+begin;
+
+alter table public.quotation_requests
+  add column if not exists issued_at timestamptz,
+  add column if not exists issued_by uuid references public.profiles(id) on delete set null,
+  add column if not exists customer_accepted_at timestamptz,
+  add column if not exists customer_accepted_by uuid references public.profiles(id) on delete set null,
+  add column if not exists customer_declined_at timestamptz,
+  add column if not exists customer_declined_by uuid references public.profiles(id) on delete set null,
+  add column if not exists customer_decline_reason text;
+
+alter table public.quotation_requests
+  drop constraint if exists quotation_requests_status_check;
+alter table public.quotation_requests
+  add constraint quotation_requests_status_check check (
+    status in (
+      'draft','submitted','reviewing','additional_info_required','quoted','approved',
+      'rejected','accepted','declined','closed','expired','converted_to_invoice',
+      'converted_to_sale'
+    )
+  );
+
+alter table public.customer_notifications
+  drop constraint if exists customer_notifications_notification_type_check;
+alter table public.customer_notifications
+  add constraint customer_notifications_notification_type_check check (
+    notification_type in (
+      'order_status','support_reply','support_new','system','quotation_status','quotation_expiry',
+      'quotation_submitted','quotation_staff_new','quotation_assigned',
+      'quotation_additional_info_required','quotation_information_required','quotation_approved',
+      'quotation_rejected','quotation_expired','quotation_converted_to_invoice',
+      'quotation_converted','quotation_updated','quotation_expiring','rma_status','rma_new','quotation_issued',
+      'quotation_accepted','quotation_declined','quotation_converted_to_sale'
+    )
+  );
+
+insert into public.permissions(
+  module_id,key,name,description,action,is_sensitive,sort_order,is_active
+)
+select m.id,v.key,v.name,v.description,v.action,v.sensitive,v.sort_order,true
+from public.app_modules m cross join (values
+  (
+    'quotations.record_customer_outcome',
+    'Record customer quotation outcome',
+    'Record customer acceptance or rejection with actor, date and reason.',
+    'record_customer_outcome',true,45
+  ),
+  (
+    'quotations.convert_to_sale',
+    'Create Sales from Quotations',
+    'Create one linked draft Sale from an accepted quotation.',
+    'convert_to_sale',true,72
+  )
+) as v(key,name,description,action,sensitive,sort_order)
+where m.key='quotations'
+on conflict(key) do update set
+  module_id=excluded.module_id,
+  name=excluded.name,
+  description=excluded.description,
+  action=excluded.action,
+  is_sensitive=excluded.is_sensitive,
+  sort_order=excluded.sort_order,
+  is_active=true,
+  updated_at=now();
+
+create or replace function public.notify_quotation_change()
+returns trigger
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  notification_title text;
+  notification_message text;
+  notification_kind text;
+  staff_profile record;
+begin
+  if tg_op='INSERT' then
+    if new.status='submitted' then
+      insert into public.customer_notifications(
+        profile_id,notification_type,title,message,href,entity_type,entity_id
+      ) values (
+        new.profile_id,'quotation_submitted','Quotation request submitted',
+        'Your request '||new.reference||' was submitted successfully.',
+        '/account/quotations','quotation_request',new.id
+      );
+      for staff_profile in
+        select p.id from public.profiles p
+        where p.role='admin' and p.status='active' and p.id<>new.profile_id
+      loop
+        insert into public.customer_notifications(
+          profile_id,notification_type,title,message,href,entity_type,entity_id
+        ) values (
+          staff_profile.id,'quotation_staff_new','New quotation request',
+          'Quotation request '||new.reference||' requires review.',
+          '/admin/quotations/'||new.id,'quotation_request',new.id
+        );
+      end loop;
+    end if;
+    return new;
+  end if;
+
+  if old.assigned_to is distinct from new.assigned_to and new.assigned_to is not null then
+    insert into public.customer_notifications(
+      profile_id,notification_type,title,message,href,entity_type,entity_id
+    ) values (
+      new.assigned_to,'quotation_assigned','Quotation assigned',
+      'Quotation '||new.reference||' has been assigned to you.',
+      '/admin/quotations/'||new.id,'quotation_request',new.id
+    );
+  end if;
+
+  if old.status is distinct from new.status then
+    notification_kind:=case new.status
+      when 'draft' then null
+      when 'approved' then 'quotation_approved'
+      when 'quoted' then 'quotation_issued'
+      when 'accepted' then 'quotation_accepted'
+      when 'declined' then 'quotation_declined'
+      when 'rejected' then 'quotation_rejected'
+      when 'additional_info_required' then 'quotation_additional_info_required'
+      when 'expired' then 'quotation_expired'
+      when 'converted_to_invoice' then 'quotation_converted_to_invoice'
+      when 'converted_to_sale' then 'quotation_converted_to_sale'
+      else 'quotation_status'
+    end;
+    notification_title:=case new.status
+      when 'approved' then 'Quotation internally approved'
+      when 'quoted' then 'Quotation issued'
+      when 'accepted' then 'Quotation acceptance recorded'
+      when 'declined' then 'Quotation rejection recorded'
+      when 'rejected' then 'Quotation rejected by SEN'
+      when 'additional_info_required' then 'More quotation information required'
+      when 'expired' then 'Quotation expired'
+      when 'converted_to_invoice' then 'Quotation converted to invoice'
+      when 'converted_to_sale' then 'Quotation converted to Sale'
+      else 'Quotation status updated'
+    end;
+    notification_message:=case new.status
+      when 'approved' then 'Quotation '||new.reference||' was internally approved by SEN.'
+      when 'quoted' then 'Quotation '||new.reference||' was issued to you.'
+      when 'accepted' then 'Your acceptance of quotation '||new.reference||' was recorded by SEN staff.'
+      when 'declined' then 'Your rejection of quotation '||new.reference||' was recorded by SEN staff.'
+      when 'rejected' then 'Quotation '||new.reference||' was rejected by SEN.'
+      when 'additional_info_required' then 'SEN needs additional information for '||new.reference||'.'
+      when 'expired' then 'Quotation '||new.reference||' has expired.'
+      when 'converted_to_invoice' then 'Quotation '||new.reference||' has been converted into a sales invoice.'
+      when 'converted_to_sale' then 'Quotation '||new.reference||' has been converted into a draft Sale.'
+      else 'Quotation '||new.reference||' is now '||replace(new.status,'_',' ')||'.'
+    end;
+    if notification_kind is not null then
+      insert into public.customer_notifications(
+        profile_id,notification_type,title,message,href,entity_type,entity_id
+      ) values (
+        new.profile_id,notification_kind,notification_title,notification_message,
+        '/account/quotations','quotation_request',new.id
+      );
+    end if;
+  elsif old.updated_at is distinct from new.updated_at then
+    insert into public.customer_notifications(
+      profile_id,notification_type,title,message,href,entity_type,entity_id
+    ) values (
+      new.profile_id,'quotation_updated','Quotation updated',
+      'Quotation '||new.reference||' has been updated.',
+      '/account/quotations','quotation_request',new.id
+    );
+  end if;
+  return new;
+end $$;
+
+create or replace function public.transition_quotation_business_status(
+  actor_profile_id uuid,
+  requested_quotation_id uuid,
+  requested_transition text,
+  requested_reason text default null
+) returns text
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  actor public.profiles%rowtype;
+  quotation public.quotation_requests%rowtype;
+  required_permission text;
+  previous_status text;
+  next_status text;
+  audit_description text;
+  normalized_reason text;
+  can_view_all boolean;
+  can_view_own boolean;
+begin
+  required_permission:=case requested_transition
+    when 'approve' then 'quotations.approve'
+    when 'reject' then 'quotations.reject'
+    when 'issue' then 'quotations.send'
+    when 'accept' then 'quotations.record_customer_outcome'
+    when 'decline' then 'quotations.record_customer_outcome'
+    else null
+  end;
+  if required_permission is null then raise exception 'Invalid quotation transition'; end if;
+  perform public.assert_actor_permission(actor_profile_id,required_permission);
+  select * into actor from public.profiles p
+  where p.id=actor_profile_id and p.status='active';
+
+  select * into quotation
+  from public.quotation_requests q
+  where q.id=requested_quotation_id
+  for update;
+  if quotation.id is null then raise exception 'Quotation not found'; end if;
+
+  can_view_all:=coalesce(actor.role='admin',false) or exists(
+    select 1 from public.effective_permissions_for_profile(actor_profile_id) e
+    where e.permission_key in ('quotations.view','quotations.view_all')
+  );
+  can_view_own:=exists(
+    select 1 from public.effective_permissions_for_profile(actor_profile_id) e
+    where e.permission_key='quotations.view_own'
+  );
+  if not can_view_all and not (
+    can_view_own and coalesce(quotation.created_by=actor_profile_id,false)
+  ) then
+    raise exception 'Quotation access denied';
+  end if;
+
+  normalized_reason:=nullif(left(btrim(coalesce(requested_reason,'')),2000),'');
+  previous_status:=quotation.status;
+  if requested_transition='approve' then
+    if quotation.status not in ('draft','reviewing','quoted') then
+      raise exception 'Quotation cannot be internally approved from its current state';
+    end if;
+    next_status:='approved';
+    audit_description:='Quotation internally approved by staff.';
+    update public.quotation_requests set
+      status=next_status,approved_at=now(),approved_by=actor_profile_id,
+      updated_by=actor_profile_id,updated_at=now()
+    where id=quotation.id;
+  elsif requested_transition='reject' then
+    if quotation.status not in ('draft','reviewing','approved','quoted') then
+      raise exception 'Quotation cannot be internally rejected from its current state';
+    end if;
+    next_status:='rejected';
+    audit_description:='Quotation internally rejected by staff.';
+    update public.quotation_requests set
+      status=next_status,rejected_at=now(),rejected_by=actor_profile_id,
+      updated_by=actor_profile_id,updated_at=now()
+    where id=quotation.id;
+  elsif requested_transition='issue' then
+    if quotation.status<>'approved' then
+      raise exception 'Only an internally approved quotation can be issued';
+    end if;
+    next_status:='quoted';
+    audit_description:='Quotation issued to the customer by staff.';
+    update public.quotation_requests set
+      status=next_status,issued_at=now(),issued_by=actor_profile_id,
+      updated_by=actor_profile_id,updated_at=now()
+    where id=quotation.id;
+  elsif requested_transition='accept' then
+    if quotation.status<>'quoted' then
+      raise exception 'Only an issued quotation can have customer acceptance recorded';
+    end if;
+    if quotation.expiration_date is not null and quotation.expiration_date<current_date then
+      raise exception 'Expired quotation cannot be accepted';
+    end if;
+    next_status:='accepted';
+    audit_description:='Customer acceptance recorded by staff.';
+    update public.quotation_requests set
+      status=next_status,customer_accepted_at=now(),
+      customer_accepted_by=actor_profile_id,updated_by=actor_profile_id,updated_at=now()
+    where id=quotation.id;
+  elsif requested_transition='decline' then
+    if quotation.status<>'quoted' then
+      raise exception 'Only an issued quotation can have customer rejection recorded';
+    end if;
+    if requested_reason is null or normalized_reason is null then
+      raise exception 'Customer rejection reason is required';
+    end if;
+    next_status:='declined';
+    audit_description:='Customer rejection recorded by staff.';
+    update public.quotation_requests set
+      status=next_status,customer_declined_at=now(),
+      customer_declined_by=actor_profile_id,customer_decline_reason=normalized_reason,
+      updated_by=actor_profile_id,updated_at=now()
+    where id=quotation.id;
+  else
+    raise exception 'Invalid quotation transition';
+  end if;
+
+  insert into public.audit_logs(
+    actor_id,actor_role,target_profile_id,action,module,entity_type,entity_id,
+    description,old_values,new_values
+  ) values (
+    actor_profile_id,actor.role,quotation.profile_id,
+    case requested_transition
+      when 'accept' then 'quotation.customer_acceptance_recorded'
+      when 'decline' then 'quotation.customer_rejection_recorded'
+      else 'quotation.'||requested_transition
+    end,
+    'quotations','quotation_request',quotation.id::text,audit_description,
+    jsonb_build_object('status',previous_status),
+    jsonb_build_object(
+      'status',next_status,'transition',requested_transition,
+      'reason',normalized_reason,'recorded_at',now()
+    )
+  );
+  return next_status;
+end $$;
+
+create or replace function public.update_quotation_details_and_totals(
+  actor_profile_id uuid,
+  requested_quotation_id uuid,
+  requested_expected_status text,
+  requested_subject text,
+  requested_company_name text,
+  requested_customer_tax_identification_number text,
+  requested_required_by date,
+  requested_expiration_date date,
+  requested_terms_and_conditions text,
+  requested_payment_terms text,
+  requested_delivery_information text,
+  requested_customer_notes text,
+  requested_internal_notes text,
+  requested_discount_amount numeric,
+  requested_tax_amount numeric
+) returns uuid
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  actor public.profiles%rowtype;
+  quotation public.quotation_requests%rowtype;
+  can_view_all boolean;
+  can_view_own boolean;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'quotations.edit');
+  select * into actor from public.profiles p
+  where p.id=actor_profile_id and p.status='active';
+  if actor.id is null then raise exception 'Active actor not found'; end if;
+
+  select * into quotation
+  from public.quotation_requests q
+  where q.id=requested_quotation_id
+  for update;
+  if quotation.id is null then raise exception 'Quotation not found'; end if;
+
+  can_view_all:=coalesce(actor.role='admin',false) or exists(
+    select 1 from public.effective_permissions_for_profile(actor_profile_id) e
+    where e.permission_key in ('quotations.view','quotations.view_all')
+  );
+  can_view_own:=exists(
+    select 1 from public.effective_permissions_for_profile(actor_profile_id) e
+    where e.permission_key='quotations.view_own'
+  );
+  if not can_view_all and not (
+    can_view_own and coalesce(quotation.created_by=actor_profile_id,false)
+  ) then
+    raise exception 'Quotation access denied';
+  end if;
+
+  if quotation.status in (
+    'accepted','declined','rejected','closed','expired','converted_to_sale','converted_to_invoice'
+  ) then
+    raise exception 'An immutable quotation cannot be edited';
+  end if;
+  if requested_expected_status not in (
+    'draft','submitted','reviewing','additional_info_required','approved','quoted'
+  ) or quotation.status is distinct from requested_expected_status then
+    raise exception 'Quotation changed before its details could be saved';
+  end if;
+
+  update public.quotation_requests set
+    subject=requested_subject,
+    company_name=requested_company_name,
+    customer_tax_identification_number=requested_customer_tax_identification_number,
+    required_by=requested_required_by,
+    expiration_date=requested_expiration_date,
+    terms_and_conditions=requested_terms_and_conditions,
+    payment_terms=requested_payment_terms,
+    delivery_information=requested_delivery_information,
+    customer_notes=requested_customer_notes,
+    message=requested_customer_notes,
+    internal_notes=requested_internal_notes,
+    discount_amount=requested_discount_amount,
+    tax_amount=requested_tax_amount,
+    updated_by=actor_profile_id,
+    updated_at=now()
+  where id=quotation.id;
+
+  perform public.refresh_quotation_totals(quotation.id);
+  return quotation.id;
+end $$;
+
+create or replace function public.search_eligible_quotations_for_sale(
+  actor_profile_id uuid,
+  requested_query text,
+  requested_limit integer default 20
+) returns table(
+  quotation_id uuid,
+  reference text,
+  customer_id uuid,
+  customer_name text,
+  customer_company text,
+  customer_email text,
+  total_amount numeric,
+  currency text,
+  expiration_date date
+)
+language plpgsql
+stable
+security definer
+set search_path=''
+as $$
+declare
+  actor public.profiles%rowtype;
+  search_query text:=left(btrim(coalesce(requested_query,'')),80);
+  escaped_query text;
+  search_pattern text;
+  result_limit integer:=least(greatest(coalesce(requested_limit,20),1),20);
+  can_view_all boolean;
+  can_view_own boolean;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'quotations.convert_to_sale');
+  perform public.assert_actor_permission(actor_profile_id,'sales.create');
+  select * into actor from public.profiles p
+  where p.id=actor_profile_id and p.status='active';
+  can_view_all:=actor.role='admin' or exists(
+    select 1 from public.effective_permissions_for_profile(actor_profile_id) e
+    where e.permission_key in ('quotations.view','quotations.view_all')
+  );
+  can_view_own:=exists(
+    select 1 from public.effective_permissions_for_profile(actor_profile_id) e
+    where e.permission_key='quotations.view_own'
+  );
+  if not can_view_all and not can_view_own then raise exception 'Quotation access denied'; end if;
+  if search_query='' then return; end if;
+  escaped_query:=replace(search_query,E'\\',E'\\\\');
+  escaped_query:=replace(escaped_query,'%',E'\\%');
+  escaped_query:=replace(escaped_query,'_',E'\\_');
+  search_pattern:='%'||escaped_query||'%';
+
+  return query
+  select
+    q.id,q.reference,q.profile_id,
+    coalesce(nullif(p.full_name,''),p.email),
+    coalesce(nullif(q.company_name,''),p.company_name),
+    p.email,q.total_amount,q.currency::text,q.expiration_date
+  from public.quotation_requests q
+  join public.profiles p
+    on p.id=q.profile_id and p.role='customer' and p.status='active'
+  where q.status='accepted'
+    and (q.expiration_date is null or q.expiration_date>=current_date)
+    and q.converted_order_id is null
+    and (
+      can_view_all
+      or (can_view_own and q.created_by=actor_profile_id)
+    )
+    and (
+      q.reference ilike search_pattern escape E'\\'
+      or p.full_name ilike search_pattern escape E'\\'
+      or coalesce(q.company_name,p.company_name,'') ilike search_pattern escape E'\\'
+      or p.email ilike search_pattern escape E'\\'
+    )
+  order by
+    case when lower(q.reference)=lower(search_query) then 0 else 1 end,
+    q.updated_at desc,q.reference
+  limit result_limit;
+end $$;
+
+create or replace function public.create_sale_from_quotation(
+  actor_profile_id uuid,
+  requested_quotation_id uuid,
+  requested_customer_id uuid,
+  requested_address_id uuid,
+  requested_address jsonb,
+  requested_billing_address_id uuid,
+  requested_billing_address jsonb,
+  requested_warehouse_id uuid,
+  requested_source text,
+  requested_expected_delivery_date date,
+  requested_discount numeric,
+  requested_shipping numeric,
+  requested_service numeric,
+  requested_tax numeric,
+  requested_internal_notes text,
+  requested_customer_notes text,
+  requested_items jsonb,
+  requested_adjustments jsonb
+) returns jsonb
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  actor public.profiles%rowtype;
+  quotation public.quotation_requests%rowtype;
+  quote_item public.quotation_request_items%rowtype;
+  product_row public.products%rowtype;
+  variation_row public.product_variations%rowtype;
+  entry jsonb;
+  adjustment jsonb;
+  expected_adjustment jsonb;
+  expected_adjustments jsonb:='[]'::jsonb;
+  validated_adjustments jsonb:='[]'::jsonb;
+  adjustment_index integer;
+  matching_adjustment_index integer;
+  consumed_adjustment_indexes integer[]:='{}'::integer[];
+  source_quotation_item_id uuid;
+  requested_product_id uuid;
+  requested_variation_id uuid;
+  item_warehouse_id uuid;
+  item_quantity numeric;
+  item_unit_price numeric;
+  item_line_discount numeric;
+  item_line_tax numeric;
+  baseline_unit_price numeric;
+  catalogue_unit_price numeric;
+  header_discount numeric:=round(coalesce(requested_discount,0),2);
+  header_shipping numeric:=round(coalesce(requested_shipping,0),2);
+  header_service numeric:=round(coalesce(requested_service,0),2);
+  header_tax numeric:=round(coalesce(requested_tax,0),2);
+  normalized_items jsonb:='[]'::jsonb;
+  seen_source_ids uuid[]:='{}'::uuid[];
+  created_sale_id uuid;
+  created_sale_number text;
+  created_sale_status text;
+  accepted_values_edited boolean:=false;
+  can_view_all boolean;
+  can_view_own boolean;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'quotations.convert_to_sale');
+  perform public.assert_actor_permission(actor_profile_id,'sales.create');
+  select * into actor from public.profiles p
+  where p.id=actor_profile_id and p.status='active';
+
+  select * into quotation
+  from public.quotation_requests q
+  where q.id=requested_quotation_id
+  for update;
+  if quotation.id is null then raise exception 'Quotation not found'; end if;
+
+  can_view_all:=actor.role='admin' or exists(
+    select 1 from public.effective_permissions_for_profile(actor_profile_id) e
+    where e.permission_key in ('quotations.view','quotations.view_all')
+  );
+  can_view_own:=exists(
+    select 1 from public.effective_permissions_for_profile(actor_profile_id) e
+    where e.permission_key='quotations.view_own'
+  );
+  if not can_view_all and not (
+    can_view_own and coalesce(quotation.created_by=actor_profile_id,false)
+  ) then
+    raise exception 'Quotation access denied';
+  end if;
+
+  if quotation.converted_order_id is not null then
+    select o.order_number into created_sale_number
+    from public.sales_orders o where o.id=quotation.converted_order_id;
+    return jsonb_build_object(
+      'sale_id',quotation.converted_order_id,
+      'order_id',quotation.converted_order_id,
+      'order_number',created_sale_number,
+      'existing',true
+    );
+  end if;
+  if quotation.status<>'accepted' then
+    raise exception 'Only a customer-accepted quotation can be converted';
+  end if;
+  if quotation.expiration_date is not null and quotation.expiration_date<current_date then
+    raise exception 'Expired quotation cannot be converted';
+  end if;
+  if quotation.currency is distinct from 'BDT' then
+    raise exception 'Only BDT quotations can be converted to a Sale';
+  end if;
+  if requested_customer_id is distinct from quotation.profile_id then
+    raise exception 'Sale customer must match the quotation customer';
+  end if;
+  if not exists(
+    select 1 from public.profiles p
+    where p.id=requested_customer_id and p.role='customer' and p.status='active'
+  ) then raise exception 'Active quotation customer is required'; end if;
+  if requested_address_id is not null and not exists(
+    select 1 from public.customer_addresses a
+    where a.id=requested_address_id and a.profile_id=requested_customer_id
+  ) then
+    raise exception 'Shipping address does not belong to the quotation customer';
+  end if;
+  if requested_billing_address_id is not null and not exists(
+    select 1 from public.customer_addresses a
+    where a.id=requested_billing_address_id and a.profile_id=requested_customer_id
+  ) then
+    raise exception 'Billing address does not belong to the quotation customer';
+  end if;
+
+  if not exists(
+    select 1 from public.quotation_request_items qi
+    where qi.quotation_id=quotation.id
+  ) then raise exception 'Quotation has no items'; end if;
+  if exists(
+    select 1
+    from public.quotation_request_items qi
+    left join public.products p on p.id=qi.product_id and p.status='active'
+    left join public.product_variations pv
+      on pv.id=qi.variation_id and pv.product_id=qi.product_id and pv.status='active'
+    where qi.quotation_id=quotation.id
+      and (p.id is null or (qi.variation_id is not null and pv.id is null))
+  ) then raise exception 'Quotation includes an unavailable catalogue item'; end if;
+
+  if requested_items is null or jsonb_typeof(requested_items)<>'array'
+    or jsonb_array_length(requested_items)=0
+  then
+    raise exception 'At least one Sale item is required';
+  end if;
+  if requested_adjustments is not null and jsonb_typeof(requested_adjustments)<>'array' then
+    raise exception 'Sale adjustments are invalid';
+  end if;
+  if header_discount<0 or header_shipping<0 or header_service<0 or header_tax<0 then
+    raise exception 'Sale totals cannot be negative';
+  end if;
+
+  for entry in
+    select requested.value from jsonb_array_elements(requested_items) as requested(value)
+  loop
+    source_quotation_item_id:=nullif(entry->>'source_quotation_item_id','')::uuid;
+    requested_product_id:=nullif(entry->>'product_id','')::uuid;
+    requested_variation_id:=nullif(entry->>'variation_id','')::uuid;
+    item_warehouse_id:=nullif(entry->>'warehouse_id','')::uuid;
+    item_quantity:=nullif(entry->>'quantity','')::numeric;
+    item_unit_price:=round(nullif(entry->>'unit_price','')::numeric,2);
+    item_line_discount:=round(coalesce(nullif(entry->>'line_discount','')::numeric,0),2);
+    item_line_tax:=round(coalesce(nullif(entry->>'line_tax','')::numeric,0),2);
+
+    if requested_product_id is null then raise exception 'Sale product is required'; end if;
+    if item_quantity is null or item_quantity<1 or item_quantity<>trunc(item_quantity) then
+      raise exception 'Sale item quantity must be a whole number of at least 1';
+    end if;
+    if item_unit_price is null or item_unit_price<0
+      or item_line_discount<0 or item_line_tax<0
+      or item_line_discount>round(item_quantity*item_unit_price,2)
+    then raise exception 'Sale item commercial values are invalid'; end if;
+
+    select * into product_row from public.products p
+    where p.id=requested_product_id and p.status='active';
+    if product_row.id is null then raise exception 'Sale product is unavailable'; end if;
+    select * into variation_row from public.product_variations pv
+    where requested_variation_id is not null
+      and pv.id=requested_variation_id
+      and pv.product_id=requested_product_id and pv.status='active';
+    if requested_variation_id is not null and variation_row.id is null then
+      raise exception 'Sale variation is unavailable';
+    end if;
+
+    if source_quotation_item_id is not null then
+      if source_quotation_item_id=any(seen_source_ids) then
+        raise exception 'Each quotation item may be used only once';
+      end if;
+      seen_source_ids:=array_append(seen_source_ids,source_quotation_item_id);
+      select * into quote_item from public.quotation_request_items qi
+      where qi.id=source_quotation_item_id and qi.quotation_id=quotation.id;
+      if quote_item.id is null then raise exception 'Quotation source item is invalid'; end if;
+      if requested_product_id is distinct from quote_item.product_id
+        or requested_variation_id is distinct from quote_item.variation_id
+      then raise exception 'Quotation source product cannot be replaced in place'; end if;
+
+      baseline_unit_price:=round(coalesce(quote_item.unit_price,quote_item.target_price,0),2);
+      if item_unit_price<>baseline_unit_price then
+        perform public.assert_actor_permission(actor_profile_id,'sales.change_price');
+        accepted_values_edited:=true;
+        expected_adjustments:=expected_adjustments||jsonb_build_array(jsonb_build_object(
+          'source_quotation_item_id',source_quotation_item_id,
+          'product_id',requested_product_id,
+          'variation_id',requested_variation_id,
+          'adjustment_type','manual_unit_price',
+          'previous_value',baseline_unit_price,
+          'new_value',item_unit_price
+        ));
+      end if;
+      if item_line_discount<>round(coalesce(quote_item.discount_amount,0),2) then
+        perform public.assert_actor_permission(actor_profile_id,'sales.apply_discount');
+        accepted_values_edited:=true;
+        expected_adjustments:=expected_adjustments||jsonb_build_array(jsonb_build_object(
+          'source_quotation_item_id',source_quotation_item_id,
+          'product_id',requested_product_id,
+          'variation_id',requested_variation_id,
+          'adjustment_type','fixed_line_discount',
+          'previous_value',round(coalesce(quote_item.discount_amount,0),2),
+          'new_value',item_line_discount
+        ));
+      end if;
+      if item_quantity<>quote_item.quantity
+        or item_line_tax<>round(coalesce(quote_item.tax_amount,0),2)
+      then accepted_values_edited:=true; end if;
+    else
+      accepted_values_edited:=true;
+      catalogue_unit_price:=round(coalesce(
+        variation_row.sale_price,variation_row.regular_price,
+        product_row.sale_price,product_row.regular_price,0
+      ),2);
+      if item_unit_price<>catalogue_unit_price then
+        perform public.assert_actor_permission(actor_profile_id,'sales.change_price');
+        expected_adjustments:=expected_adjustments||jsonb_build_array(jsonb_build_object(
+          'source_quotation_item_id',null,
+          'product_id',requested_product_id,
+          'variation_id',requested_variation_id,
+          'adjustment_type','manual_unit_price',
+          'previous_value',catalogue_unit_price,
+          'new_value',item_unit_price
+        ));
+      end if;
+      if item_line_discount>0 then
+        perform public.assert_actor_permission(actor_profile_id,'sales.apply_discount');
+        expected_adjustments:=expected_adjustments||jsonb_build_array(jsonb_build_object(
+          'source_quotation_item_id',null,
+          'product_id',requested_product_id,
+          'variation_id',requested_variation_id,
+          'adjustment_type','fixed_line_discount',
+          'previous_value',catalogue_unit_price,
+          'new_value',item_line_discount
+        ));
+      end if;
+    end if;
+
+    normalized_items:=normalized_items||jsonb_build_array(jsonb_strip_nulls(jsonb_build_object(
+      'product_id',requested_product_id,
+      'variation_id',requested_variation_id,
+      'warehouse_id',item_warehouse_id,
+      'quantity',item_quantity,
+      'unit_price',item_unit_price,
+      'line_discount',item_line_discount,
+      'line_tax',item_line_tax
+    )));
+  end loop;
+
+  if header_discount<>round(coalesce(quotation.discount_amount,0),2) then
+    perform public.assert_actor_permission(actor_profile_id,'sales.apply_discount');
+    accepted_values_edited:=true;
+    expected_adjustments:=expected_adjustments||jsonb_build_array(jsonb_build_object(
+      'source_quotation_item_id',null,
+      'product_id',null,
+      'variation_id',null,
+      'adjustment_type','order_discount',
+      'previous_value',round(coalesce(quotation.discount_amount,0),2),
+      'new_value',header_discount
+    ));
+  end if;
+  if header_service>0 then
+    expected_adjustments:=expected_adjustments||jsonb_build_array(jsonb_build_object(
+      'source_quotation_item_id',null,
+      'product_id',null,
+      'variation_id',null,
+      'adjustment_type','service_charge',
+      'previous_value',0,
+      'new_value',header_service
+    ));
+  end if;
+  if header_shipping<>0 or header_service<>0
+    or header_tax<>round(coalesce(quotation.tax_amount,0),2)
+    or cardinality(seen_source_ids)<>(
+      select count(*) from public.quotation_request_items qi
+      where qi.quotation_id=quotation.id
+    )
+  then accepted_values_edited:=true; end if;
+
+  if jsonb_array_length(coalesce(requested_adjustments,'[]'::jsonb))
+    <>jsonb_array_length(expected_adjustments)
+  then
+    raise exception 'Sale adjustments do not match reviewed commercial edits';
+  end if;
+  for expected_adjustment in
+    select expected.value from jsonb_array_elements(expected_adjustments) as expected(value)
+  loop
+    matching_adjustment_index:=null;
+    for adjustment,adjustment_index in
+      select requested.value,requested.ordinality::integer
+      from jsonb_array_elements(coalesce(requested_adjustments,'[]'::jsonb))
+        with ordinality as requested(value,ordinality)
+    loop
+      if adjustment_index=any(consumed_adjustment_indexes) then continue; end if;
+      if adjustment->>'adjustment_type'=expected_adjustment->>'adjustment_type'
+        and nullif(adjustment->>'source_quotation_item_id','')::uuid
+          is not distinct from nullif(expected_adjustment->>'source_quotation_item_id','')::uuid
+        and nullif(adjustment->>'product_id','')::uuid
+          is not distinct from nullif(expected_adjustment->>'product_id','')::uuid
+        and nullif(adjustment->>'variation_id','')::uuid
+          is not distinct from nullif(expected_adjustment->>'variation_id','')::uuid
+        and nullif(adjustment->>'previous_value','')::numeric
+          is not distinct from nullif(expected_adjustment->>'previous_value','')::numeric
+        and nullif(adjustment->>'new_value','')::numeric
+          is not distinct from nullif(expected_adjustment->>'new_value','')::numeric
+      then
+        matching_adjustment_index:=adjustment_index;
+        exit;
+      end if;
+    end loop;
+    if matching_adjustment_index is null then
+      raise exception 'Sale adjustments do not match reviewed commercial edits';
+    end if;
+    if nullif(adjustment->>'order_item_id','') is not null then
+      raise exception 'Creation adjustments cannot reference an existing Sale item';
+    end if;
+    if nullif(btrim(coalesce(adjustment->>'reason','')),'') is null then
+      raise exception 'Price adjustment reason required';
+    end if;
+    consumed_adjustment_indexes:=array_append(
+      consumed_adjustment_indexes,matching_adjustment_index
+    );
+    validated_adjustments:=validated_adjustments||jsonb_build_array(adjustment);
+  end loop;
+
+  created_sale_id:=public.create_minimal_sale(
+    actor_profile_id,requested_customer_id,requested_address_id,requested_address,
+    requested_billing_address_id,requested_billing_address,requested_warehouse_id,
+    requested_source,requested_expected_delivery_date,header_discount,header_shipping,
+    header_service,header_tax,requested_internal_notes,requested_customer_notes,
+    normalized_items,validated_adjustments
+  );
+  select o.order_number,o.status into created_sale_number,created_sale_status
+  from public.sales_orders o where o.id=created_sale_id;
+  if created_sale_id is null or created_sale_status<>'draft' then
+    raise exception 'Draft Sale creation failed';
+  end if;
+
+  insert into public.order_status_events(
+    order_id,old_status,new_status,actor_profile_id,note
+  ) values (
+    created_sale_id,'draft','draft',actor_profile_id,
+    'Draft Sale created from accepted quotation '||quotation.reference
+  );
+
+  update public.quotation_requests set
+    status='converted_to_sale',converted_order_id=created_sale_id,
+    converted_at=now(),converted_by=actor_profile_id,
+    updated_by=actor_profile_id,updated_at=now()
+  where id=quotation.id and converted_order_id is null;
+
+  insert into public.audit_logs(
+    actor_id,actor_role,target_profile_id,action,module,entity_type,entity_id,
+    description,old_values,new_values
+  ) values (
+    actor_profile_id,actor.role,quotation.profile_id,'quotation.converted_to_sale',
+    'quotations','quotation_request',quotation.id::text,
+    'Customer-accepted quotation converted to one linked draft Sale by staff.',
+    jsonb_build_object('status',quotation.status,'converted_order_id',quotation.converted_order_id),
+    jsonb_build_object(
+      'status','converted_to_sale','quotation_reference',quotation.reference,
+      'sale_id',created_sale_id,'order_number',created_sale_number,
+      'accepted_values_edited',accepted_values_edited,'converted_at',now()
+    )
+  );
+
+  return jsonb_build_object(
+    'sale_id',created_sale_id,'order_id',created_sale_id,
+    'order_number',created_sale_number,'existing',false
+  );
+end $$;
+
+revoke all on function public.transition_quotation_business_status(uuid,uuid,text,text)
+  from public,anon,authenticated;
+grant execute on function public.transition_quotation_business_status(uuid,uuid,text,text)
+  to service_role;
+
+revoke all on function public.update_quotation_details_and_totals(
+  uuid,uuid,text,text,text,text,date,date,text,text,text,text,text,numeric,numeric
+) from public,anon,authenticated;
+grant execute on function public.update_quotation_details_and_totals(
+  uuid,uuid,text,text,text,text,date,date,text,text,text,text,text,numeric,numeric
+) to service_role;
+
+revoke all on function public.search_eligible_quotations_for_sale(uuid,text,integer)
+  from public,anon,authenticated;
+grant execute on function public.search_eligible_quotations_for_sale(uuid,text,integer)
+  to service_role;
+
+revoke all on function public.create_sale_from_quotation(
+  uuid,uuid,uuid,uuid,jsonb,uuid,jsonb,uuid,text,date,numeric,numeric,numeric,numeric,
+  text,text,jsonb,jsonb
+) from public,anon,authenticated;
+grant execute on function public.create_sale_from_quotation(
+  uuid,uuid,uuid,uuid,jsonb,uuid,jsonb,uuid,text,date,numeric,numeric,numeric,numeric,
+  text,text,jsonb,jsonb
+) to service_role;
+
+commit;
+
+-- Stock Out is the physical warehouse release point. Packing is preparation
+-- only, so it must not cap an otherwise valid request's release quantity.
+--
+-- Replace only the obsolete packed-quantity guard in the existing atomic
+-- confirmation function. Every permission, warehouse, remaining, reservation,
+-- physical-stock, serial, concurrency, idempotency, movement, and audit check
+-- remains in the original function definition.
+do $migration$
+declare
+  function_signature regprocedure:=to_regprocedure(
+    'public.confirm_sales_stock_out(uuid,uuid,uuid,jsonb)'
+  );
+  function_definition text;
+  updated_definition text;
+  packed_guard_start integer;
+  physical_balance_start integer;
+begin
+  if function_signature is null then
+    raise exception 'confirm_sales_stock_out(uuid,uuid,uuid,jsonb) is required';
+  end if;
+
+  select pg_catalog.pg_get_functiondef(function_signature::oid)
+  into function_definition;
+
+  packed_guard_start:=pg_catalog.strpos(
+    lower(function_definition),
+    'packed_quantity:='
+  );
+  if packed_guard_start=0 then
+    packed_guard_start:=pg_catalog.strpos(
+      lower(function_definition),
+      'packed_quantity :='
+    );
+  end if;
+  physical_balance_start:=pg_catalog.strpos(
+    lower(function_definition),
+    'select * into balance'
+  );
+
+  -- Reapplying the migration is safe when the same correction is already in
+  -- place, provided the authoritative safety checks are still present.
+  if packed_guard_start=0 then
+    if pg_catalog.strpos(lower(function_definition),'request_item.remaining_quantity')=0
+      or pg_catalog.strpos(lower(function_definition),'balance.reserved')=0
+      or pg_catalog.strpos(lower(function_definition),'balance.on_hand')=0
+      or pg_catalog.strpos(lower(function_definition),'array_length(selected_serial_ids')=0
+    then
+      raise exception 'The Stock Out function is missing a required safety validation';
+    end if;
+    return;
+  end if;
+
+  if physical_balance_start=0 or physical_balance_start<=packed_guard_start then
+    raise exception 'The expected packed-quantity Stock Out guard was not found';
+  end if;
+
+  updated_definition:=
+    substring(function_definition from 1 for packed_guard_start-1)
+    || E'\n    '
+    || substring(function_definition from physical_balance_start);
+
+  if pg_catalog.strpos(lower(updated_definition),'packed_quantity:=')>0
+    or pg_catalog.strpos(lower(updated_definition),'packed_quantity :=')>0
+  then
+    raise exception 'The obsolete packed-quantity Stock Out guard was not removed';
+  end if;
+  if pg_catalog.strpos(lower(updated_definition),'request_item.remaining_quantity')=0 then
+    raise exception 'The authoritative request remaining-quantity guard is missing';
+  end if;
+  if pg_catalog.strpos(lower(updated_definition),'balance.reserved')=0
+    or pg_catalog.strpos(lower(updated_definition),'balance.on_hand')=0
+    or pg_catalog.strpos(lower(updated_definition),'array_length(selected_serial_ids')=0
+  then
+    raise exception 'A required Stock Out safety validation is missing';
+  end if;
+
+  execute updated_definition;
+end
+$migration$;
+
+revoke all on function public.confirm_sales_stock_out(uuid,uuid,uuid,jsonb)
+  from public,anon,authenticated;
+grant execute on function public.confirm_sales_stock_out(uuid,uuid,uuid,jsonb)
+  to service_role;
+
+begin;
+
+-- Receivables Phase 1 is additive and operational only. Customer balances are
+-- derived from Sales. Non-Sales opening balances do not create accounting,
+-- cashbook, payroll, purchasing, or Sales payment entries.
+
+insert into public.app_modules(
+  key,name,description,icon_key,sort_order,is_active,is_implemented
+)
+values(
+  'receivables',
+  'Receivables',
+  'Operational control centre for customer outstanding and non-Sales receivables.',
+  'accounting',
+  115,
+  true,
+  true
+)
+on conflict(key) do update set
+  name=excluded.name,
+  description=excluded.description,
+  icon_key=excluded.icon_key,
+  sort_order=excluded.sort_order,
+  is_active=true,
+  is_implemented=true,
+  updated_at=now();
+
+insert into public.permissions(
+  module_id,key,name,description,action,is_sensitive,sort_order
+)
+select module.id,entry.key,entry.name,entry.description,entry.action,entry.is_sensitive,entry.sort_order
+from public.app_modules module
+cross join (values
+  ('receivables.view','View Receivables','Open the Receivables dashboard and authorized summaries.','view',false,10),
+  ('receivables.view_customer','View Customer Receivables','View customer outstanding derived from Sales and payments.','view_customer',true,20),
+  ('receivables.view_loans','View Loans and Advances','View non-Sales loans, advances, deposits, and operational transaction history.','view_loans',true,30),
+  ('receivables.create','Create Loans and Advances','Create a non-Sales receivable account without posting Accounting.','create',true,40),
+  ('receivables.manage_opening','Manage Opening Receivables','Create migrated opening receivables without fabricating historical cash or journal entries.','manage_opening',true,50)
+) as entry(key,name,description,action,is_sensitive,sort_order)
+where module.key='receivables'
+on conflict(key) do update set
+  module_id=excluded.module_id,
+  name=excluded.name,
+  description=excluded.description,
+  action=excluded.action,
+  is_sensitive=excluded.is_sensitive,
+  sort_order=excluded.sort_order,
+  is_active=true,
+  updated_at=now();
+
+create sequence if not exists public.receivable_number_seq start 1;
+
+create table public.receivable_external_parties (
+  id uuid primary key default gen_random_uuid(),
+  party_type text not null check(party_type in ('individual','company','other')),
+  display_name text not null check(char_length(trim(display_name)) between 2 and 180),
+  company_name text,
+  phone text,
+  email text,
+  external_reference text,
+  notes text,
+  is_active boolean not null default true,
+  created_by uuid not null references public.profiles(id) on delete restrict,
+  updated_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index receivable_external_parties_name_idx
+  on public.receivable_external_parties(display_name);
+create index receivable_external_parties_active_idx
+  on public.receivable_external_parties(is_active,updated_at desc);
+
+create table public.receivable_accounts (
+  id uuid primary key default gen_random_uuid(),
+  receivable_number text not null unique,
+  category text not null check(category in (
+    'employee_loan','customer_loan','company_loan','individual_loan',
+    'supplier_refundable_advance','security_deposit','recoverable_advance','other'
+  )),
+  borrower_type text not null check(borrower_type in (
+    'employee','customer','supplier','crm_company','crm_contact','external_party'
+  )),
+  employee_record_id uuid references public.hr_employee_records(id) on delete restrict,
+  customer_profile_id uuid references public.profiles(id) on delete restrict,
+  supplier_id uuid references public.suppliers(id) on delete restrict,
+  crm_company_id uuid references public.crm_companies(id) on delete restrict,
+  crm_contact_id uuid references public.crm_contacts(id) on delete restrict,
+  external_party_id uuid references public.receivable_external_parties(id) on delete restrict,
+  borrower_display_name_snapshot text not null,
+  currency char(3) not null default 'BDT' check(currency ~ '^[A-Z]{3}$'),
+  requested_amount numeric(18,4) not null check(requested_amount>0),
+  original_amount numeric(18,4) not null check(original_amount>0),
+  approved_amount numeric(18,4) check(approved_amount is null or approved_amount>=0),
+  default_repayment_method text check(default_repayment_method is null or default_repayment_method in (
+    'salary_deduction','cash','bank','mfs','other'
+  )),
+  installment_count integer check(installment_count is null or installment_count>0),
+  installment_amount numeric(18,4) check(installment_amount is null or installment_amount>0),
+  first_due_date date,
+  final_due_date date,
+  disbursement_date date,
+  status text not null default 'requested' check(status in (
+    'requested','under_review','approved','disbursed','active',
+    'fully_repaid','rejected','cancelled'
+  )),
+  notes text,
+  is_opening_balance boolean not null default false,
+  opening_as_of_date date,
+  opening_previously_repaid numeric(18,4) not null default 0 check(opening_previously_repaid>=0),
+  operation_id uuid not null unique,
+  operation_hash text not null,
+  created_by uuid not null references public.profiles(id) on delete restrict,
+  approved_by uuid references public.profiles(id) on delete set null,
+  updated_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  version bigint not null default 1 check(version>=1),
+  constraint receivable_accounts_one_borrower_check check(
+    num_nonnulls(
+      employee_record_id,customer_profile_id,supplier_id,crm_company_id,
+      crm_contact_id,external_party_id
+    )=1
+  ),
+  constraint receivable_accounts_borrower_target_check check(
+    (borrower_type='employee' and employee_record_id is not null) or
+    (borrower_type='customer' and customer_profile_id is not null) or
+    (borrower_type='supplier' and supplier_id is not null) or
+    (borrower_type='crm_company' and crm_company_id is not null) or
+    (borrower_type='crm_contact' and crm_contact_id is not null) or
+    (borrower_type='external_party' and external_party_id is not null)
+  ),
+  constraint receivable_accounts_dates_check check(
+    final_due_date is null or first_due_date is null or final_due_date>=first_due_date
+  ),
+  constraint receivable_accounts_opening_check check(
+    (is_opening_balance and opening_as_of_date is not null and status='active') or
+    (not is_opening_balance and opening_as_of_date is null and opening_previously_repaid=0)
+  ),
+  constraint receivable_accounts_opening_amount_check check(
+    opening_previously_repaid<=original_amount
+  )
+);
+
+create index receivable_accounts_status_idx
+  on public.receivable_accounts(status,updated_at desc);
+create index receivable_accounts_employee_idx
+  on public.receivable_accounts(employee_record_id,status)
+  where employee_record_id is not null;
+create index receivable_accounts_customer_idx
+  on public.receivable_accounts(customer_profile_id,status)
+  where customer_profile_id is not null;
+create index receivable_accounts_supplier_idx
+  on public.receivable_accounts(supplier_id,status)
+  where supplier_id is not null;
+create index receivable_accounts_due_idx
+  on public.receivable_accounts(first_due_date,status);
+
+create table public.receivable_transactions (
+  id uuid primary key default gen_random_uuid(),
+  receivable_account_id uuid not null references public.receivable_accounts(id) on delete restrict,
+  transaction_type text not null check(transaction_type in (
+    'opening_balance','disbursement','repayment','adjustment_increase',
+    'adjustment_decrease','reversal'
+  )),
+  direction text not null check(direction in ('increase','decrease')),
+  amount numeric(18,4) not null check(amount>0),
+  effective_date date not null,
+  payment_method text check(payment_method is null or payment_method in (
+    'salary_deduction','cash','bank','mfs','other'
+  )),
+  source text not null check(source in (
+    'opening_balance','manual','payroll','accounting','system'
+  )),
+  operation_id uuid not null unique,
+  payroll_record_id uuid references public.hr_payroll_records(id) on delete restrict,
+  journal_entry_id uuid references public.journal_entries(id) on delete restrict,
+  cashbook_entry_id uuid references public.cashbook_entries(id) on delete restrict,
+  reversal_of_transaction_id uuid references public.receivable_transactions(id) on delete restrict,
+  notes text,
+  metadata jsonb not null default '{}'::jsonb,
+  created_by uuid not null references public.profiles(id) on delete restrict,
+  created_at timestamptz not null default now(),
+  constraint receivable_transactions_reversal_check check(
+    (transaction_type='reversal' and reversal_of_transaction_id is not null) or
+    (transaction_type<>'reversal' and reversal_of_transaction_id is null)
+  )
+);
+
+create index receivable_transactions_account_idx
+  on public.receivable_transactions(receivable_account_id,effective_date desc,created_at desc);
+create index receivable_transactions_source_idx
+  on public.receivable_transactions(source,effective_date desc);
+
+create or replace function public.receivables_touch_updated_at()
+returns trigger language plpgsql set search_path='' as $$
+begin
+  new.updated_at=now();
+  if tg_table_name='receivable_accounts' then
+    new.version=old.version+1;
+  end if;
+  return new;
+end $$;
+
+create trigger receivable_external_parties_touch_updated_at
+before update on public.receivable_external_parties
+for each row execute function public.receivables_touch_updated_at();
+
+create trigger receivable_accounts_touch_updated_at
+before update on public.receivable_accounts
+for each row execute function public.receivables_touch_updated_at();
+
+create or replace function public.prevent_receivable_transaction_mutation()
+returns trigger language plpgsql set search_path='' as $$
+begin
+  raise exception 'Receivable transactions are immutable; create a reversal transaction instead';
+end $$;
+
+create trigger receivable_transactions_immutable
+before update or delete on public.receivable_transactions
+for each row execute function public.prevent_receivable_transaction_mutation();
+
+create or replace function public.next_receivable_number()
+returns text language sql volatile security definer set search_path='' as $$
+  select 'REC-'||to_char(timezone('Asia/Dhaka',now()),'YYYY')||'-'||
+    lpad(nextval('public.receivable_number_seq')::text,6,'0');
+$$;
+
+create or replace function public.resolve_receivable_borrower(
+  actor_profile_id uuid,
+  requested_borrower_type text,
+  requested_borrower_id uuid,
+  requested_external_party jsonb
+)
+returns table(
+  employee_record_id uuid,
+  customer_profile_id uuid,
+  supplier_id uuid,
+  crm_company_id uuid,
+  crm_contact_id uuid,
+  external_party_id uuid,
+  display_name text
+)
+language plpgsql volatile security definer set search_path='' as $$
+declare external_name text;
+begin
+  employee_record_id:=null;
+  customer_profile_id:=null;
+  supplier_id:=null;
+  crm_company_id:=null;
+  crm_contact_id:=null;
+  external_party_id:=null;
+  display_name:=null;
+
+  case requested_borrower_type
+    when 'employee' then
+      select employee.id,
+        coalesce(nullif(trim(profile.full_name),''),profile.email,employee.employee_number)
+      into employee_record_id,display_name
+      from public.hr_employee_records employee
+      join public.profiles profile on profile.id=employee.profile_id
+      where employee.id=requested_borrower_id;
+    when 'customer' then
+      select profile.id,
+        coalesce(nullif(trim(profile.company_name),''),nullif(trim(profile.full_name),''),profile.email)
+      into customer_profile_id,display_name
+      from public.profiles profile
+      where profile.id=requested_borrower_id and profile.role='customer';
+    when 'supplier' then
+      select supplier.id,supplier.name into supplier_id,display_name
+      from public.suppliers supplier where supplier.id=requested_borrower_id;
+    when 'crm_company' then
+      select company.id,company.name into crm_company_id,display_name
+      from public.crm_companies company where company.id=requested_borrower_id;
+    when 'crm_contact' then
+      select contact.id,contact.full_name into crm_contact_id,display_name
+      from public.crm_contacts contact where contact.id=requested_borrower_id;
+    when 'external_party' then
+      if requested_borrower_id is not null then
+        select party.id,party.display_name into external_party_id,display_name
+        from public.receivable_external_parties party
+        where party.id=requested_borrower_id and party.is_active;
+      else
+        external_name:=nullif(trim(requested_external_party->>'display_name'),'');
+        if external_name is null or char_length(external_name)<2 then
+          raise exception 'External party name is required';
+        end if;
+        insert into public.receivable_external_parties(
+          party_type,display_name,company_name,phone,email,external_reference,notes,created_by
+        ) values(
+          coalesce(nullif(requested_external_party->>'party_type',''),'other'),
+          left(external_name,180),
+          nullif(left(trim(requested_external_party->>'company_name'),180),''),
+          nullif(left(trim(requested_external_party->>'phone'),80),''),
+          nullif(left(trim(requested_external_party->>'email'),320),''),
+          nullif(left(trim(requested_external_party->>'external_reference'),180),''),
+          nullif(left(trim(requested_external_party->>'notes'),2000),''),
+          actor_profile_id
+        ) returning id,receivable_external_parties.display_name
+        into external_party_id,display_name;
+      end if;
+    else
+      raise exception 'Invalid borrower type';
+  end case;
+
+  if display_name is null then
+    raise exception 'Borrower not found';
+  end if;
+  return next;
+end $$;
+
+create or replace function public.create_receivable_account(
+  actor_profile_id uuid,
+  requested_operation_id uuid,
+  requested_category text,
+  requested_borrower_type text,
+  requested_borrower_id uuid,
+  requested_external_party jsonb,
+  requested_original_amount numeric,
+  requested_currency text,
+  requested_default_repayment_method text,
+  requested_installment_count integer,
+  requested_installment_amount numeric,
+  requested_first_due_date date,
+  requested_final_due_date date,
+  requested_notes text
+)
+returns uuid language plpgsql volatile security definer set search_path='' as $$
+declare
+  account_id uuid;
+  existing_hash text;
+  operation_hash text;
+  borrower record;
+  currency_code text:=upper(coalesce(nullif(trim(requested_currency),''),'BDT'));
+begin
+  perform public.assert_actor_permission(actor_profile_id,'receivables.create');
+  if requested_operation_id is null then raise exception 'Operation ID is required'; end if;
+  perform pg_advisory_xact_lock(hashtextextended(requested_operation_id::text,0));
+
+  operation_hash:=md5(jsonb_build_object(
+    'category',requested_category,
+    'borrower_type',requested_borrower_type,
+    'borrower_id',requested_borrower_id,
+    'external_party',coalesce(requested_external_party,'{}'::jsonb),
+    'original_amount',round(coalesce(requested_original_amount,0),4),
+    'currency',currency_code,
+    'repayment_method',requested_default_repayment_method,
+    'installment_count',requested_installment_count,
+    'installment_amount',requested_installment_amount,
+    'first_due_date',requested_first_due_date,
+    'final_due_date',requested_final_due_date,
+    'notes',nullif(trim(requested_notes),'')
+  )::text);
+
+  select account.id,account.operation_hash into account_id,existing_hash
+  from public.receivable_accounts account
+  where account.operation_id=requested_operation_id;
+  if account_id is not null then
+    if existing_hash<>operation_hash then
+      raise exception 'This operation ID was already used with different values';
+    end if;
+    return account_id;
+  end if;
+
+  if coalesce(requested_original_amount,0)<=0 then raise exception 'Original amount must be greater than zero'; end if;
+  if currency_code !~ '^[A-Z]{3}$' then raise exception 'Invalid currency'; end if;
+  if requested_installment_count is not null and requested_installment_count<=0 then raise exception 'Invalid installment count'; end if;
+  if requested_installment_amount is not null and requested_installment_amount<=0 then raise exception 'Invalid installment amount'; end if;
+  if requested_final_due_date is not null and requested_first_due_date is not null and requested_final_due_date<requested_first_due_date then
+    raise exception 'Final due date cannot be before first due date';
+  end if;
+
+  select * into borrower from public.resolve_receivable_borrower(
+    actor_profile_id,requested_borrower_type,requested_borrower_id,
+    coalesce(requested_external_party,'{}'::jsonb)
+  );
+
+  account_id:=gen_random_uuid();
+  insert into public.receivable_accounts(
+    id,receivable_number,category,borrower_type,
+    employee_record_id,customer_profile_id,supplier_id,crm_company_id,crm_contact_id,external_party_id,
+    borrower_display_name_snapshot,currency,requested_amount,original_amount,
+    default_repayment_method,installment_count,installment_amount,first_due_date,final_due_date,
+    status,notes,is_opening_balance,operation_id,operation_hash,created_by
+  ) values(
+    account_id,public.next_receivable_number(),requested_category,requested_borrower_type,
+    borrower.employee_record_id,borrower.customer_profile_id,borrower.supplier_id,
+    borrower.crm_company_id,borrower.crm_contact_id,borrower.external_party_id,
+    borrower.display_name,currency_code,round(requested_original_amount,4),round(requested_original_amount,4),
+    requested_default_repayment_method,requested_installment_count,
+    case when requested_installment_amount is null then null else round(requested_installment_amount,4) end,
+    requested_first_due_date,requested_final_due_date,'requested',
+    nullif(left(trim(requested_notes),4000),''),false,requested_operation_id,operation_hash,actor_profile_id
+  );
+
+  insert into public.audit_logs(
+    actor_id,actor_role,action,module,entity_type,entity_id,description,new_values,metadata
+  ) values(
+    actor_profile_id,(select role from public.profiles where id=actor_profile_id),
+    'receivable.account_created','receivables','receivable_account',account_id::text,
+    'Non-Sales receivable account created.',
+    jsonb_build_object(
+      'receivable_number',(select receivable_number from public.receivable_accounts where id=account_id),
+      'category',requested_category,'borrower_type',requested_borrower_type,
+      'borrower',borrower.display_name,'amount',round(requested_original_amount,4),
+      'currency',currency_code,'status','requested'
+    ),
+    jsonb_build_object('operation_id',requested_operation_id)
+  );
+  return account_id;
+end $$;
+
+create or replace function public.create_opening_receivable(
+  actor_profile_id uuid,
+  requested_operation_id uuid,
+  requested_category text,
+  requested_borrower_type text,
+  requested_borrower_id uuid,
+  requested_external_party jsonb,
+  requested_original_amount numeric,
+  requested_previously_repaid numeric,
+  requested_opening_outstanding numeric,
+  requested_as_of_date date,
+  requested_currency text,
+  requested_default_repayment_method text,
+  requested_installment_count integer,
+  requested_installment_amount numeric,
+  requested_first_due_date date,
+  requested_final_due_date date,
+  requested_notes text
+)
+returns uuid language plpgsql volatile security definer set search_path='' as $$
+declare
+  account_id uuid;
+  existing_hash text;
+  operation_hash text;
+  transaction_id uuid:=gen_random_uuid();
+  borrower record;
+  currency_code text:=upper(coalesce(nullif(trim(requested_currency),''),'BDT'));
+begin
+  perform public.assert_actor_permission(actor_profile_id,'receivables.manage_opening');
+  if requested_operation_id is null then raise exception 'Operation ID is required'; end if;
+  perform pg_advisory_xact_lock(hashtextextended(requested_operation_id::text,0));
+
+  operation_hash:=md5(jsonb_build_object(
+    'category',requested_category,
+    'borrower_type',requested_borrower_type,
+    'borrower_id',requested_borrower_id,
+    'external_party',coalesce(requested_external_party,'{}'::jsonb),
+    'original_amount',round(coalesce(requested_original_amount,0),4),
+    'previously_repaid',round(coalesce(requested_previously_repaid,0),4),
+    'opening_outstanding',round(coalesce(requested_opening_outstanding,0),4),
+    'as_of_date',requested_as_of_date,
+    'currency',currency_code,
+    'repayment_method',requested_default_repayment_method,
+    'installment_count',requested_installment_count,
+    'installment_amount',requested_installment_amount,
+    'first_due_date',requested_first_due_date,
+    'final_due_date',requested_final_due_date,
+    'notes',nullif(trim(requested_notes),'')
+  )::text);
+
+  select account.id,account.operation_hash into account_id,existing_hash
+  from public.receivable_accounts account
+  where account.operation_id=requested_operation_id;
+  if account_id is not null then
+    if existing_hash<>operation_hash then
+      raise exception 'This operation ID was already used with different values';
+    end if;
+    return account_id;
+  end if;
+
+  if coalesce(requested_original_amount,0)<=0 then raise exception 'Original amount must be greater than zero'; end if;
+  if coalesce(requested_previously_repaid,0)<0 then raise exception 'Previously repaid amount cannot be negative'; end if;
+  if coalesce(requested_opening_outstanding,0)<=0 then raise exception 'Opening outstanding must be greater than zero'; end if;
+  if round(requested_original_amount-requested_previously_repaid,4)<>round(requested_opening_outstanding,4) then
+    raise exception 'Opening outstanding must equal original amount minus previously repaid amount';
+  end if;
+  if requested_as_of_date is null then raise exception 'Opening as-of date is required'; end if;
+  if currency_code !~ '^[A-Z]{3}$' then raise exception 'Invalid currency'; end if;
+  if requested_installment_count is not null and requested_installment_count<=0 then raise exception 'Invalid installment count'; end if;
+  if requested_installment_amount is not null and requested_installment_amount<=0 then raise exception 'Invalid installment amount'; end if;
+  if requested_final_due_date is not null and requested_first_due_date is not null and requested_final_due_date<requested_first_due_date then
+    raise exception 'Final due date cannot be before first due date';
+  end if;
+
+  select * into borrower from public.resolve_receivable_borrower(
+    actor_profile_id,requested_borrower_type,requested_borrower_id,
+    coalesce(requested_external_party,'{}'::jsonb)
+  );
+
+  account_id:=gen_random_uuid();
+  insert into public.receivable_accounts(
+    id,receivable_number,category,borrower_type,
+    employee_record_id,customer_profile_id,supplier_id,crm_company_id,crm_contact_id,external_party_id,
+    borrower_display_name_snapshot,currency,requested_amount,original_amount,approved_amount,
+    default_repayment_method,installment_count,installment_amount,first_due_date,final_due_date,
+    status,notes,is_opening_balance,opening_as_of_date,opening_previously_repaid,
+    operation_id,operation_hash,created_by,approved_by
+  ) values(
+    account_id,public.next_receivable_number(),requested_category,requested_borrower_type,
+    borrower.employee_record_id,borrower.customer_profile_id,borrower.supplier_id,
+    borrower.crm_company_id,borrower.crm_contact_id,borrower.external_party_id,
+    borrower.display_name,currency_code,round(requested_original_amount,4),round(requested_original_amount,4),
+    round(requested_original_amount,4),requested_default_repayment_method,requested_installment_count,
+    case when requested_installment_amount is null then null else round(requested_installment_amount,4) end,
+    requested_first_due_date,requested_final_due_date,'active',
+    nullif(left(trim(requested_notes),4000),''),true,requested_as_of_date,
+    round(requested_previously_repaid,4),requested_operation_id,operation_hash,actor_profile_id,actor_profile_id
+  );
+
+  insert into public.receivable_transactions(
+    id,receivable_account_id,transaction_type,direction,amount,effective_date,
+    source,operation_id,notes,metadata,created_by
+  ) values(
+    transaction_id,account_id,'opening_balance','increase',round(requested_opening_outstanding,4),
+    requested_as_of_date,'opening_balance',requested_operation_id,
+    'Opening / migrated existing receivable balance.',
+    jsonb_build_object(
+      'original_amount',round(requested_original_amount,4),
+      'previously_repaid',round(requested_previously_repaid,4),
+      'opening_outstanding',round(requested_opening_outstanding,4),
+      'as_of_date',requested_as_of_date,
+      'historical_accounting_posted',false
+    ),
+    actor_profile_id
+  );
+
+  insert into public.audit_logs(
+    actor_id,actor_role,action,module,entity_type,entity_id,description,new_values,metadata
+  ) values(
+    actor_profile_id,(select role from public.profiles where id=actor_profile_id),
+    'receivable.opening_created','receivables','receivable_account',account_id::text,
+    'Opening / existing receivable created without historical Accounting posting.',
+    jsonb_build_object(
+      'receivable_number',(select receivable_number from public.receivable_accounts where id=account_id),
+      'category',requested_category,'borrower_type',requested_borrower_type,
+      'borrower',borrower.display_name,'original_amount',round(requested_original_amount,4),
+      'previously_repaid',round(requested_previously_repaid,4),
+      'opening_outstanding',round(requested_opening_outstanding,4),
+      'as_of_date',requested_as_of_date,'currency',currency_code
+    ),
+    jsonb_build_object(
+      'operation_id',requested_operation_id,
+      'transaction_id',transaction_id,
+      'historical_accounting_posted',false
+    )
+  );
+  return account_id;
+end $$;
+
+create or replace view public.customer_receivables_v as
+select
+  'customer_sale'::text as source_type,
+  sale.id as source_id,
+  sale.order_number as reference_number,
+  invoice.document_number as invoice_number,
+  'customer_receivable'::text as receivable_type,
+  'customer'::text as party_type,
+  customer.id as party_id,
+  coalesce(
+    nullif(trim(customer.company_name),''),
+    nullif(trim(customer.full_name),''),
+    customer.email,
+    'Customer'
+  ) as party_name,
+  sale.currency,
+  sale.total_amount as original_amount,
+  sale.paid_amount,
+  greatest(sale.total_amount-sale.paid_amount,0::numeric) as outstanding_amount,
+  case
+    when greatest(sale.total_amount-sale.paid_amount,0::numeric)=0 then 'paid'
+    when sale.paid_amount>0 then 'partially_paid'
+    else 'current'
+  end as receivable_status,
+  sale.created_at::date as issue_date,
+  null::date as due_date,
+  null::integer as days_overdue,
+  sale.created_by as responsible_profile_id,
+  last_payment.payment_date as last_activity_date,
+  false as is_opening_balance
+from public.sales_orders sale
+join public.profiles customer on customer.id=sale.customer_profile_id
+left join lateral (
+  select document.document_number
+  from public.sale_documents document
+  where document.order_id=sale.id
+    and document.document_type='invoice'
+    and document.status='generated'
+  order by document.revision_number desc,document.created_at desc,document.id desc
+  limit 1
+) invoice on true
+left join lateral (
+  select payment.payment_date
+  from public.sale_payments payment
+  where payment.order_id=sale.id and payment.status='received'
+  order by payment.payment_date desc,payment.created_at desc,payment.id desc
+  limit 1
+) last_payment on true
+where sale.status<>'cancelled';
+
+create or replace view public.non_sales_receivables_v as
+with movement as (
+  select
+    transaction.receivable_account_id,
+    coalesce(sum(
+      case transaction.direction
+        when 'increase' then transaction.amount
+        else -transaction.amount
+      end
+    ),0::numeric) as outstanding_amount,
+    max(transaction.effective_date) as last_activity_date
+  from public.receivable_transactions transaction
+  group by transaction.receivable_account_id
+)
+select
+  'non_sales'::text as source_type,
+  account.id as source_id,
+  account.receivable_number as reference_number,
+  null::text as invoice_number,
+  account.category as receivable_type,
+  account.borrower_type as party_type,
+  coalesce(
+    account.employee_record_id,account.customer_profile_id,account.supplier_id,
+    account.crm_company_id,account.crm_contact_id,account.external_party_id
+  ) as party_id,
+  account.borrower_display_name_snapshot as party_name,
+  account.currency,
+  account.original_amount,
+  case
+    when account.status in ('requested','under_review','approved')
+      and movement.receivable_account_id is null then 0::numeric
+    else greatest(account.original_amount-greatest(coalesce(movement.outstanding_amount,0),0),0::numeric)
+  end as paid_amount,
+  greatest(coalesce(movement.outstanding_amount,0),0::numeric) as outstanding_amount,
+  case
+    when account.status in ('rejected','cancelled') then account.status
+    when account.status='requested' then 'requested'
+    when greatest(coalesce(movement.outstanding_amount,0),0::numeric)=0 then 'fully_repaid'
+    else account.status
+  end as receivable_status,
+  account.created_at::date as issue_date,
+  account.first_due_date as due_date,
+  case
+    when account.first_due_date is null or account.first_due_date>=current_date then null
+    else current_date-account.first_due_date
+  end as days_overdue,
+  account.created_by as responsible_profile_id,
+  movement.last_activity_date,
+  account.is_opening_balance
+from public.receivable_accounts account
+left join movement on movement.receivable_account_id=account.id;
+
+create or replace view public.receivables_overview_v as
+select * from public.customer_receivables_v
+union all
+select * from public.non_sales_receivables_v;
+
+alter table public.receivable_external_parties enable row level security;
+alter table public.receivable_accounts enable row level security;
+alter table public.receivable_transactions enable row level security;
+
+create policy "authorized staff read receivable external parties"
+on public.receivable_external_parties for select to authenticated
+using(
+  public.is_current_user_admin() or
+  public.current_user_has_permission('receivables.view_loans')
+);
+
+create policy "authorized staff read receivable accounts"
+on public.receivable_accounts for select to authenticated
+using(
+  public.is_current_user_admin() or
+  public.current_user_has_permission('receivables.view_loans')
+);
+
+create policy "authorized staff read receivable transactions"
+on public.receivable_transactions for select to authenticated
+using(
+  public.is_current_user_admin() or
+  public.current_user_has_permission('receivables.view_loans')
+);
+
+revoke all on table public.receivable_external_parties from anon,authenticated;
+revoke all on table public.receivable_accounts from anon,authenticated;
+revoke all on table public.receivable_transactions from anon,authenticated;
+grant select on table public.receivable_external_parties to authenticated;
+grant select on table public.receivable_accounts to authenticated;
+grant select on table public.receivable_transactions to authenticated;
+grant all on table public.receivable_external_parties to service_role;
+grant all on table public.receivable_accounts to service_role;
+grant all on table public.receivable_transactions to service_role;
+grant usage,select on sequence public.receivable_number_seq to service_role;
+
+revoke all on public.customer_receivables_v from public,anon,authenticated;
+revoke all on public.non_sales_receivables_v from public,anon,authenticated;
+revoke all on public.receivables_overview_v from public,anon,authenticated;
+grant select on public.customer_receivables_v to service_role;
+grant select on public.non_sales_receivables_v to service_role;
+grant select on public.receivables_overview_v to service_role;
+
+revoke all on function public.next_receivable_number() from public,anon,authenticated;
+revoke all on function public.resolve_receivable_borrower(uuid,text,uuid,jsonb) from public,anon,authenticated;
+revoke all on function public.create_receivable_account(
+  uuid,uuid,text,text,uuid,jsonb,numeric,text,text,integer,numeric,date,date,text
+) from public,anon,authenticated;
+revoke all on function public.create_opening_receivable(
+  uuid,uuid,text,text,uuid,jsonb,numeric,numeric,numeric,date,text,text,integer,numeric,date,date,text
+) from public,anon,authenticated;
+grant execute on function public.next_receivable_number() to service_role;
+grant execute on function public.resolve_receivable_borrower(uuid,text,uuid,jsonb) to service_role;
+grant execute on function public.create_receivable_account(
+  uuid,uuid,text,text,uuid,jsonb,numeric,text,text,integer,numeric,date,date,text
+) to service_role;
+grant execute on function public.create_opening_receivable(
+  uuid,uuid,text,text,uuid,jsonb,numeric,numeric,numeric,date,text,text,integer,numeric,date,date,text
+) to service_role;
+
+select pg_notify('pgrst','reload schema');
+
+commit;
+
+begin;
+
+alter table public.sales_orders
+  add column if not exists payment_terms_type text,
+  add column if not exists credit_period_days integer,
+  add column if not exists payment_due_date date;
+
+alter table public.sales_orders
+  drop constraint if exists sales_orders_payment_terms_type_check,
+  add constraint sales_orders_payment_terms_type_check
+    check(payment_terms_type is null or payment_terms_type in ('immediate','partial','credit')),
+  drop constraint if exists sales_orders_credit_period_days_check,
+  add constraint sales_orders_credit_period_days_check
+    check(credit_period_days is null or credit_period_days between 1 and 3650),
+  drop constraint if exists sales_orders_commercial_terms_shape_check,
+  add constraint sales_orders_commercial_terms_shape_check check(
+    (payment_terms_type is null and credit_period_days is null) or
+    (payment_terms_type='immediate' and credit_period_days is null and payment_due_date is null) or
+    (payment_terms_type in ('partial','credit') and (credit_period_days is not null or payment_due_date is not null))
+  );
+
+create or replace function public.update_sale_commercial_terms(
+  actor_profile_id uuid,
+  requested_order_id uuid,
+  requested_operation_id uuid,
+  requested_payment_terms_type text,
+  requested_credit_period_days integer,
+  requested_payment_due_date date,
+  requested_reason text
+) returns uuid
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  sale_row public.sales_orders%rowtype;
+  actor_row public.profiles%rowtype;
+  normalized_type text:=nullif(lower(trim(requested_payment_terms_type)),'');
+  normalized_reason text:=nullif(left(trim(requested_reason),1000),'');
+  has_non_void_invoice boolean;
+  has_all_scope boolean;
+  has_own_scope boolean;
+begin
+  if requested_operation_id is null then
+    raise exception 'Commercial terms operation ID is required';
+  end if;
+
+  select * into sale_row
+  from public.sales_orders
+  where id=requested_order_id
+  for update;
+  if not found then raise exception 'Sale not found'; end if;
+
+  if exists(
+    select 1 from public.audit_logs log
+    where log.module='sales'
+      and log.entity_type='sales_order'
+      and log.entity_id=requested_order_id::text
+      and log.action='sale.commercial_terms_updated'
+      and log.metadata->>'operation_id'=requested_operation_id::text
+  ) then
+    return requested_order_id;
+  end if;
+
+  perform public.assert_actor_permission(actor_profile_id,'sales.edit');
+  select * into actor_row from public.profiles where id=actor_profile_id;
+  if actor_row.id is null or actor_row.status<>'active' then
+    raise exception 'Active Sales editor is required';
+  end if;
+
+  if actor_row.role<>'admin' then
+    if actor_row.role<>'employee' then raise exception 'Sales access denied'; end if;
+    select exists(
+      select 1 from public.effective_permissions_for_profile(actor_profile_id) permission
+      where permission.permission_key in ('sales.view','sales.view_all')
+    ) into has_all_scope;
+    select exists(
+      select 1 from public.effective_permissions_for_profile(actor_profile_id) permission
+      where permission.permission_key='sales.view_own'
+    ) into has_own_scope;
+    if not has_all_scope and (not has_own_scope or sale_row.created_by <> actor_profile_id) then
+      raise exception 'Sales access denied';
+    end if;
+  end if;
+
+  select exists(
+    select 1 from public.sale_documents document
+    where document.order_id=requested_order_id
+      and document.document_type='invoice'
+      and document.status <> 'voided'
+  ) into has_non_void_invoice;
+
+  if has_non_void_invoice then
+    if normalized_type is distinct from sale_row.payment_terms_type then
+      raise exception 'Payment terms type cannot be changed after invoice finalization';
+    end if;
+    if requested_credit_period_days is distinct from sale_row.credit_period_days then
+      raise exception 'Credit period cannot be changed after invoice finalization';
+    end if;
+    if requested_payment_due_date is null then
+      raise exception 'Explicit due date is required after invoice finalization';
+    end if;
+    if normalized_reason is null then
+      raise exception 'Correction reason is required after invoice finalization';
+    end if;
+  else
+    if normalized_type not in ('immediate','partial','credit') then
+      raise exception 'Payment terms type is invalid';
+    end if;
+    if requested_credit_period_days is not null and
+       (requested_credit_period_days<1 or requested_credit_period_days>3650) then
+      raise exception 'Credit period must be between 1 and 3650 days';
+    end if;
+    if normalized_type='immediate' and
+       (requested_credit_period_days is not null or requested_payment_due_date is not null) then
+      raise exception 'Immediate payment cannot include a credit period or due date';
+    end if;
+    if normalized_type in ('partial','credit') and
+       requested_credit_period_days is null and requested_payment_due_date is null then
+      raise exception 'Partial or credit terms require a credit period or explicit due date';
+    end if;
+  end if;
+
+  update public.sales_orders set
+    payment_terms_type=normalized_type,
+    credit_period_days=requested_credit_period_days,
+    payment_due_date=requested_payment_due_date,
+    updated_by=actor_profile_id,
+    updated_at=now()
+  where id=requested_order_id;
+
+  insert into public.audit_logs(
+    actor_id,actor_role,action,module,entity_type,entity_id,description,
+    old_values,new_values,metadata
+  ) values(
+    actor_profile_id,actor_row.role,'sale.commercial_terms_updated','sales',
+    'sales_order',requested_order_id::text,
+    case when has_non_void_invoice
+      then 'Sale payment due date corrected after invoice finalization.'
+      else 'Sale commercial payment terms updated.' end,
+    jsonb_build_object(
+      'payment_terms_type',sale_row.payment_terms_type,
+      'credit_period_days',sale_row.credit_period_days,
+      'payment_due_date',sale_row.payment_due_date
+    ),
+    jsonb_build_object(
+      'payment_terms_type',normalized_type,
+      'credit_period_days',requested_credit_period_days,
+      'payment_due_date',requested_payment_due_date,
+      'reason',normalized_reason
+    ),
+    jsonb_build_object(
+      'operation_id',requested_operation_id,
+      'invoice_finalized',has_non_void_invoice,
+      'reason',normalized_reason
+    )
+  );
+
+  return requested_order_id;
+end $$;
+
+create or replace view public.customer_receivables_detail_v as
+with invoice_rollup as (
+  select
+    document.order_id,
+    min(timezone('Asia/Dhaka',document.created_at)::date) as anchor_date
+  from public.sale_documents document
+  where document.document_type='invoice'
+    and document.status <> 'voided'
+  group by document.order_id
+), latest_invoice as (
+  select distinct on(document.order_id)
+    document.order_id,
+    document.document_number,
+    timezone('Asia/Dhaka',document.created_at)::date as invoice_date
+  from public.sale_documents document
+  where document.document_type='invoice'
+    and document.status <> 'voided'
+  order by document.order_id,document.revision_number desc,document.created_at desc,document.id desc
+), last_payment as (
+  select distinct on(payment.order_id)
+    payment.order_id,
+    payment.payment_date
+  from public.sale_payments payment
+  where payment.status='received'
+  order by payment.order_id,payment.payment_date desc,payment.created_at desc,payment.id desc
+), derived as (
+  select
+    sale.id as source_id,
+    sale.order_number as reference_number,
+    latest_invoice.document_number as invoice_number,
+    latest_invoice.invoice_date,
+    invoice.anchor_date as invoice_anchor_date,
+    sale.customer_profile_id as customer_id,
+    customer.full_name as customer_name,
+    customer.company_name,
+    customer.email as customer_email,
+    customer.phone as customer_phone,
+    coalesce(nullif(trim(customer.company_name),''),nullif(trim(customer.full_name),''),customer.email,'Customer') as party_name,
+    sale.created_by as responsible_profile_id,
+    coalesce(nullif(trim(salesperson.full_name),''),salesperson.email,'Salesperson') as salesperson_name,
+    sale.currency,
+    sale.total_amount as original_amount,
+    sale.paid_amount,
+    sale.refunded_amount,
+    greatest(sale.total_amount-sale.paid_amount,0::numeric) as outstanding_amount,
+    sale.payment_status,
+    sale.payment_terms_type,
+    sale.credit_period_days,
+    sale.payment_due_date,
+    coalesce(sale.payment_due_date,invoice.anchor_date+sale.credit_period_days) as due_date,
+    coalesce(latest_invoice.invoice_date,timezone('Asia/Dhaka',sale.created_at)::date) as issue_date,
+    last_payment.payment_date as last_payment_date
+  from public.sales_orders sale
+  join public.profiles customer on customer.id=sale.customer_profile_id
+  join public.profiles salesperson on salesperson.id=sale.created_by
+  left join invoice_rollup invoice on invoice.order_id=sale.id
+  left join latest_invoice on latest_invoice.order_id=sale.id
+  left join last_payment on last_payment.order_id=sale.id
+  where sale.status not in ('draft','cancelled')
+), classified as (
+  select
+    derived.*,
+    case
+      when derived.outstanding_amount<=0 then 'paid'
+      when derived.due_date is null then 'no_due_date'
+      when derived.due_date<timezone('Asia/Dhaka',now())::date then 'overdue'
+      when derived.due_date<=timezone('Asia/Dhaka',now())::date+7 then 'due_soon'
+      else 'current'
+    end as receivables_status,
+    case
+      when derived.outstanding_amount<=0 then 'paid'
+      when derived.due_date is null then 'no_due_date'
+      when derived.due_date>timezone('Asia/Dhaka',now())::date then 'not_yet_due'
+      when derived.due_date=timezone('Asia/Dhaka',now())::date then 'due_today'
+      when timezone('Asia/Dhaka',now())::date-derived.due_date<=30 then '1_30_days_overdue'
+      when timezone('Asia/Dhaka',now())::date-derived.due_date<=60 then '31_60_days_overdue'
+      when timezone('Asia/Dhaka',now())::date-derived.due_date<=90 then '61_90_days_overdue'
+      else '90_plus_days_overdue'
+    end as aging_bucket
+  from derived
+)
+select
+  classified.*,
+  case
+    when classified.outstanding_amount<=0 or classified.due_date is null then null
+    when classified.due_date<=timezone('Asia/Dhaka',now())::date
+      then timezone('Asia/Dhaka',now())::date-classified.due_date
+    else null
+  end as days_overdue
+from classified;
+
+create or replace view public.customer_receivables_v as
+select
+  'customer_sale'::text as source_type,
+  detail.source_id,
+  detail.reference_number,
+  detail.invoice_number,
+  'customer_receivable'::text as receivable_type,
+  'customer'::text as party_type,
+  detail.customer_id as party_id,
+  detail.party_name,
+  detail.currency,
+  detail.original_amount,
+  detail.paid_amount,
+  detail.outstanding_amount,
+  detail.receivables_status as receivable_status,
+  detail.issue_date,
+  detail.due_date,
+  detail.days_overdue,
+  detail.responsible_profile_id,
+  detail.last_payment_date as last_activity_date,
+  false as is_opening_balance
+from public.customer_receivables_detail_v detail;
+
+create or replace view public.receivables_overview_v as
+select * from public.customer_receivables_v
+union all
+select * from public.non_sales_receivables_v;
+
+create or replace view public.customer_receivables_summary_v as
+select
+  detail.customer_id,
+  detail.customer_name,
+  detail.company_name,
+  detail.customer_email,
+  detail.customer_phone,
+  detail.party_name,
+  detail.currency,
+  detail.responsible_profile_id,
+  sum(detail.original_amount) as total_invoiced,
+  sum(detail.paid_amount) as total_paid,
+  sum(detail.outstanding_amount) as total_outstanding,
+  sum(case when detail.receivables_status='overdue' then detail.outstanding_amount else 0::numeric end) as total_overdue,
+  count(*)::integer as sale_count
+from public.customer_receivables_detail_v detail
+group by
+  detail.customer_id,detail.customer_name,detail.company_name,detail.customer_email,
+  detail.customer_phone,detail.party_name,detail.currency,detail.responsible_profile_id;
+
+create or replace view public.customer_receivables_metrics_v as
+with business_date as (
+  select timezone('Asia/Dhaka',now())::date as today
+), exposure as (
+  select
+    detail.currency,
+    detail.responsible_profile_id,
+    sum(detail.outstanding_amount) as customer_outstanding,
+    sum(case when detail.receivables_status in ('current','due_soon') then detail.outstanding_amount else 0::numeric end) as current_outstanding,
+    sum(case when detail.due_date=business_date.today and detail.outstanding_amount>0 then detail.outstanding_amount else 0::numeric end) as due_today,
+    sum(case when detail.due_date>business_date.today and detail.due_date<=business_date.today+7 and detail.outstanding_amount>0 then detail.outstanding_amount else 0::numeric end) as due_next_7_days,
+    sum(case when detail.receivables_status='overdue' then detail.outstanding_amount else 0::numeric end) as overdue,
+    sum(case when detail.receivables_status='no_due_date' then detail.outstanding_amount else 0::numeric end) as no_due_date,
+    count(*) filter(where detail.outstanding_amount>0)::integer as open_record_count
+  from public.customer_receivables_detail_v detail
+  cross join business_date
+  group by detail.currency,detail.responsible_profile_id
+), collections as (
+  select
+    sale.currency,
+    sale.created_by as responsible_profile_id,
+    sum(payment.amount) as collected_this_month
+  from public.sale_payments payment
+  join public.sales_orders sale on sale.id=payment.order_id
+  cross join business_date
+  where payment.status='received'
+    and payment.payment_date>=date_trunc('month',business_date.today)::date
+    and payment.payment_date<(date_trunc('month',business_date.today)+interval '1 month')::date
+    and sale.status not in ('draft','cancelled')
+  group by sale.currency,sale.created_by
+)
+select
+  coalesce(exposure.currency,collections.currency) as currency,
+  coalesce(exposure.responsible_profile_id,collections.responsible_profile_id) as responsible_profile_id,
+  coalesce(exposure.customer_outstanding,0::numeric) as customer_outstanding,
+  coalesce(exposure.current_outstanding,0::numeric) as current_outstanding,
+  coalesce(exposure.due_today,0::numeric) as due_today,
+  coalesce(exposure.due_next_7_days,0::numeric) as due_next_7_days,
+  coalesce(exposure.overdue,0::numeric) as overdue,
+  coalesce(exposure.no_due_date,0::numeric) as no_due_date,
+  coalesce(collections.collected_this_month,0::numeric) as collected_this_month,
+  coalesce(exposure.open_record_count,0) as open_record_count
+from exposure
+full join collections
+  on collections.currency=exposure.currency
+ and collections.responsible_profile_id=exposure.responsible_profile_id;
+
+revoke all on public.customer_receivables_v from public,anon,authenticated;
+revoke all on public.customer_receivables_detail_v from public,anon,authenticated;
+revoke all on public.customer_receivables_summary_v from public,anon,authenticated;
+revoke all on public.customer_receivables_metrics_v from public,anon,authenticated;
+revoke all on public.receivables_overview_v from public,anon,authenticated;
+grant select on public.customer_receivables_v to service_role;
+grant select on public.customer_receivables_detail_v to service_role;
+grant select on public.customer_receivables_summary_v to service_role;
+grant select on public.customer_receivables_metrics_v to service_role;
+grant select on public.receivables_overview_v to service_role;
+
+revoke all on function public.update_sale_commercial_terms(
+  uuid,uuid,uuid,text,integer,date,text
+) from public,anon,authenticated;
+grant execute on function public.update_sale_commercial_terms(
+  uuid,uuid,uuid,text,integer,date,text
+) to service_role;
+
+select pg_notify('pgrst','reload schema');
+
+commit;
+
+create or replace function public.update_quotation_details_and_totals(
+  actor_profile_id uuid,
+  requested_quotation_id uuid,
+  requested_expected_status text,
+  requested_subject text,
+  requested_company_name text,
+  requested_customer_tax_identification_number text,
+  requested_required_by date,
+  requested_expiration_date date,
+  requested_terms_and_conditions text,
+  requested_payment_terms text,
+  requested_delivery_information text,
+  requested_customer_notes text,
+  requested_internal_notes text,
+  requested_discount_amount numeric,
+  requested_tax_amount numeric
+) returns uuid
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  actor public.profiles%rowtype;
+  quotation public.quotation_requests%rowtype;
+  can_view_all boolean;
+  can_view_own boolean;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'quotations.edit');
+  select * into actor from public.profiles p
+  where p.id=actor_profile_id and p.status='active';
+  if actor.id is null then raise exception 'Active actor not found'; end if;
+
+  select * into quotation
+  from public.quotation_requests q
+  where q.id=requested_quotation_id
+  for update;
+  if quotation.id is null then raise exception 'Quotation not found'; end if;
+
+  can_view_all:=coalesce(actor.role='admin',false) or exists(
+    select 1 from public.effective_permissions_for_profile(actor_profile_id) e
+    where e.permission_key in ('quotations.view','quotations.view_all')
+  );
+  can_view_own:=exists(
+    select 1 from public.effective_permissions_for_profile(actor_profile_id) e
+    where e.permission_key='quotations.view_own'
+  );
+  if not can_view_all and not (
+    can_view_own and coalesce(quotation.created_by=actor_profile_id,false)
+  ) then
+    raise exception 'Quotation access denied';
+  end if;
+
+  if requested_expected_status is distinct from 'draft'
+    or quotation.status is distinct from 'draft'
+  then
+    raise exception 'Draft quotation changed before its details could be saved';
+  end if;
+
+  update public.quotation_requests set
+    subject=requested_subject,
+    company_name=requested_company_name,
+    customer_tax_identification_number=requested_customer_tax_identification_number,
+    required_by=requested_required_by,
+    expiration_date=requested_expiration_date,
+    terms_and_conditions=requested_terms_and_conditions,
+    payment_terms=requested_payment_terms,
+    delivery_information=requested_delivery_information,
+    customer_notes=requested_customer_notes,
+    message=requested_customer_notes,
+    internal_notes=requested_internal_notes,
+    discount_amount=requested_discount_amount,
+    tax_amount=requested_tax_amount,
+    updated_by=actor_profile_id,
+    updated_at=now()
+  where id=quotation.id;
+
+  perform public.refresh_quotation_totals(quotation.id);
+  return quotation.id;
+end $$;
+
+create or replace function public.update_draft_quotation(
+  actor_profile_id uuid,
+  requested_quotation_id uuid,
+  requested_expected_updated_at timestamp with time zone,
+  requested_subject text,
+  requested_company_name text,
+  requested_customer_tax_identification_number text,
+  requested_required_by date,
+  requested_expiration_date date,
+  requested_terms_and_conditions text,
+  requested_payment_terms text,
+  requested_delivery_information text,
+  requested_customer_notes text,
+  requested_internal_notes text,
+  requested_discount_amount numeric,
+  requested_tax_amount numeric,
+  requested_items jsonb
+) returns uuid
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  actor public.profiles%rowtype;
+  quotation public.quotation_requests%rowtype;
+  existing_item public.quotation_request_items%rowtype;
+  product_row public.products%rowtype;
+  variation_row public.product_variations%rowtype;
+  entry jsonb;
+  requested_product_id uuid;
+  requested_variation_id uuid;
+  requested_line_key text;
+  existing_line_keys text[]:=array[]::text[];
+  seen_line_keys text[]:=array[]::text[];
+  normalized_items jsonb:='[]'::jsonb;
+  item_quantity numeric;
+  item_unit_price numeric;
+  item_line_discount numeric;
+  item_line_tax numeric;
+  item_product_name text;
+  item_sku text;
+  item_currency text;
+  header_discount numeric:=round(coalesce(requested_discount_amount,0),2);
+  header_tax numeric:=round(coalesce(requested_tax_amount,0),2);
+  can_view_all boolean;
+  can_view_own boolean;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'quotations.edit');
+  select * into actor from public.profiles p
+  where p.id=actor_profile_id and p.status='active';
+  if actor.id is null then raise exception 'Active actor not found'; end if;
+
+  select * into quotation
+  from public.quotation_requests q
+  where q.id=requested_quotation_id
+  for update;
+  if quotation.id is null then raise exception 'Quotation not found'; end if;
+
+  can_view_all:=coalesce(actor.role='admin',false) or exists(
+    select 1 from public.effective_permissions_for_profile(actor_profile_id) e
+    where e.permission_key in ('quotations.view','quotations.view_all')
+  );
+  can_view_own:=exists(
+    select 1 from public.effective_permissions_for_profile(actor_profile_id) e
+    where e.permission_key='quotations.view_own'
+  );
+  if not can_view_all and not (
+    can_view_own and coalesce(quotation.created_by=actor_profile_id,false)
+  ) then
+    raise exception 'Quotation access denied';
+  end if;
+
+  if quotation.status is distinct from 'draft' then
+    raise exception 'Only Draft quotations can be edited';
+  end if;
+  if quotation.updated_at is distinct from requested_expected_updated_at then
+    raise exception 'Quotation changed before it could be saved';
+  end if;
+  if requested_items is null or jsonb_typeof(requested_items)<>'array'
+    or jsonb_array_length(requested_items)<1
+    or jsonb_array_length(requested_items)>50
+  then
+    raise exception 'A Draft quotation must contain 1 to 50 items';
+  end if;
+  if header_discount<0 or header_tax<0
+    or header_discount>10000000 or header_tax>10000000
+  then
+    raise exception 'Quotation commercial values are invalid';
+  end if;
+
+  select coalesce(array_agg(
+    coalesce(qi.product_id::text,'')||':'||coalesce(qi.variation_id::text,'')
+  ),array[]::text[])
+  into existing_line_keys
+  from public.quotation_request_items qi
+  where qi.quotation_id=quotation.id;
+
+  for entry in select requested.value from jsonb_array_elements(requested_items) as requested(value)
+  loop
+    variation_row:=null;
+    requested_product_id:=nullif(entry->>'product_id','')::uuid;
+    requested_variation_id:=nullif(entry->>'variation_id','')::uuid;
+    requested_line_key:=requested_product_id::text||':'||coalesce(requested_variation_id::text,'');
+    item_quantity:=nullif(entry->>'quantity','')::numeric;
+    item_unit_price:=round(nullif(entry->>'unit_price','')::numeric,2);
+    item_line_discount:=round(coalesce(nullif(entry->>'discount_amount','')::numeric,0),2);
+    item_line_tax:=round(coalesce(nullif(entry->>'tax_amount','')::numeric,0),2);
+
+    if requested_product_id is null then raise exception 'Quotation product is required'; end if;
+    if requested_line_key=any(seen_line_keys) then
+      raise exception 'Each product or variation can only be added once';
+    end if;
+    seen_line_keys:=array_append(seen_line_keys,requested_line_key);
+    if item_quantity is null or item_quantity<1 or item_quantity<>trunc(item_quantity)
+      or item_quantity>1000000
+    then
+      raise exception 'Quotation item quantity must be a whole number of at least 1';
+    end if;
+    if item_unit_price is null or item_unit_price<0
+      or item_line_discount<0 or item_line_tax<0
+      or item_unit_price>10000000 or item_line_discount>10000000 or item_line_tax>10000000
+      or item_line_discount>round(item_quantity*item_unit_price,2)
+    then
+      raise exception 'Quotation item commercial values are invalid';
+    end if;
+    if requested_variation_id is not null then
+      select * into variation_row from public.product_variations pv
+      where pv.id=requested_variation_id
+        and pv.product_id=requested_product_id;
+      if variation_row.id is null then
+        raise exception 'Quotation variation does not belong to the submitted product';
+      end if;
+    end if;
+
+    if requested_line_key<>all(existing_line_keys) then
+      select * into product_row from public.products p
+      where p.id=requested_product_id and p.status='active';
+      if product_row.id is null then raise exception 'Quotation product is unavailable'; end if;
+      if requested_variation_id is not null then
+        select * into variation_row from public.product_variations pv
+        where pv.id=requested_variation_id
+          and pv.product_id=requested_product_id and pv.status='active';
+        if variation_row.id is null then raise exception 'Quotation variation is unavailable'; end if;
+      end if;
+      item_product_name:=case when requested_variation_id is null then product_row.name
+        else product_row.name||' — '||variation_row.combination_key end;
+      item_sku:=coalesce(variation_row.sku,product_row.sku);
+      item_currency:=quotation.currency;
+    else
+      select * into existing_item from public.quotation_request_items qi
+      where qi.quotation_id=quotation.id
+        and qi.product_id is not distinct from requested_product_id
+        and qi.variation_id is not distinct from requested_variation_id
+      limit 1;
+      item_product_name:=existing_item.product_name_snapshot;
+      item_sku:=existing_item.sku_snapshot;
+      item_currency:=existing_item.currency;
+    end if;
+
+    entry:=jsonb_build_object(
+      'product_id',requested_product_id,
+      'variation_id',requested_variation_id,
+      'product_name_snapshot',item_product_name,
+      'sku_snapshot',item_sku,
+      'quantity',item_quantity,
+      'target_price',item_unit_price,
+      'unit_price',item_unit_price,
+      'discount_amount',item_line_discount,
+      'tax_amount',item_line_tax,
+      'currency',item_currency
+    );
+    normalized_items:=normalized_items||jsonb_build_array(entry);
+  end loop;
+
+  update public.quotation_requests set
+    subject=requested_subject,
+    company_name=requested_company_name,
+    customer_tax_identification_number=requested_customer_tax_identification_number,
+    required_by=requested_required_by,
+    expiration_date=requested_expiration_date,
+    terms_and_conditions=requested_terms_and_conditions,
+    payment_terms=requested_payment_terms,
+    delivery_information=requested_delivery_information,
+    customer_notes=requested_customer_notes,
+    message=requested_customer_notes,
+    internal_notes=requested_internal_notes,
+    discount_amount=header_discount,
+    tax_amount=header_tax,
+    updated_by=actor_profile_id,
+    updated_at=now()
+  where id=quotation.id;
+
+  delete from public.quotation_request_items
+  where quotation_id=quotation.id;
+
+  for entry in select value from jsonb_array_elements(normalized_items)
+  loop
+    insert into public.quotation_request_items(
+      quotation_id,product_id,variation_id,product_name_snapshot,sku_snapshot,
+      quantity,target_price,unit_price,discount_amount,tax_amount,currency
+    ) values (
+      quotation.id,
+      (entry->>'product_id')::uuid,
+      nullif(entry->>'variation_id','')::uuid,
+      entry->>'product_name_snapshot',
+      nullif(entry->>'sku_snapshot',''),
+      (entry->>'quantity')::numeric,
+      (entry->>'target_price')::numeric,
+      (entry->>'unit_price')::numeric,
+      (entry->>'discount_amount')::numeric,
+      (entry->>'tax_amount')::numeric,
+      entry->>'currency'
+    );
+  end loop;
+
+  perform public.refresh_quotation_totals(quotation.id);
+  return quotation.id;
+end $$;
+
+revoke all on function public.update_quotation_details_and_totals(
+  uuid,uuid,text,text,text,text,date,date,text,text,text,text,text,numeric,numeric
+) from public,anon,authenticated;
+grant execute on function public.update_quotation_details_and_totals(
+  uuid,uuid,text,text,text,text,date,date,text,text,text,text,text,numeric,numeric
+) to service_role;
+
+revoke all on function public.update_draft_quotation(
+  uuid,uuid,timestamp with time zone,text,text,text,date,date,text,text,text,text,text,numeric,numeric,jsonb
+) from public,anon,authenticated;
+grant execute on function public.update_draft_quotation(
+  uuid,uuid,timestamp with time zone,text,text,text,date,date,text,text,text,text,text,numeric,numeric,jsonb
+) to service_role;
+
+begin;
+
+-- Phase 3 extends the generic operational Receivables foundation only.
+-- It deliberately does not create Accounting, Cash Book, Payroll, Sales,
+-- purchasing, or inventory movements.
+
+insert into public.permissions(module_id,key,name,description,action,is_sensitive,sort_order)
+select module.id,entry.key,entry.name,entry.description,entry.action,true,entry.sort_order
+from public.app_modules module
+cross join (values
+  ('receivables.approve','Approve Loans and Advances','Review, approve, reject, or cancel non-Sales receivable requests.','approve',60),
+  ('receivables.disburse','Confirm Receivable Disbursement','Record the operational disbursement that activates an approved receivable.','disburse',70),
+  ('receivables.record_repayment','Record Receivable Repayment','Record an operational manual repayment without posting Accounting.','record_repayment',80),
+  ('receivables.adjust','Adjust or Reverse Receivables','Create controlled operational adjustments and immutable reversals.','adjust',90)
+) as entry(key,name,description,action,sort_order)
+where module.key='receivables'
+on conflict(key) do update set
+  module_id=excluded.module_id,
+  name=excluded.name,
+  description=excluded.description,
+  action=excluded.action,
+  is_sensitive=true,
+  sort_order=excluded.sort_order,
+  is_active=true,
+  updated_at=now();
+
+alter table public.receivable_accounts
+  drop constraint if exists receivable_accounts_category_check;
+
+alter table public.receivable_accounts
+  add constraint receivable_accounts_category_check check(category in (
+    'employee_loan','salary_advance','customer_loan','company_loan','individual_loan',
+    'supplier_refundable_advance','security_deposit','rent_advance',
+    'recoverable_advance','other'
+  )),
+  add column approved_at timestamptz,
+  add column disbursed_by uuid references public.profiles(id) on delete set null,
+  add column disbursed_at timestamptz;
+
+create table public.receivable_installments (
+  id uuid primary key default gen_random_uuid(),
+  receivable_account_id uuid not null references public.receivable_accounts(id) on delete restrict,
+  installment_number integer not null check(installment_number>0),
+  due_date date not null,
+  amount_due numeric(18,4) not null check(amount_due>0),
+  created_by uuid not null references public.profiles(id) on delete restrict,
+  created_at timestamptz not null default now(),
+  unique(receivable_account_id,installment_number)
+);
+
+create index receivable_installments_due_idx
+  on public.receivable_installments(due_date,receivable_account_id);
+
+create unique index receivable_transactions_one_reversal_idx
+  on public.receivable_transactions(reversal_of_transaction_id)
+  where reversal_of_transaction_id is not null;
+
+create or replace function public.validate_receivable_category_borrower()
+returns trigger language plpgsql set search_path='' as $$
+declare external_type text;
+begin
+  if new.borrower_type='external_party' then
+    select party.party_type into external_type
+    from public.receivable_external_parties party where party.id=new.external_party_id;
+  end if;
+
+  if new.category in ('employee_loan','salary_advance') and new.borrower_type<>'employee' then
+    raise exception 'Employee loans and salary advances require an employee borrower';
+  elsif new.category='customer_loan' and new.borrower_type<>'customer' then
+    raise exception 'Customer loans require a customer borrower';
+  elsif new.category='supplier_refundable_advance' and new.borrower_type<>'supplier' then
+    raise exception 'Supplier refundable advances require a supplier borrower';
+  elsif new.category='company_loan' and not (
+    new.borrower_type='crm_company' or
+    (new.borrower_type='external_party' and external_type='company')
+  ) then
+    raise exception 'Company loans require a company borrower';
+  elsif new.category='individual_loan' and not (
+    new.borrower_type='crm_contact' or
+    (new.borrower_type='external_party' and external_type='individual')
+  ) then
+    raise exception 'Individual loans require an individual borrower';
+  end if;
+  return new;
+end $$;
+
+create trigger receivable_accounts_category_borrower_check
+before insert or update of category,borrower_type,employee_record_id,customer_profile_id,
+  supplier_id,crm_company_id,crm_contact_id,external_party_id
+on public.receivable_accounts
+for each row execute function public.validate_receivable_category_borrower();
+
+create or replace function public.protect_receivable_installment_schedule()
+returns trigger language plpgsql set search_path='' as $$
+declare account_status text;
+begin
+  select account.status into account_status
+  from public.receivable_accounts account
+  where account.id=coalesce(new.receivable_account_id,old.receivable_account_id);
+  if account_status not in ('requested','under_review') then
+    raise exception 'Approved installment schedules are immutable';
+  end if;
+  return coalesce(new,old);
+end $$;
+
+create trigger receivable_installments_schedule_freeze
+before insert or update or delete on public.receivable_installments
+for each row execute function public.protect_receivable_installment_schedule();
+
+create or replace function public.receivable_current_outstanding(requested_account_id uuid)
+returns numeric language sql stable security definer set search_path='' as $$
+  select coalesce(sum(
+    case transaction.direction when 'increase' then transaction.amount else -transaction.amount end
+  ),0::numeric)
+  from public.receivable_transactions transaction
+  where transaction.receivable_account_id=requested_account_id;
+$$;
+
+create or replace function public.rebuild_receivable_installments(
+  requested_account_id uuid,
+  requested_principal numeric,
+  requested_count integer,
+  requested_regular_amount numeric,
+  requested_first_due_date date,
+  actor_profile_id uuid
+)
+returns void language plpgsql volatile security definer set search_path='' as $$
+declare regular_amount numeric(18,4);
+declare last_amount numeric(18,4);
+begin
+  delete from public.receivable_installments where receivable_account_id=requested_account_id;
+  if requested_count is null then return; end if;
+  if requested_count<=0 or requested_first_due_date is null or coalesce(requested_principal,0)<=0 then
+    raise exception 'Installment count, principal, and first due date are required';
+  end if;
+  regular_amount:=coalesce(round(requested_regular_amount,4),trunc(requested_principal/requested_count,4));
+  if regular_amount<=0 then raise exception 'Installment amount must be greater than zero'; end if;
+  last_amount:=round(requested_principal-(regular_amount*(requested_count-1)),4);
+  if last_amount<=0 then raise exception 'Installment amounts exceed the approved principal'; end if;
+
+  insert into public.receivable_installments(
+    receivable_account_id,installment_number,due_date,amount_due,created_by
+  )
+  select
+    requested_account_id,
+    item.number,
+    (
+      (date_trunc('month',requested_first_due_date)::date+make_interval(months=>item.number-1))+
+      make_interval(days=>(
+        least(
+          extract(day from requested_first_due_date)::integer,
+          extract(day from (
+            date_trunc('month',requested_first_due_date)::date+
+            make_interval(months=>item.number)+interval '-1 day'
+          ))::integer
+        )-1
+      ))
+    )::date,
+    case when item.number=requested_count then last_amount else regular_amount end,
+    actor_profile_id
+  from generate_series(1,requested_count) as item(number);
+end $$;
+
+create or replace function public.transition_receivable_account(
+  actor_profile_id uuid,
+  requested_account_id uuid,
+  requested_operation_id uuid,
+  requested_action text,
+  requested_approved_amount numeric,
+  requested_reason text
+)
+returns uuid language plpgsql volatile security definer set search_path='' as $$
+declare account public.receivable_accounts%rowtype;
+declare old_status text;
+declare new_status text;
+declare operation_hash text;
+declare existing_hash text;
+declare permission_key text;
+begin
+  permission_key:=case when requested_action='submit_review' then 'receivables.create' else 'receivables.approve' end;
+  perform public.assert_actor_permission(actor_profile_id,permission_key);
+  if requested_operation_id is null then raise exception 'Operation ID is required'; end if;
+  perform pg_advisory_xact_lock(hashtextextended(requested_operation_id::text,0));
+  operation_hash:=md5(jsonb_build_object(
+    'account_id',requested_account_id,'action',requested_action,
+    'approved_amount',case when requested_approved_amount is null then null else round(requested_approved_amount,4) end,
+    'reason',nullif(trim(requested_reason),'')
+  )::text);
+
+  select log.metadata->>'operation_hash' into existing_hash
+  from public.audit_logs log
+  where log.module='receivables' and log.metadata->>'operation_id'=requested_operation_id::text
+  order by log.created_at desc limit 1;
+  if existing_hash is not null then
+    if existing_hash<>operation_hash then raise exception 'This operation ID was already used with different values'; end if;
+    return requested_account_id;
+  end if;
+
+  select * into account from public.receivable_accounts where id=requested_account_id for update;
+  if account.id is null then raise exception 'Receivable account not found'; end if;
+  old_status:=account.status;
+
+  case requested_action
+    when 'submit_review' then
+      if account.status<>'requested' then raise exception 'Only requested accounts can be submitted for review'; end if;
+      new_status:='under_review';
+    when 'approve' then
+      if account.status<>'under_review' then raise exception 'Only accounts under review can be approved'; end if;
+      if coalesce(requested_approved_amount,0)<=0 then raise exception 'Approved amount must be greater than zero'; end if;
+      perform public.rebuild_receivable_installments(
+        account.id,round(requested_approved_amount,4),account.installment_count,
+        account.installment_amount,account.first_due_date,actor_profile_id
+      );
+      update public.receivable_accounts set
+        approved_amount=round(requested_approved_amount,4),approved_by=actor_profile_id,
+        approved_at=now(),updated_by=actor_profile_id,status='approved',
+        final_due_date=(select max(due_date) from public.receivable_installments where receivable_account_id=account.id)
+      where id=account.id;
+      new_status:='approved';
+    when 'reject' then
+      if account.status not in ('requested','under_review') then raise exception 'This account cannot be rejected'; end if;
+      if char_length(coalesce(trim(requested_reason),''))<2 then raise exception 'Reason is required'; end if;
+      new_status:='rejected';
+    when 'cancel' then
+      if account.status not in ('requested','under_review','approved') then raise exception 'This account cannot be cancelled'; end if;
+      if exists(select 1 from public.receivable_transactions transaction where transaction.receivable_account_id=account.id) then
+        raise exception 'Accounts with balance movements cannot be cancelled';
+      end if;
+      if char_length(coalesce(trim(requested_reason),''))<2 then raise exception 'Reason is required'; end if;
+      new_status:='cancelled';
+    else raise exception 'Invalid lifecycle action';
+  end case;
+
+  if requested_action<>'approve' then
+    update public.receivable_accounts set status=new_status,updated_by=actor_profile_id where id=account.id;
+  end if;
+
+  insert into public.audit_logs(
+    actor_id,actor_role,action,module,entity_type,entity_id,description,
+    old_values,new_values,metadata
+  ) values(
+    actor_profile_id,(select role from public.profiles where id=actor_profile_id),
+    'receivable.'||requested_action,'receivables','receivable_account',account.id::text,
+    'Receivable lifecycle updated.',jsonb_build_object('status',old_status),
+    jsonb_build_object('status',new_status,'approved_amount',requested_approved_amount,'reason',nullif(trim(requested_reason),'')),
+    jsonb_build_object('operation_id',requested_operation_id,'operation_hash',operation_hash)
+  );
+  return account.id;
+end $$;
+
+create or replace function public.set_receivable_installment_schedule(
+  actor_profile_id uuid,
+  requested_account_id uuid,
+  requested_operation_id uuid,
+  requested_count integer,
+  requested_installment_amount numeric,
+  requested_first_due_date date
+)
+returns uuid language plpgsql volatile security definer set search_path='' as $$
+declare account public.receivable_accounts%rowtype;
+declare operation_hash text;
+declare existing_hash text;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'receivables.create');
+  if requested_operation_id is null then raise exception 'Operation ID is required'; end if;
+  perform pg_advisory_xact_lock(hashtextextended(requested_operation_id::text,0));
+  operation_hash:=md5(jsonb_build_object(
+    'account_id',requested_account_id,'count',requested_count,
+    'amount',case when requested_installment_amount is null then null else round(requested_installment_amount,4) end,
+    'first_due_date',requested_first_due_date
+  )::text);
+  select log.metadata->>'operation_hash' into existing_hash from public.audit_logs log
+  where log.module='receivables' and log.metadata->>'operation_id'=requested_operation_id::text
+  order by log.created_at desc limit 1;
+  if existing_hash is not null then
+    if existing_hash<>operation_hash then raise exception 'This operation ID was already used with different values'; end if;
+    return requested_account_id;
+  end if;
+  select * into account from public.receivable_accounts where id=requested_account_id for update;
+  if account.id is null then raise exception 'Receivable account not found'; end if;
+  if account.status not in ('requested','under_review') then raise exception 'Approved installment schedules are immutable'; end if;
+  if requested_count is not null and requested_count<=0 then raise exception 'Installment count must be positive'; end if;
+  if requested_count is not null and requested_first_due_date is null then raise exception 'First due date is required'; end if;
+  if requested_installment_amount is not null and requested_installment_amount<=0 then raise exception 'Installment amount must be positive'; end if;
+
+  update public.receivable_accounts set
+    installment_count=requested_count,
+    installment_amount=case when requested_installment_amount is null then null else round(requested_installment_amount,4) end,
+    first_due_date=requested_first_due_date,updated_by=actor_profile_id
+  where id=account.id;
+  perform public.rebuild_receivable_installments(
+    account.id,account.requested_amount,requested_count,requested_installment_amount,
+    requested_first_due_date,actor_profile_id
+  );
+  update public.receivable_accounts set
+    final_due_date=(select max(due_date) from public.receivable_installments where receivable_account_id=account.id)
+  where id=account.id;
+
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,new_values,metadata)
+  values(
+    actor_profile_id,(select role from public.profiles where id=actor_profile_id),
+    'receivable.schedule_updated','receivables','receivable_account',account.id::text,
+    'Receivable installment schedule updated before approval.',
+    jsonb_build_object('count',requested_count,'installment_amount',requested_installment_amount,'first_due_date',requested_first_due_date),
+    jsonb_build_object('operation_id',requested_operation_id,'operation_hash',operation_hash)
+  );
+  return account.id;
+end $$;
+
+create or replace function public.confirm_receivable_disbursement(
+  actor_profile_id uuid,
+  requested_account_id uuid,
+  requested_operation_id uuid,
+  requested_amount numeric,
+  requested_effective_date date,
+  requested_payment_method text,
+  requested_note text
+)
+returns uuid language plpgsql volatile security definer set search_path='' as $$
+declare account public.receivable_accounts%rowtype;
+declare transaction_id uuid;
+declare existing_hash text;
+declare operation_hash text;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'receivables.disburse');
+  if requested_operation_id is null then raise exception 'Operation ID is required'; end if;
+  perform pg_advisory_xact_lock(hashtextextended(requested_operation_id::text,0));
+  operation_hash:=md5(jsonb_build_object(
+    'account_id',requested_account_id,'amount',round(coalesce(requested_amount,0),4),
+    'effective_date',requested_effective_date,'payment_method',requested_payment_method,
+    'note',nullif(trim(requested_note),'')
+  )::text);
+  select transaction.id,transaction.metadata->>'operation_hash' into transaction_id,existing_hash
+  from public.receivable_transactions transaction where transaction.operation_id=requested_operation_id;
+  if transaction_id is not null then
+    if existing_hash<>operation_hash then raise exception 'This operation ID was already used with different values'; end if;
+    return transaction_id;
+  end if;
+  select * into account from public.receivable_accounts where id=requested_account_id for update;
+  if account.id is null then raise exception 'Receivable account not found'; end if;
+  if account.status<>'approved' then raise exception 'Only approved accounts can be disbursed'; end if;
+  if account.is_opening_balance then raise exception 'Opening receivables cannot be disbursed'; end if;
+  if round(coalesce(requested_amount,0),4)<>round(coalesce(account.approved_amount,0),4) then
+    raise exception 'Disbursement amount must equal the approved amount';
+  end if;
+  if requested_effective_date is null then raise exception 'Effective date is required'; end if;
+  if requested_payment_method not in ('cash','bank','mfs','other') then raise exception 'Invalid operational disbursement method'; end if;
+  if exists(select 1 from public.receivable_transactions transaction where transaction.receivable_account_id=account.id and transaction.transaction_type='disbursement') then
+    raise exception 'This receivable has already been disbursed';
+  end if;
+  if account.installment_count is not null and account.installment_count<>(
+    select count(*) from public.receivable_installments installment where installment.receivable_account_id=account.id
+  ) then raise exception 'Approved installment schedule is incomplete'; end if;
+
+  transaction_id:=gen_random_uuid();
+  insert into public.receivable_transactions(
+    id,receivable_account_id,transaction_type,direction,amount,effective_date,
+    payment_method,source,operation_id,notes,metadata,created_by
+  ) values(
+    transaction_id,account.id,'disbursement','increase',round(requested_amount,4),requested_effective_date,
+    requested_payment_method,'manual',requested_operation_id,nullif(left(trim(requested_note),2000),''),
+    jsonb_build_object('operation_hash',operation_hash,'accounting_posted',false,'cashbook_posted',false),actor_profile_id
+  );
+  update public.receivable_accounts set
+    status='active',disbursement_date=requested_effective_date,
+    disbursed_by=actor_profile_id,disbursed_at=now(),updated_by=actor_profile_id
+  where id=account.id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,new_values,metadata)
+  values(
+    actor_profile_id,(select role from public.profiles where id=actor_profile_id),
+    'receivable.disbursed','receivables','receivable_account',account.id::text,
+    'Receivable disbursement recorded operationally without Accounting posting.',
+    jsonb_build_object('status','active','amount',round(requested_amount,4),'currency',account.currency,'effective_date',requested_effective_date),
+    jsonb_build_object('operation_id',requested_operation_id,'operation_hash',operation_hash,'transaction_id',transaction_id,'accounting_posted',false)
+  );
+  return transaction_id;
+end $$;
+
+create or replace function public.record_receivable_repayment(
+  actor_profile_id uuid,
+  requested_account_id uuid,
+  requested_operation_id uuid,
+  requested_amount numeric,
+  requested_effective_date date,
+  requested_payment_method text,
+  requested_note text
+)
+returns uuid language plpgsql volatile security definer set search_path='' as $$
+declare account public.receivable_accounts%rowtype;
+declare transaction_id uuid;
+declare existing_hash text;
+declare operation_hash text;
+declare outstanding numeric;
+declare remaining numeric;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'receivables.record_repayment');
+  if requested_operation_id is null then raise exception 'Operation ID is required'; end if;
+  perform pg_advisory_xact_lock(hashtextextended(requested_operation_id::text,0));
+  operation_hash:=md5(jsonb_build_object(
+    'account_id',requested_account_id,'amount',round(coalesce(requested_amount,0),4),
+    'effective_date',requested_effective_date,'payment_method',requested_payment_method,
+    'note',nullif(trim(requested_note),'')
+  )::text);
+  select transaction.id,transaction.metadata->>'operation_hash' into transaction_id,existing_hash
+  from public.receivable_transactions transaction where transaction.operation_id=requested_operation_id;
+  if transaction_id is not null then
+    if existing_hash<>operation_hash then raise exception 'This operation ID was already used with different values'; end if;
+    return transaction_id;
+  end if;
+  select * into account from public.receivable_accounts where id=requested_account_id for update;
+  if account.id is null then raise exception 'Receivable account not found'; end if;
+  if account.status<>'active' then raise exception 'Only active receivables can receive repayment'; end if;
+  if coalesce(requested_amount,0)<=0 then raise exception 'Repayment amount must be greater than zero'; end if;
+  if requested_effective_date is null then raise exception 'Effective date is required'; end if;
+  if requested_payment_method='salary_deduction' then raise exception 'Salary deduction is reserved for Phase 4 Payroll integration'; end if;
+  if requested_payment_method not in ('cash','bank','mfs','other') then raise exception 'Invalid operational repayment method'; end if;
+  outstanding:=public.receivable_current_outstanding(account.id);
+  if round(requested_amount,4)>round(outstanding,4) then raise exception 'Repayment cannot exceed current outstanding'; end if;
+  remaining:=round(outstanding-requested_amount,4);
+  transaction_id:=gen_random_uuid();
+  insert into public.receivable_transactions(
+    id,receivable_account_id,transaction_type,direction,amount,effective_date,
+    payment_method,source,operation_id,notes,metadata,created_by
+  ) values(
+    transaction_id,account.id,'repayment','decrease',round(requested_amount,4),requested_effective_date,
+    requested_payment_method,'manual',requested_operation_id,nullif(left(trim(requested_note),2000),''),
+    jsonb_build_object('operation_hash',operation_hash,'accounting_posted',false,'cashbook_posted',false),actor_profile_id
+  );
+  update public.receivable_accounts set
+    status=case when remaining=0 then 'fully_repaid' else 'active' end,updated_by=actor_profile_id
+  where id=account.id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,new_values,metadata)
+  values(
+    actor_profile_id,(select role from public.profiles where id=actor_profile_id),
+    'receivable.repayment_recorded','receivables','receivable_account',account.id::text,
+    'Receivable repayment recorded operationally without Accounting posting.',
+    jsonb_build_object('amount',round(requested_amount,4),'currency',account.currency,'outstanding_after',remaining,'effective_date',requested_effective_date),
+    jsonb_build_object('operation_id',requested_operation_id,'operation_hash',operation_hash,'transaction_id',transaction_id,'accounting_posted',false)
+  );
+  return transaction_id;
+end $$;
+
+create or replace function public.record_receivable_adjustment(
+  actor_profile_id uuid,
+  requested_account_id uuid,
+  requested_operation_id uuid,
+  requested_direction text,
+  requested_amount numeric,
+  requested_effective_date date,
+  requested_reason text
+)
+returns uuid language plpgsql volatile security definer set search_path='' as $$
+declare account public.receivable_accounts%rowtype;
+declare transaction_id uuid;
+declare existing_hash text;
+declare operation_hash text;
+declare outstanding numeric;
+declare remaining numeric;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'receivables.adjust');
+  if requested_operation_id is null then raise exception 'Operation ID is required'; end if;
+  perform pg_advisory_xact_lock(hashtextextended(requested_operation_id::text,0));
+  operation_hash:=md5(jsonb_build_object(
+    'account_id',requested_account_id,'direction',requested_direction,
+    'amount',round(coalesce(requested_amount,0),4),'effective_date',requested_effective_date,
+    'reason',nullif(trim(requested_reason),'')
+  )::text);
+  select transaction.id,transaction.metadata->>'operation_hash' into transaction_id,existing_hash
+  from public.receivable_transactions transaction where transaction.operation_id=requested_operation_id;
+  if transaction_id is not null then
+    if existing_hash<>operation_hash then raise exception 'This operation ID was already used with different values'; end if;
+    return transaction_id;
+  end if;
+  select * into account from public.receivable_accounts where id=requested_account_id for update;
+  if account.id is null then raise exception 'Receivable account not found'; end if;
+  if account.status not in ('active','fully_repaid') then raise exception 'Only active or fully repaid receivables can be adjusted'; end if;
+  if requested_direction not in ('increase','decrease') then raise exception 'Invalid adjustment direction'; end if;
+  if coalesce(requested_amount,0)<=0 then raise exception 'Adjustment amount must be greater than zero'; end if;
+  if requested_effective_date is null then raise exception 'Effective date is required'; end if;
+  if char_length(coalesce(trim(requested_reason),''))<2 then raise exception 'Reason is required'; end if;
+  if requested_direction='increase' and exists(
+    select 1 from public.receivable_installments installment where installment.receivable_account_id=account.id
+  ) then raise exception 'An increase cannot change an approved installment schedule'; end if;
+  outstanding:=public.receivable_current_outstanding(account.id);
+  if requested_direction='decrease' and round(requested_amount,4)>round(outstanding,4) then
+    raise exception 'Adjustment decrease cannot exceed current outstanding';
+  end if;
+  remaining:=round(outstanding+(case when requested_direction='increase' then requested_amount else -requested_amount end),4);
+  transaction_id:=gen_random_uuid();
+  insert into public.receivable_transactions(
+    id,receivable_account_id,transaction_type,direction,amount,effective_date,
+    source,operation_id,notes,metadata,created_by
+  ) values(
+    transaction_id,account.id,'adjustment_'||requested_direction,requested_direction,
+    round(requested_amount,4),requested_effective_date,'manual',requested_operation_id,
+    left(trim(requested_reason),2000),
+    jsonb_build_object('operation_hash',operation_hash,'accounting_posted',false,'cashbook_posted',false),actor_profile_id
+  );
+  update public.receivable_accounts set
+    status=case when remaining=0 then 'fully_repaid' else 'active' end,updated_by=actor_profile_id
+  where id=account.id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,new_values,metadata)
+  values(
+    actor_profile_id,(select role from public.profiles where id=actor_profile_id),
+    'receivable.adjustment_recorded','receivables','receivable_account',account.id::text,
+    'Controlled operational receivable adjustment recorded.',
+    jsonb_build_object('direction',requested_direction,'amount',round(requested_amount,4),'currency',account.currency,'outstanding_after',remaining,'reason',trim(requested_reason)),
+    jsonb_build_object('operation_id',requested_operation_id,'operation_hash',operation_hash,'transaction_id',transaction_id,'accounting_posted',false)
+  );
+  return transaction_id;
+end $$;
+
+create or replace function public.reverse_receivable_transaction(
+  actor_profile_id uuid,
+  requested_account_id uuid,
+  requested_transaction_id uuid,
+  requested_operation_id uuid,
+  requested_effective_date date,
+  requested_reason text
+)
+returns uuid language plpgsql volatile security definer set search_path='' as $$
+declare account public.receivable_accounts%rowtype;
+declare original public.receivable_transactions%rowtype;
+declare transaction_id uuid;
+declare existing_hash text;
+declare operation_hash text;
+declare reversal_direction text;
+declare outstanding numeric;
+declare remaining numeric;
+declare next_status text;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'receivables.adjust');
+  if requested_operation_id is null then raise exception 'Operation ID is required'; end if;
+  perform pg_advisory_xact_lock(hashtextextended(requested_operation_id::text,0));
+  operation_hash:=md5(jsonb_build_object(
+    'account_id',requested_account_id,'transaction_id',requested_transaction_id,
+    'effective_date',requested_effective_date,'reason',nullif(trim(requested_reason),'')
+  )::text);
+  select transaction.id,transaction.metadata->>'operation_hash' into transaction_id,existing_hash
+  from public.receivable_transactions transaction where transaction.operation_id=requested_operation_id;
+  if transaction_id is not null then
+    if existing_hash<>operation_hash then raise exception 'This operation ID was already used with different values'; end if;
+    return transaction_id;
+  end if;
+  select * into account from public.receivable_accounts where id=requested_account_id for update;
+  if account.id is null then raise exception 'Receivable account not found'; end if;
+  select * into original from public.receivable_transactions
+  where id=requested_transaction_id and receivable_account_id=account.id for update;
+  if original.id is null then raise exception 'Receivable transaction not found'; end if;
+  if original.transaction_type='reversal' then raise exception 'A reversal transaction cannot be reversed'; end if;
+  if exists(select 1 from public.receivable_transactions transaction where transaction.reversal_of_transaction_id=original.id) then
+    raise exception 'This transaction has already been reversed';
+  end if;
+  if requested_effective_date is null then raise exception 'Effective date is required'; end if;
+  if char_length(coalesce(trim(requested_reason),''))<2 then raise exception 'Reason is required'; end if;
+  outstanding:=public.receivable_current_outstanding(account.id);
+  reversal_direction:=case original.direction when 'increase' then 'decrease' else 'increase' end;
+  remaining:=round(outstanding+(case when reversal_direction='increase' then original.amount else -original.amount end),4);
+  if remaining<0 then raise exception 'Reversal would make outstanding negative'; end if;
+  next_status:=case
+    when original.transaction_type='disbursement' and remaining=0 then 'approved'
+    when remaining=0 then 'fully_repaid'
+    else 'active'
+  end;
+  transaction_id:=gen_random_uuid();
+  insert into public.receivable_transactions(
+    id,receivable_account_id,transaction_type,direction,amount,effective_date,
+    source,operation_id,reversal_of_transaction_id,notes,metadata,created_by
+  ) values(
+    transaction_id,account.id,'reversal',reversal_direction,original.amount,
+    requested_effective_date,'manual',requested_operation_id,original.id,
+    left(trim(requested_reason),2000),
+    jsonb_build_object('operation_hash',operation_hash,'original_transaction_type',original.transaction_type,'accounting_posted',false),actor_profile_id
+  );
+  update public.receivable_accounts set status=next_status,updated_by=actor_profile_id where id=account.id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,new_values,metadata)
+  values(
+    actor_profile_id,(select role from public.profiles where id=actor_profile_id),
+    'receivable.transaction_reversed','receivables','receivable_account',account.id::text,
+    'Receivable transaction reversed with an immutable correcting transaction.',
+    jsonb_build_object('original_transaction_id',original.id,'amount',original.amount,'direction',reversal_direction,'status',next_status,'reason',trim(requested_reason)),
+    jsonb_build_object('operation_id',requested_operation_id,'operation_hash',operation_hash,'transaction_id',transaction_id,'accounting_posted',false)
+  );
+  return transaction_id;
+end $$;
+
+create or replace view public.non_sales_receivable_details_v as
+with movement as (
+  select
+    transaction.receivable_account_id,
+    coalesce(sum(case transaction.direction when 'increase' then transaction.amount else -transaction.amount end),0::numeric) as outstanding_amount,
+    coalesce(sum(case
+      when transaction.transaction_type='opening_balance' then transaction.amount
+      when transaction.transaction_type='reversal' and original.transaction_type='opening_balance' then -transaction.amount
+      else 0::numeric end),0::numeric) as opening_amount,
+    coalesce(sum(case
+      when transaction.transaction_type='disbursement' then transaction.amount
+      when transaction.transaction_type='reversal' and original.transaction_type='disbursement' then -transaction.amount
+      else 0::numeric end),0::numeric) as disbursed_amount,
+    coalesce(sum(case
+      when transaction.transaction_type='repayment' then transaction.amount
+      when transaction.transaction_type='reversal' and original.transaction_type='repayment' then -transaction.amount
+      else 0::numeric end),0::numeric) as repaid_amount,
+    coalesce(sum(case
+      when transaction.transaction_type='adjustment_decrease' then transaction.amount
+      when transaction.transaction_type='reversal' and original.transaction_type='adjustment_decrease' then -transaction.amount
+      else 0::numeric end),0::numeric) as adjustment_decrease_amount,
+    coalesce(sum(case
+      when transaction.transaction_type='adjustment_increase' then transaction.amount
+      when transaction.transaction_type='reversal' and original.transaction_type='adjustment_increase' then -transaction.amount
+      else 0::numeric end),0::numeric) as adjustment_increase_amount,
+    max(transaction.effective_date) as last_activity_date
+  from public.receivable_transactions transaction
+  left join public.receivable_transactions original on original.id=transaction.reversal_of_transaction_id
+  group by transaction.receivable_account_id
+)
+select
+  account.*,
+  greatest(coalesce(movement.opening_amount,0),0::numeric) as opening_principal,
+  greatest(coalesce(movement.disbursed_amount,0),0::numeric) as disbursed_amount,
+  greatest(coalesce(movement.repaid_amount,0),0::numeric) as repaid_amount,
+  greatest(coalesce(movement.adjustment_decrease_amount,0),0::numeric) as adjustment_decrease_amount,
+  greatest(coalesce(movement.adjustment_increase_amount,0),0::numeric) as adjustment_increase_amount,
+  greatest(coalesce(movement.outstanding_amount,0),0::numeric) as outstanding_amount,
+  greatest(coalesce(movement.repaid_amount,0)+coalesce(movement.adjustment_decrease_amount,0),0::numeric) as recovered_amount,
+  movement.last_activity_date
+from public.receivable_accounts account
+left join movement on movement.receivable_account_id=account.id;
+
+create or replace view public.receivable_installment_status_v as
+with ranked as (
+  select
+    installment.*,
+    detail.currency,
+    detail.status as account_status,
+    detail.recovered_amount,
+    coalesce(sum(installment.amount_due) over(
+      partition by installment.receivable_account_id
+      order by installment.installment_number
+      rows between unbounded preceding and 1 preceding
+    ),0::numeric) as amount_due_before
+  from public.receivable_installments installment
+  join public.non_sales_receivable_details_v detail on detail.id=installment.receivable_account_id
+),allocated as (
+  select ranked.*,
+    least(ranked.amount_due,greatest(ranked.recovered_amount-ranked.amount_due_before,0::numeric)) as paid_amount
+  from ranked
+)
+select
+  allocated.id,allocated.receivable_account_id,allocated.installment_number,
+  allocated.due_date,allocated.amount_due,allocated.currency,
+  greatest(allocated.paid_amount,0::numeric) as paid_amount,
+  greatest(allocated.amount_due-allocated.paid_amount,0::numeric) as remaining_amount,
+  case
+    when allocated.paid_amount>=allocated.amount_due then 'paid'
+    when allocated.due_date<timezone('Asia/Dhaka',now())::date then 'overdue'
+    when allocated.paid_amount>0 then 'partial'
+    else 'unpaid'
+  end as installment_status,
+  case
+    when allocated.paid_amount<allocated.amount_due and allocated.due_date<timezone('Asia/Dhaka',now())::date
+      then timezone('Asia/Dhaka',now())::date-allocated.due_date
+    else null end as days_overdue,
+  allocated.created_by,allocated.created_at
+from allocated;
+
+create or replace view public.non_sales_receivables_v as
+select
+  'non_sales'::text as source_type,
+  detail.id as source_id,
+  detail.receivable_number as reference_number,
+  null::text as invoice_number,
+  detail.category as receivable_type,
+  detail.borrower_type as party_type,
+  coalesce(detail.employee_record_id,detail.customer_profile_id,detail.supplier_id,
+    detail.crm_company_id,detail.crm_contact_id,detail.external_party_id) as party_id,
+  detail.borrower_display_name_snapshot as party_name,
+  detail.currency,
+  detail.original_amount,
+  greatest(detail.opening_previously_repaid+detail.recovered_amount,0::numeric) as paid_amount,
+  detail.outstanding_amount,
+  detail.status as receivable_status,
+  detail.created_at::date as issue_date,
+  next_installment.due_date,
+  case when next_installment.due_date<timezone('Asia/Dhaka',now())::date
+    then timezone('Asia/Dhaka',now())::date-next_installment.due_date else null end as days_overdue,
+  detail.created_by as responsible_profile_id,
+  detail.last_activity_date,
+  detail.is_opening_balance
+from public.non_sales_receivable_details_v detail
+left join lateral (
+  select installment.due_date
+  from public.receivable_installment_status_v installment
+  where installment.receivable_account_id=detail.id and installment.remaining_amount>0
+  order by installment.installment_number limit 1
+) next_installment on true;
+
+create or replace view public.receivables_overview_v as
+select * from public.customer_receivables_v
+union all
+select * from public.non_sales_receivables_v;
+
+create or replace view public.non_sales_receivable_metrics_v as
+with installment_metrics as (
+  select
+    installment.receivable_account_id,
+    coalesce(sum(installment.remaining_amount) filter(where installment.due_date=timezone('Asia/Dhaka',now())::date),0::numeric) as due_today,
+    coalesce(sum(installment.remaining_amount) filter(where installment.due_date>timezone('Asia/Dhaka',now())::date and installment.due_date<=timezone('Asia/Dhaka',now())::date+7),0::numeric) as due_next_7_days,
+    coalesce(sum(installment.remaining_amount) filter(where installment.due_date<timezone('Asia/Dhaka',now())::date),0::numeric) as overdue_amount
+  from public.receivable_installment_status_v installment
+  group by installment.receivable_account_id
+),month_recovery as (
+  select transaction.receivable_account_id,
+    coalesce(sum(case
+      when transaction.transaction_type in ('repayment','adjustment_decrease') then transaction.amount
+      when transaction.transaction_type='reversal' and original.transaction_type in ('repayment','adjustment_decrease') then -transaction.amount
+      else 0::numeric end),0::numeric) as recovered_this_month
+  from public.receivable_transactions transaction
+  left join public.receivable_transactions original on original.id=transaction.reversal_of_transaction_id
+  where date_trunc('month',transaction.effective_date::timestamp)=date_trunc('month',timezone('Asia/Dhaka',now()))
+  group by transaction.receivable_account_id
+)
+select
+  detail.currency,detail.category,
+  count(*) filter(where detail.outstanding_amount>0) as account_count,
+  coalesce(sum(detail.outstanding_amount),0::numeric) as outstanding_amount,
+  coalesce(sum(installment_metrics.due_today),0::numeric) as due_today,
+  coalesce(sum(installment_metrics.due_next_7_days),0::numeric) as due_next_7_days,
+  coalesce(sum(installment_metrics.overdue_amount),0::numeric) as overdue_amount,
+  coalesce(sum(month_recovery.recovered_this_month),0::numeric) as recovered_this_month
+from public.non_sales_receivable_details_v detail
+left join installment_metrics on installment_metrics.receivable_account_id=detail.id
+left join month_recovery on month_recovery.receivable_account_id=detail.id
+group by detail.currency,detail.category;
+
+alter table public.receivable_installments enable row level security;
+
+create policy "authorized staff read receivable installments"
+on public.receivable_installments for select to authenticated
+using(public.is_current_user_admin() or public.current_user_has_permission('receivables.view_loans'));
+
+revoke all on public.receivable_installments from public,anon,authenticated;
+grant select on public.receivable_installments to authenticated;
+grant all on public.receivable_installments to service_role;
+
+revoke all on public.non_sales_receivable_details_v,public.receivable_installment_status_v,
+  public.non_sales_receivable_metrics_v from public,anon,authenticated;
+grant select on public.non_sales_receivable_details_v,public.receivable_installment_status_v,
+  public.non_sales_receivable_metrics_v to service_role;
+
+revoke all on function public.validate_receivable_category_borrower(),
+  public.protect_receivable_installment_schedule(),
+  public.receivable_current_outstanding(uuid),
+  public.rebuild_receivable_installments(uuid,numeric,integer,numeric,date,uuid),
+  public.transition_receivable_account(uuid,uuid,uuid,text,numeric,text),
+  public.set_receivable_installment_schedule(uuid,uuid,uuid,integer,numeric,date),
+  public.confirm_receivable_disbursement(uuid,uuid,uuid,numeric,date,text,text),
+  public.record_receivable_repayment(uuid,uuid,uuid,numeric,date,text,text),
+  public.record_receivable_adjustment(uuid,uuid,uuid,text,numeric,date,text),
+  public.reverse_receivable_transaction(uuid,uuid,uuid,uuid,date,text)
+from public,anon,authenticated;
+
+grant execute on function public.validate_receivable_category_borrower(),
+  public.protect_receivable_installment_schedule(),
+  public.receivable_current_outstanding(uuid),
+  public.rebuild_receivable_installments(uuid,numeric,integer,numeric,date,uuid),
+  public.transition_receivable_account(uuid,uuid,uuid,text,numeric,text),
+  public.set_receivable_installment_schedule(uuid,uuid,uuid,integer,numeric,date),
+  public.confirm_receivable_disbursement(uuid,uuid,uuid,numeric,date,text,text),
+  public.record_receivable_repayment(uuid,uuid,uuid,numeric,date,text,text),
+  public.record_receivable_adjustment(uuid,uuid,uuid,text,numeric,date,text),
+  public.reverse_receivable_transaction(uuid,uuid,uuid,uuid,date,text)
+to service_role;
+
+commit;
+
+begin;
+
+-- Phase 4: payroll plans are traceability records; only the trusted Paid RPC
+-- creates salary-deduction receivable transactions.
+create table public.payroll_receivable_deductions (
+  id uuid primary key default gen_random_uuid(),
+  payroll_record_id uuid not null references public.hr_payroll_records(id) on delete restrict,
+  receivable_account_id uuid not null references public.receivable_accounts(id) on delete restrict,
+  payroll_component_id uuid references public.hr_payroll_components(id) on delete set null,
+  planned_deduction_amount numeric(18,4) not null check(planned_deduction_amount>0),
+  operation_id uuid not null unique,
+  plan_hash text not null check(char_length(trim(plan_hash)) between 16 and 128),
+  status text not null default 'draft' check(status in ('draft','approved','paid','voided')),
+  repayment_transaction_id uuid unique references public.receivable_transactions(id) on delete restrict,
+  voided_at timestamptz,
+  voided_by uuid references public.profiles(id) on delete set null,
+  void_reason text,
+  created_by uuid not null references public.profiles(id) on delete restrict,
+  updated_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(payroll_record_id,receivable_account_id)
+);
+
+create index payroll_receivable_deductions_payroll_idx
+  on public.payroll_receivable_deductions(payroll_record_id,status);
+create index payroll_receivable_deductions_account_idx
+  on public.payroll_receivable_deductions(receivable_account_id,status);
+
+create or replace function public.payroll_receivable_deductions_touch_updated_at()
+returns trigger language plpgsql set search_path=public
+as $$
+begin
+  new.updated_at=now();
+  return new;
+end $$;
+
+create trigger payroll_receivable_deductions_touch_updated_at
+before update on public.payroll_receivable_deductions
+for each row execute function public.payroll_receivable_deductions_touch_updated_at();
+
+create or replace function public.protect_payroll_receivable_deduction_snapshot()
+returns trigger language plpgsql set search_path=public
+as $$
+begin
+  if old.status in ('approved','paid') and (
+    new.payroll_record_id<>old.payroll_record_id or
+    new.receivable_account_id<>old.receivable_account_id or
+    new.planned_deduction_amount<>old.planned_deduction_amount or
+    new.operation_id<>old.operation_id or
+    new.plan_hash<>old.plan_hash
+  ) then
+    raise exception 'Approved payroll deduction snapshots are immutable';
+  end if;
+  if old.status='paid' and new.status<>'paid' then
+    raise exception 'Paid payroll deductions are final';
+  end if;
+  return new;
+end $$;
+
+create trigger payroll_receivable_deductions_snapshot_freeze
+before update on public.payroll_receivable_deductions
+for each row execute function public.protect_payroll_receivable_deduction_snapshot();
+
+-- Draft planning is deliberately a non-financial operation. It can only be
+-- called by the existing HR administrator boundary and never inserts a
+-- receivable transaction.
+create or replace function public.prepare_hr_payroll_receivable_plan(
+  actor_profile_id uuid,
+  requested_payroll_id uuid,
+  requested_plan jsonb,
+  requested_plan_hash text
+)
+returns jsonb language plpgsql volatile security definer set search_path=public
+as $$
+declare payroll public.hr_payroll_records%rowtype;
+declare item jsonb;
+declare account public.receivable_accounts%rowtype;
+declare plan_count integer:=0;
+declare planned numeric;
+declare operation_id uuid;
+declare component_id uuid;
+begin
+  perform public.assert_hr_admin(actor_profile_id);
+  if requested_plan_hash is null or char_length(trim(requested_plan_hash))<16 then
+    raise exception 'Payroll deduction plan hash is required';
+  end if;
+  select * into payroll from public.hr_payroll_records where id=requested_payroll_id for update;
+  if payroll.id is null then raise exception 'Payroll record not found'; end if;
+  if payroll.status<>'draft' then raise exception 'Loan deductions can only be planned for draft payroll'; end if;
+  if jsonb_typeof(coalesce(requested_plan,'[]'::jsonb))<>'array' then raise exception 'Payroll deduction plan must be an array'; end if;
+
+  delete from public.payroll_receivable_deductions
+  where payroll_record_id=payroll.id and status='draft';
+
+  for item in select * from jsonb_array_elements(coalesce(requested_plan,'[]'::jsonb)) loop
+    planned:=round((item->>'amount')::numeric,4);
+    operation_id:=(item->>'operation_id')::uuid;
+    component_id:=nullif(item->>'payroll_component_id','')::uuid;
+    if planned<=0 or operation_id is null then raise exception 'Invalid planned loan deduction'; end if;
+    select * into account from public.receivable_accounts
+    where id=(item->>'receivable_account_id')::uuid for update;
+    if account.id is null then raise exception 'Receivable account not found for payroll plan'; end if;
+    if account.employee_record_id<>payroll.employee_record_id
+      or account.category not in ('employee_loan','salary_advance')
+      or account.status<>'active'
+      or account.default_repayment_method<>'salary_deduction'
+      or account.currency<>payroll.currency
+    then raise exception 'Receivable account is not eligible for this payroll'; end if;
+    if planned>public.receivable_current_outstanding(account.id) then
+      raise exception 'Planned payroll deduction exceeds current receivable outstanding';
+    end if;
+    insert into public.payroll_receivable_deductions(
+      payroll_record_id,receivable_account_id,payroll_component_id,
+      planned_deduction_amount,operation_id,plan_hash,status,created_by,updated_by
+    ) values(
+      payroll.id,account.id,component_id,planned,operation_id,requested_plan_hash,'draft',actor_profile_id,actor_profile_id
+    )
+    on conflict(payroll_record_id,receivable_account_id) do update set
+      payroll_component_id=excluded.payroll_component_id,
+      planned_deduction_amount=excluded.planned_deduction_amount,
+      operation_id=excluded.operation_id,
+      plan_hash=excluded.plan_hash,
+      status='draft',
+      repayment_transaction_id=null,
+      updated_by=actor_profile_id,
+      updated_at=now();
+    plan_count:=plan_count+1;
+  end loop;
+  return jsonb_build_object('payroll_id',payroll.id,'planned_accounts',plan_count,'plan_hash',requested_plan_hash);
+end $$;
+
+-- Approval freezes the plan but does not move any receivable balance.
+create or replace function public.approve_hr_payroll_with_receivables(
+  actor_profile_id uuid,
+  requested_payroll_id uuid,
+  requested_plan_hash text
+)
+returns jsonb language plpgsql volatile security definer set search_path=public
+as $$
+declare payroll public.hr_payroll_records%rowtype;
+declare link public.payroll_receivable_deductions%rowtype;
+begin
+  perform public.assert_hr_admin(actor_profile_id);
+  select * into payroll from public.hr_payroll_records where id=requested_payroll_id for update;
+  if payroll.id is null then raise exception 'Payroll record not found'; end if;
+  if payroll.status<>'draft' then raise exception 'Only draft payroll can be approved'; end if;
+  if requested_plan_hash is null then raise exception 'Payroll deduction plan hash is required'; end if;
+  if exists(select 1 from public.payroll_receivable_deductions where payroll_record_id=payroll.id and plan_hash<>requested_plan_hash) then
+    raise exception 'Payroll deduction plan changed; regenerate payroll before approval';
+  end if;
+  for link in
+    select * from public.payroll_receivable_deductions
+    where payroll_record_id=payroll.id and status='draft'
+    order by receivable_account_id
+    for update
+  loop
+    update public.payroll_receivable_deductions
+    set status='approved',updated_by=actor_profile_id,updated_at=now()
+    where id=link.id;
+  end loop;
+  update public.hr_payroll_records
+  set status='approved',approved_by=actor_profile_id,updated_at=now()
+  where id=payroll.id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,new_values,metadata)
+  values(
+    actor_profile_id,(select role from public.profiles where id=actor_profile_id),
+    'hr.payroll_approved','hr','hr_payroll_record',payroll.id::text,
+    'Payroll approved with a frozen receivable deduction plan.',
+    jsonb_build_object('status','approved'),jsonb_build_object('plan_hash',requested_plan_hash)
+  );
+  return jsonb_build_object('payroll_id',payroll.id,'status','approved','plan_hash',requested_plan_hash);
+end $$;
+
+-- The only trusted source for salary-deduction repayments. Every balance
+-- movement and the Paid state are committed or rolled back together.
+create or replace function public.mark_hr_payroll_paid_with_receivables(
+  actor_profile_id uuid,
+  requested_payroll_id uuid,
+  requested_operation_id uuid
+)
+returns jsonb language plpgsql volatile security definer set search_path=public
+as $$
+declare payroll public.hr_payroll_records%rowtype;
+declare link public.payroll_receivable_deductions%rowtype;
+declare account public.receivable_accounts%rowtype;
+declare repayment_id uuid;
+declare outstanding numeric;
+declare installment_remaining numeric;
+declare outstanding_after numeric;
+declare marked_paid_at timestamptz:=now();
+declare repayment_count integer:=0;
+begin
+  perform public.assert_hr_admin(actor_profile_id);
+  if requested_operation_id is null then raise exception 'Payroll Paid operation ID is required'; end if;
+  perform pg_advisory_xact_lock(hashtextextended(requested_operation_id::text,0));
+  select * into payroll from public.hr_payroll_records where id=requested_payroll_id for update;
+  if payroll.id is null then raise exception 'Payroll record not found'; end if;
+  if payroll.status='paid' then
+    return jsonb_build_object('payroll_id',payroll.id,'status','paid','replayed',true,
+      'repayment_count',(select count(*) from public.payroll_receivable_deductions where payroll_record_id=payroll.id and status='paid'));
+  end if;
+  if payroll.status<>'approved' then raise exception 'Only approved payroll can be marked paid'; end if;
+  if exists(
+    select 1 from public.payroll_receivable_deductions
+    where payroll_record_id=payroll.id and status<>'approved'
+  ) then
+    raise exception 'The approved Payroll deduction plan is incomplete. Recalculate/reapprove Payroll before payment.';
+  end if;
+
+  -- Lock links and then accounts in stable account-id order.
+  for link in
+    select * from public.payroll_receivable_deductions
+    where payroll_record_id=payroll.id and status='approved'
+    order by receivable_account_id
+    for update
+  loop
+    select * into account from public.receivable_accounts where id=link.receivable_account_id for update;
+    if account.id is null then raise exception 'Linked receivable account not found'; end if;
+    if account.employee_record_id<>payroll.employee_record_id
+      or account.category not in ('employee_loan','salary_advance')
+      or account.status<>'active'
+      or account.default_repayment_method<>'salary_deduction'
+      or account.currency<>payroll.currency
+    then raise exception 'Receivable deduction plan is stale or no longer eligible'; end if;
+    outstanding:=public.receivable_current_outstanding(account.id);
+    if outstanding<=0 or link.planned_deduction_amount>outstanding then
+      raise exception 'The employee loan balance has changed since Payroll approval. Recalculate/reapprove Payroll before payment.';
+    end if;
+    select remaining_amount into installment_remaining
+    from public.receivable_installment_status_v
+    where receivable_account_id=account.id and remaining_amount>0
+    order by installment_number limit 1;
+    if installment_remaining is null or link.planned_deduction_amount>installment_remaining then
+      raise exception 'The employee loan installment has changed since Payroll approval. Recalculate/reapprove Payroll before payment.';
+    end if;
+    outstanding_after:=round(outstanding-link.planned_deduction_amount,4);
+    if exists(select 1 from public.receivable_transactions where operation_id=link.operation_id) then
+      select id into repayment_id from public.receivable_transactions where operation_id=link.operation_id;
+    else
+      repayment_id:=gen_random_uuid();
+      insert into public.receivable_transactions(
+        id,receivable_account_id,transaction_type,direction,amount,effective_date,
+        payment_method,source,operation_id,payroll_record_id,notes,metadata,created_by
+      ) values(
+        repayment_id,account.id,'repayment','decrease',link.planned_deduction_amount,
+        timezone('Asia/Dhaka',marked_paid_at)::date,'salary_deduction','payroll',link.operation_id,
+        payroll.id,'Payroll salary deduction',jsonb_build_object('payroll_record_id',payroll.id,'payroll_link_id',link.id),actor_profile_id
+      );
+    end if;
+    update public.payroll_receivable_deductions
+    set status='paid',repayment_transaction_id=repayment_id,updated_by=actor_profile_id,updated_at=now()
+    where id=link.id;
+    update public.receivable_accounts
+    set status=case when outstanding_after=0 then 'fully_repaid' else 'active' end,
+        updated_by=actor_profile_id,updated_at=now()
+    where id=account.id;
+    insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,new_values,metadata)
+    values(
+      actor_profile_id,(select role from public.profiles where id=actor_profile_id),
+      'hr.payroll_receivable_repayment','hr','receivable_transaction',repayment_id::text,
+      'Payroll salary-deduction repayment linked to Payroll.',
+      jsonb_build_object('amount',link.planned_deduction_amount,'payroll_record_id',payroll.id,'receivable_account_id',account.id),
+      jsonb_build_object('payroll_link_id',link.id,'operation_id',link.operation_id)
+    );
+    repayment_count:=repayment_count+1;
+  end loop;
+
+  update public.hr_payroll_records
+  set status='paid',paid_at=marked_paid_at,updated_at=now()
+  where id=payroll.id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,new_values,metadata)
+  values(
+    actor_profile_id,(select role from public.profiles where id=actor_profile_id),
+    'hr.payroll_paid','hr','hr_payroll_record',payroll.id::text,
+    'Payroll marked paid and linked receivable repayments committed atomically.',
+    jsonb_build_object('status','paid','paid_at',marked_paid_at,'repayment_count',repayment_count),
+    jsonb_build_object('operation_id',requested_operation_id)
+  );
+  return jsonb_build_object('payroll_id',payroll.id,'status','paid','replayed',false,'repayment_count',repayment_count);
+end $$;
+
+alter table public.payroll_receivable_deductions enable row level security;
+create policy "hr admin reads payroll receivable deductions"
+on public.payroll_receivable_deductions for select to authenticated
+using(public.is_hr_admin());
+
+revoke all on public.payroll_receivable_deductions from public,anon,authenticated;
+grant select on public.payroll_receivable_deductions to authenticated;
+grant all on public.payroll_receivable_deductions to service_role;
+
+revoke all on function public.prepare_hr_payroll_receivable_plan(uuid,uuid,jsonb,text),
+  public.approve_hr_payroll_with_receivables(uuid,uuid,text),
+  public.mark_hr_payroll_paid_with_receivables(uuid,uuid,uuid)
+from public,anon,authenticated;
+grant execute on function public.prepare_hr_payroll_receivable_plan(uuid,uuid,jsonb,text),
+  public.approve_hr_payroll_with_receivables(uuid,uuid,text),
+  public.mark_hr_payroll_paid_with_receivables(uuid,uuid,uuid)
+to service_role;
+
+select pg_notify('pgrst','reload schema');
+
+commit;
+
+begin;
+
+-- Phase 5 is an additive, non-Sales financial boundary. Phase 3 remains the
+-- operational Receivables source of truth; this migration adds only the
+-- accounting linkage and trusted posting/reversal functions.
+
+alter table public.receivable_transactions
+  add column if not exists accounting_treatment text;
+
+alter table public.receivable_transactions
+  drop constraint if exists receivable_transactions_accounting_treatment_check;
+
+alter table public.receivable_transactions
+  add constraint receivable_transactions_accounting_treatment_check check(
+    accounting_treatment is null or accounting_treatment in (
+      'cash_disbursement','cash_repayment','cash_recovery','rent_expense_offset',
+      'payable_offset','write_off','non_cash_correction','historical_opening'
+    )
+  );
+
+create table public.receivable_accounting_postings (
+  id uuid primary key default gen_random_uuid(),
+  receivable_transaction_id uuid not null unique references public.receivable_transactions(id) on delete restrict,
+  journal_entry_id uuid unique references public.journal_entries(id) on delete restrict,
+  cashbook_entry_id uuid unique references public.cashbook_entries(id) on delete restrict,
+  posting_type text not null check(posting_type in ('disbursement','repayment','adjustment','reversal')),
+  accounting_treatment text not null check(accounting_treatment in (
+    'cash_disbursement','cash_repayment','cash_recovery','rent_expense_offset',
+    'payable_offset','write_off','non_cash_correction','historical_opening'
+  )),
+  operation_id uuid not null unique,
+  payload_hash text not null check(char_length(trim(payload_hash)) between 16 and 128),
+  posting_status text not null check(posting_status in ('posted','needs_review')),
+  accounting_date date,
+  posted_by uuid references public.profiles(id) on delete set null,
+  posted_at timestamptz,
+  reversal_of_posting_id uuid references public.receivable_accounting_postings(id) on delete restrict,
+  metadata jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  constraint receivable_accounting_postings_posted_fields_check check(
+    (posting_status='posted' and journal_entry_id is not null and accounting_date is not null and posted_at is not null)
+    or
+    (posting_status='needs_review' and journal_entry_id is null and cashbook_entry_id is null)
+  )
+);
+
+create unique index receivable_accounting_postings_one_reversal_idx
+  on public.receivable_accounting_postings(reversal_of_posting_id)
+  where reversal_of_posting_id is not null;
+create index receivable_accounting_postings_status_idx
+  on public.receivable_accounting_postings(posting_status,created_at desc);
+create index receivable_accounting_postings_account_idx
+  on public.receivable_accounting_postings(receivable_transaction_id);
+
+insert into public.cashbook_descriptions(name,transaction_type)
+values
+  ('Receivable disbursement','expense'),
+  ('Receivable repayment','income'),
+  ('Receivable cash recovery','income'),
+  ('Receivable disbursement reversal','income'),
+  ('Receivable repayment reversal','expense'),
+  ('Receivable cash recovery reversal','expense')
+on conflict do nothing;
+
+create or replace view public.receivable_accounting_reconciliation_v as
+select
+  account.id as receivable_account_id,
+  account.receivable_number,
+  account.borrower_type,
+  account.borrower_display_name_snapshot as borrower_name,
+  account.category,
+  account.currency,
+  transaction.id as receivable_transaction_id,
+  transaction.transaction_type,
+  transaction.direction,
+  transaction.amount,
+  transaction.effective_date,
+  transaction.payment_method,
+  transaction.source,
+  transaction.accounting_treatment,
+  transaction.operation_id as receivable_operation_id,
+  posting.id as posting_id,
+  case
+    when transaction.transaction_type='opening_balance' then 'historical_opening'
+    when posting.id is null then 'not_posted'
+    when exists(
+      select 1 from public.receivable_accounting_postings reversal
+      where reversal.reversal_of_posting_id=posting.id
+    ) then 'reversed'
+    when posting.posting_status='needs_review' then 'needs_review'
+    else 'posted'
+  end as posting_status,
+  posting.posting_type,
+  posting.operation_id as posting_operation_id,
+  posting.journal_entry_id,
+  journal.entry_number as journal_entry_number,
+  posting.cashbook_entry_id,
+  posting.accounting_date,
+  posting.posted_by,
+  posting.posted_at,
+  posting.reversal_of_posting_id,
+  posting.metadata as posting_metadata,
+  transaction.notes,
+  transaction.created_at
+from public.receivable_accounts account
+join public.receivable_transactions transaction
+  on transaction.receivable_account_id=account.id
+left join public.receivable_accounting_postings posting
+  on posting.receivable_transaction_id=transaction.id
+left join public.journal_entries journal
+  on journal.id=posting.journal_entry_id;
+
+create or replace function public.receivable_accounting_payload_hash(
+  requested_account_id uuid,
+  requested_operation_id uuid,
+  requested_posting_type text,
+  requested_amount numeric,
+  requested_effective_date date,
+  requested_payment_method text,
+  requested_accounting_treatment text,
+  requested_source_transaction_id uuid,
+  requested_note text
+)
+returns text language sql immutable set search_path=public
+as $$
+  select encode(extensions.digest(concat_ws('|',
+    requested_account_id::text,
+    requested_operation_id::text,
+    lower(trim(coalesce(requested_posting_type,''))),
+    round(coalesce(requested_amount,0),4)::text,
+    coalesce(requested_effective_date::text,''),
+    lower(trim(coalesce(requested_payment_method,''))),
+    lower(trim(coalesce(requested_accounting_treatment,''))),
+    coalesce(requested_source_transaction_id::text,''),
+    coalesce(trim(requested_note),'')
+  ),'sha256'),'hex');
+$$;
+
+create or replace function public.receivable_accounting_payment_account(
+  requested_payment_method text
+)
+returns uuid language sql stable security definer set search_path=public
+as $$
+  select id
+  from public.accounting_accounts
+  where code=case lower(trim(coalesce(requested_payment_method,'')))
+    when 'cash' then '1010'
+    when 'bank' then '1020'
+    when 'mfs' then '1030'
+    else ''
+  end
+    and currency='BDT' and is_active=true;
+$$;
+
+create or replace function public.receivable_accounting_control_account()
+returns uuid language sql stable security definer set search_path=public
+as $$
+  select id from public.accounting_accounts
+  where code='1100' and currency='BDT' and is_active=true;
+$$;
+
+create or replace function public.receivable_accounting_expense_account(
+  requested_treatment text
+)
+returns uuid language sql stable security definer set search_path=public
+as $$
+  select id from public.accounting_accounts
+  where code=case lower(trim(coalesce(requested_treatment,'')))
+    when 'payable_offset' then '2000'
+    when 'rent_expense_offset' then '6000'
+    when 'write_off' then '6000'
+    else ''
+  end
+    and currency='BDT' and is_active=true;
+$$;
+
+create or replace function public.receivable_accounting_assert_authority(
+  actor_profile_id uuid,
+  required_receivable_permission text,
+  requires_cashbook boolean
+)
+returns void language plpgsql security definer set search_path=public
+as $$
+begin
+  perform public.assert_actor_permission(actor_profile_id,required_receivable_permission);
+  perform public.assert_actor_permission(actor_profile_id,'accounting.create_entry');
+  perform public.assert_actor_permission(actor_profile_id,'accounting.approve_entry');
+  if requires_cashbook then
+    perform public.assert_actor_permission(actor_profile_id,'accounting.manage_cashbook');
+  end if;
+end $$;
+
+create or replace function public.post_receivable_accounting_operation(
+  actor_profile_id uuid,
+  requested_account_id uuid,
+  requested_operation_id uuid,
+  requested_posting_type text,
+  requested_amount numeric,
+  requested_effective_date date,
+  requested_payment_method text,
+  requested_accounting_treatment text,
+  requested_note text,
+  requested_source_transaction_id uuid default null,
+  requested_direction text default null
+)
+returns jsonb language plpgsql volatile security definer set search_path=public
+as $$
+declare
+  account public.receivable_accounts%rowtype;
+  existing_link public.receivable_accounting_postings%rowtype;
+  transaction_id uuid:=gen_random_uuid();
+  posting_id uuid:=gen_random_uuid();
+  journal_id uuid:=gen_random_uuid();
+  cashbook_id uuid;
+  journal_line_debit_account uuid;
+  journal_line_credit_account uuid;
+  cashbook_description_id uuid;
+  normalized_type text:=lower(trim(coalesce(requested_posting_type,'')));
+  normalized_method text:=lower(trim(coalesce(requested_payment_method,'')));
+  normalized_treatment text:=lower(trim(coalesce(requested_accounting_treatment,'')));
+  normalized_direction text:=lower(trim(coalesce(requested_direction,'')));
+  payload_hash text;
+  posting_status text:='posted';
+  requires_cashbook boolean:=false;
+  journal_description text;
+  actor_role public.account_role;
+  outstanding numeric;
+  outstanding_after numeric;
+  transaction_type text;
+  payment_description text;
+  metadata jsonb;
+begin
+  if requested_operation_id is null then raise exception 'Operation ID is required'; end if;
+  if normalized_type not in ('disbursement','repayment','adjustment') then
+    raise exception 'Unsupported Receivable posting type';
+  end if;
+  if requested_amount is null or requested_amount<=0 then raise exception 'Amount must be greater than zero'; end if;
+  requested_amount:=round(requested_amount,2);
+  if requested_amount<=0 then raise exception 'Amount must be greater than zero'; end if;
+  if requested_effective_date is null then raise exception 'Accounting date is required'; end if;
+  if normalized_method not in ('cash','bank','mfs','other') then raise exception 'Invalid payment method'; end if;
+  if normalized_treatment not in (
+    'cash_disbursement','cash_repayment','cash_recovery','rent_expense_offset',
+    'payable_offset','write_off','non_cash_correction'
+  ) then raise exception 'Unsupported Accounting treatment'; end if;
+
+  requires_cashbook:=normalized_treatment in ('cash_disbursement','cash_repayment','cash_recovery');
+  perform public.receivable_accounting_assert_authority(
+    actor_profile_id,
+    case normalized_type when 'disbursement' then 'receivables.disburse'
+      when 'repayment' then 'receivables.record_repayment'
+      else 'receivables.adjust' end,
+    requires_cashbook and normalized_method<>'other'
+  );
+  perform pg_advisory_xact_lock(hashtextextended(requested_operation_id::text,0));
+
+  payload_hash:=public.receivable_accounting_payload_hash(
+    requested_account_id,requested_operation_id,normalized_type,requested_amount,
+    requested_effective_date,normalized_method,normalized_treatment,
+    requested_source_transaction_id,requested_note
+  );
+  select * into existing_link from public.receivable_accounting_postings
+  where operation_id=requested_operation_id;
+  if existing_link.id is not null then
+    if existing_link.payload_hash<>payload_hash then raise exception 'Operation ID was already used with different posting data'; end if;
+    return jsonb_build_object(
+      'posting_id',existing_link.id,'receivable_transaction_id',existing_link.receivable_transaction_id,
+      'journal_entry_id',existing_link.journal_entry_id,'cashbook_entry_id',existing_link.cashbook_entry_id,
+      'posting_status',existing_link.posting_status,'replayed',true
+    );
+  end if;
+
+  if normalized_method='salary_deduction' then raise exception 'Salary deduction is reserved for Payroll'; end if;
+  select * into account from public.receivable_accounts where id=requested_account_id for update;
+  if account.id is null then raise exception 'Receivable account not found'; end if;
+  if account.currency<>'BDT' then
+    posting_status:='needs_review';
+    requires_cashbook:=false;
+  end if;
+
+  if normalized_type='disbursement' then
+    if account.status<>'approved' then raise exception 'Only approved Receivables can be disbursed'; end if;
+    if requested_amount>coalesce(account.approved_amount,account.requested_amount) then
+      raise exception 'Disbursement exceeds approved amount';
+    end if;
+    transaction_type:='disbursement';
+    normalized_direction:='increase';
+  elsif normalized_type='repayment' then
+    if account.status not in ('active','disbursed') then raise exception 'Only active Receivables can be repaid'; end if;
+    outstanding:=public.receivable_current_outstanding(account.id);
+    if requested_amount>outstanding then raise exception 'Repayment exceeds current outstanding'; end if;
+    transaction_type:='repayment';
+    normalized_direction:='decrease';
+  else
+    if normalized_direction not in ('increase','decrease') then raise exception 'Adjustment direction is required'; end if;
+    if normalized_direction='increase' and account.installment_count is not null then
+      raise exception 'An increase cannot change an approved installment schedule';
+    end if;
+    if normalized_direction='decrease' then
+      outstanding:=public.receivable_current_outstanding(account.id);
+      if requested_amount>outstanding then raise exception 'Adjustment exceeds current outstanding'; end if;
+      transaction_type:='adjustment_decrease';
+    else
+      transaction_type:='adjustment_increase';
+    end if;
+  end if;
+
+  if (
+    normalized_treatment in ('cash_disbursement','cash_repayment','cash_recovery')
+    and normalized_method='other'
+  ) or normalized_treatment='non_cash_correction' or account.currency<>'BDT' then
+    posting_status:='needs_review';
+    requires_cashbook:=false;
+  end if;
+
+  if posting_status='needs_review' then
+    journal_id:=null;
+    cashbook_id:=null;
+  end if;
+
+  if posting_status='posted' then
+    if requires_cashbook then
+      perform public.lock_cashbook_timeline();
+      perform public.assert_cashbook_predecessor_closed(requested_effective_date);
+      insert into public.cashbook_days(business_date,opening_balance,updated_by)
+      values(requested_effective_date,public.cashbook_opening_balance_for(requested_effective_date),actor_profile_id)
+      on conflict(business_date) do nothing;
+      perform 1 from public.cashbook_days where business_date=requested_effective_date for update;
+      if (select is_closed from public.cashbook_days where business_date=requested_effective_date) then
+        raise exception 'This cashbook day is closed';
+      end if;
+    end if;
+
+    journal_line_debit_account:=public.receivable_accounting_control_account();
+    journal_line_credit_account:=null;
+    if normalized_treatment in ('cash_disbursement') then
+      journal_line_credit_account:=public.receivable_accounting_payment_account(normalized_method);
+    elsif normalized_treatment in ('cash_repayment','cash_recovery') then
+      journal_line_debit_account:=public.receivable_accounting_payment_account(normalized_method);
+      journal_line_credit_account:=public.receivable_accounting_control_account();
+    elsif normalized_treatment in ('rent_expense_offset','payable_offset','write_off') then
+      journal_line_debit_account:=public.receivable_accounting_expense_account(normalized_treatment);
+      journal_line_credit_account:=public.receivable_accounting_control_account();
+    else
+      posting_status:='needs_review';
+    end if;
+    if posting_status='posted' and (journal_line_debit_account is null or journal_line_credit_account is null) then
+      raise exception 'Required Accounting account is unavailable';
+    end if;
+  end if;
+
+  metadata:=jsonb_build_object(
+    'phase','5','accounting_posted',posting_status='posted',
+    'cashbook_posted',requires_cashbook and posting_status='posted',
+    'accounting_treatment',normalized_treatment
+  );
+  if posting_status='posted' then
+    journal_description:=case normalized_type
+      when 'disbursement' then 'Receivable disbursement'
+      when 'repayment' then 'Receivable repayment'
+      else 'Receivable adjustment' end;
+    insert into public.journal_entries(
+      id,entry_number,entry_date,description,reference_type,reference_id,status,
+      currency,created_by,posted_by,posted_at
+    ) values(
+      journal_id,public.next_journal_entry_number(),requested_effective_date,
+      journal_description,'adjustment',transaction_id,'posted','BDT',
+      actor_profile_id,actor_profile_id,now()
+    );
+    insert into public.journal_lines(journal_entry_id,account_id,description,debit,credit)
+    values
+      (journal_id,journal_line_debit_account,journal_description,round(requested_amount,2),0),
+      (journal_id,journal_line_credit_account,journal_description,0,round(requested_amount,2));
+
+    if requires_cashbook then
+      payment_description:=case normalized_treatment
+        when 'cash_disbursement' then 'Receivable disbursement'
+        when 'cash_recovery' then 'Receivable cash recovery'
+        else 'Receivable repayment' end;
+      select cd.id into cashbook_description_id from public.cashbook_descriptions cd
+      where lower(cd.name)=lower(payment_description) and cd.transaction_type=case
+        when normalized_treatment='cash_disbursement' then 'expense' else 'income' end
+        and is_active=true;
+      if cashbook_description_id is null then raise exception 'Receivable Cash Book description is unavailable'; end if;
+      cashbook_id:=gen_random_uuid();
+      insert into public.cashbook_entries(
+        id,description_id,transaction_type,amount,payment_method,transaction_at,
+        business_date,journal_entry_id,created_by
+      ) values(
+        cashbook_id,cashbook_description_id,
+        case when normalized_treatment='cash_disbursement' then 'expense' else 'income' end,
+        round(requested_amount,2),normalized_method,
+        (requested_effective_date::timestamp at time zone 'Asia/Dhaka'),
+        requested_effective_date,journal_id,actor_profile_id
+      );
+    end if;
+  end if;
+
+  insert into public.receivable_transactions(
+    id,receivable_account_id,transaction_type,direction,amount,effective_date,
+    payment_method,source,operation_id,journal_entry_id,cashbook_entry_id,
+    accounting_treatment,notes,metadata,created_by
+  ) values(
+    transaction_id,account.id,transaction_type,normalized_direction,requested_amount,
+    requested_effective_date,normalized_method,case when normalized_type='repayment' then 'accounting' else 'accounting' end,
+    requested_operation_id,journal_id,cashbook_id,normalized_treatment,requested_note,metadata,actor_profile_id
+  );
+
+  insert into public.receivable_accounting_postings(
+    id,receivable_transaction_id,journal_entry_id,cashbook_entry_id,posting_type,
+    accounting_treatment,operation_id,payload_hash,posting_status,accounting_date,
+    posted_by,posted_at,metadata
+  ) values(
+    posting_id,transaction_id,journal_id,cashbook_id,normalized_type,
+    normalized_treatment,requested_operation_id,payload_hash,posting_status,
+    case when posting_status='posted' then requested_effective_date else null end,
+    case when posting_status='posted' then actor_profile_id else null end,
+    case when posting_status='posted' then now() else null end,metadata
+  );
+
+  if normalized_type='disbursement' then
+    update public.receivable_accounts set status='active',disbursement_date=requested_effective_date,
+      disbursed_by=actor_profile_id,disbursed_at=now(),updated_by=actor_profile_id,updated_at=now()
+    where id=account.id;
+  elsif normalized_type in ('repayment','adjustment') and normalized_direction='decrease' then
+    outstanding_after:=round(public.receivable_current_outstanding(account.id),4);
+    update public.receivable_accounts set status=case when outstanding_after=0 then 'fully_repaid' else 'active' end,
+      updated_by=actor_profile_id,updated_at=now() where id=account.id;
+  end if;
+
+  select role into actor_role from public.profiles where id=actor_profile_id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,new_values,metadata)
+  values(
+    actor_profile_id,actor_role,'receivables.accounting_posted','receivables',
+    'receivable_accounting_posting',posting_id,
+    case when posting_status='posted' then 'Receivable Accounting and Cash Book posting committed atomically.'
+      else 'Receivable operation recorded and marked for Accounting review.' end,
+    jsonb_build_object('posting_status',posting_status,'amount',requested_amount,'currency',account.currency),
+    jsonb_build_object('receivable_account_id',account.id,'receivable_transaction_id',transaction_id,
+      'journal_entry_id',journal_id,'cashbook_entry_id',cashbook_id,'operation_id',requested_operation_id,
+      'accounting_treatment',normalized_treatment)
+  );
+  return jsonb_build_object(
+    'posting_id',posting_id,'receivable_transaction_id',transaction_id,
+    'journal_entry_id',journal_id,'cashbook_entry_id',cashbook_id,
+    'posting_status',posting_status,'replayed',false
+  );
+end $$;
+
+create or replace function public.post_receivable_disbursement(
+  actor_profile_id uuid, requested_account_id uuid, requested_operation_id uuid,
+  requested_amount numeric, requested_effective_date date, requested_payment_method text,
+  requested_note text
+)
+returns jsonb language plpgsql volatile security definer set search_path=public
+as $$ begin
+  return public.post_receivable_accounting_operation(actor_profile_id,requested_account_id,
+    requested_operation_id,'disbursement',requested_amount,requested_effective_date,
+    requested_payment_method,'cash_disbursement',requested_note,null,'increase');
+end $$;
+
+create or replace function public.post_receivable_repayment(
+  actor_profile_id uuid, requested_account_id uuid, requested_operation_id uuid,
+  requested_amount numeric, requested_effective_date date, requested_payment_method text,
+  requested_note text
+)
+returns jsonb language plpgsql volatile security definer set search_path=public
+as $$ begin
+  return public.post_receivable_accounting_operation(actor_profile_id,requested_account_id,
+    requested_operation_id,'repayment',requested_amount,requested_effective_date,
+    requested_payment_method,'cash_repayment',requested_note,null,'decrease');
+end $$;
+
+create or replace function public.post_receivable_adjustment(
+  actor_profile_id uuid, requested_account_id uuid, requested_operation_id uuid,
+  requested_direction text, requested_amount numeric, requested_effective_date date,
+  requested_payment_method text, requested_accounting_treatment text, requested_reason text
+)
+returns jsonb language plpgsql volatile security definer set search_path=public
+as $$ begin
+  return public.post_receivable_accounting_operation(actor_profile_id,requested_account_id,
+    requested_operation_id,'adjustment',requested_amount,requested_effective_date,
+    requested_payment_method,requested_accounting_treatment,requested_reason,null,requested_direction);
+end $$;
+
+create or replace function public.reverse_receivable_accounting_posting(
+  actor_profile_id uuid, requested_account_id uuid, requested_posting_id uuid,
+  requested_operation_id uuid, requested_effective_date date, requested_reason text
+)
+returns jsonb language plpgsql volatile security definer set search_path=public
+as $$
+declare
+  original public.receivable_accounting_postings%rowtype;
+  original_transaction public.receivable_transactions%rowtype;
+  account public.receivable_accounts%rowtype;
+  existing_link public.receivable_accounting_postings%rowtype;
+  reversal_transaction_id uuid:=gen_random_uuid();
+  reversal_posting_id uuid:=gen_random_uuid();
+  reversal_journal_id uuid:=gen_random_uuid();
+  reversal_cashbook_id uuid;
+  debit_account uuid;
+  credit_account uuid;
+  cashbook_description_id uuid;
+  normalized_treatment text;
+  normalized_method text;
+  payload_hash text;
+  journal_description text:='Receivable posting reversal';
+  actor_role public.account_role;
+  outstanding_after numeric;
+  reversed_direction text;
+  reversed_transaction_type text:='reversal';
+  cashbook_is_expense boolean:=false;
+begin
+  perform public.receivable_accounting_assert_authority(actor_profile_id,'receivables.adjust',false);
+  if requested_operation_id is null then raise exception 'Operation ID is required'; end if;
+  if requested_effective_date is null then raise exception 'Reversal date is required'; end if;
+  if char_length(trim(coalesce(requested_reason,'')))<2 then raise exception 'Reversal reason is required'; end if;
+  perform pg_advisory_xact_lock(hashtextextended(requested_operation_id::text,0));
+  select * into existing_link from public.receivable_accounting_postings where operation_id=requested_operation_id;
+  payload_hash:=encode(extensions.digest(concat_ws('|',requested_account_id::text,requested_posting_id::text,requested_operation_id::text,requested_effective_date::text,trim(requested_reason)),'sha256'),'hex');
+  if existing_link.id is not null then
+    if existing_link.payload_hash<>payload_hash then raise exception 'Operation ID was already used with different reversal data'; end if;
+    return jsonb_build_object('posting_id',existing_link.id,'receivable_transaction_id',existing_link.receivable_transaction_id,
+      'journal_entry_id',existing_link.journal_entry_id,'cashbook_entry_id',existing_link.cashbook_entry_id,
+      'posting_status','posted','replayed',true);
+  end if;
+
+  select * into original from public.receivable_accounting_postings where id=requested_posting_id for update;
+  if original.id is null then raise exception 'Accounting posting not found'; end if;
+  if original.reversal_of_posting_id is not null then raise exception 'A reversal cannot itself be reversed'; end if;
+  if exists(select 1 from public.receivable_accounting_postings where reversal_of_posting_id=original.id) then
+    raise exception 'This Accounting posting has already been reversed';
+  end if;
+  if original.posting_status<>'posted' or original.journal_entry_id is null then raise exception 'Only posted Accounting entries can be reversed'; end if;
+  select * into original_transaction from public.receivable_transactions where id=original.receivable_transaction_id for update;
+  select * into account from public.receivable_accounts where id=requested_account_id for update;
+  if account.id is null or original_transaction.receivable_account_id<>account.id then raise exception 'Posting/account mismatch'; end if;
+  normalized_treatment:=original.accounting_treatment;
+  normalized_method:=coalesce(original_transaction.payment_method,'other');
+  reversed_direction:=case original_transaction.direction when 'increase' then 'decrease' else 'increase' end;
+
+  if normalized_treatment in ('cash_disbursement','cash_repayment','cash_recovery') then
+    if normalized_method='other' then raise exception 'Cash posting reversal requires a mapped payment method'; end if;
+    perform public.lock_cashbook_timeline();
+    perform public.assert_cashbook_predecessor_closed(requested_effective_date);
+    insert into public.cashbook_days(business_date,opening_balance,updated_by)
+    values(requested_effective_date,public.cashbook_opening_balance_for(requested_effective_date),actor_profile_id)
+    on conflict(business_date) do nothing;
+    perform 1 from public.cashbook_days where business_date=requested_effective_date for update;
+    if (select is_closed from public.cashbook_days where business_date=requested_effective_date) then raise exception 'This cashbook day is closed'; end if;
+  end if;
+
+  if normalized_treatment='cash_disbursement' then
+    debit_account:=public.receivable_accounting_payment_account(normalized_method);
+    credit_account:=public.receivable_accounting_control_account();
+    cashbook_is_expense:=false;
+  elsif normalized_treatment in ('cash_repayment','cash_recovery') then
+    debit_account:=public.receivable_accounting_control_account();
+    credit_account:=public.receivable_accounting_payment_account(normalized_method);
+    cashbook_is_expense:=true;
+  elsif normalized_treatment in ('rent_expense_offset','payable_offset','write_off') then
+    debit_account:=public.receivable_accounting_control_account();
+    credit_account:=public.receivable_accounting_expense_account(normalized_treatment);
+  else
+    raise exception 'Unsupported reversal treatment';
+  end if;
+  if debit_account is null or credit_account is null then raise exception 'Required Accounting account is unavailable'; end if;
+
+  insert into public.journal_entries(
+    id,entry_number,entry_date,description,reference_type,reference_id,status,currency,created_by,posted_by,posted_at,reversal_of
+  ) values(
+    reversal_journal_id,public.next_journal_entry_number(),requested_effective_date,journal_description,
+    'adjustment',reversal_transaction_id,'posted','BDT',actor_profile_id,actor_profile_id,now(),original.journal_entry_id
+  );
+  insert into public.journal_lines(journal_entry_id,account_id,description,debit,credit)
+  values
+    (reversal_journal_id,debit_account,journal_description,round(original_transaction.amount,2),0),
+    (reversal_journal_id,credit_account,journal_description,0,round(original_transaction.amount,2));
+
+  if normalized_treatment in ('cash_disbursement','cash_repayment','cash_recovery') then
+    select cd.id into cashbook_description_id from public.cashbook_descriptions cd
+    where lower(cd.name)=lower(case when normalized_treatment='cash_disbursement' then 'Receivable disbursement reversal'
+      when normalized_treatment='cash_recovery' then 'Receivable cash recovery reversal' else 'Receivable repayment reversal' end)
+      and cd.transaction_type=case when cashbook_is_expense then 'expense' else 'income' end and cd.is_active=true;
+    if cashbook_description_id is null then raise exception 'Receivable Cash Book description is unavailable'; end if;
+    reversal_cashbook_id:=gen_random_uuid();
+    insert into public.cashbook_entries(
+      id,description_id,transaction_type,amount,payment_method,transaction_at,business_date,journal_entry_id,created_by
+    ) values(
+      reversal_cashbook_id,cashbook_description_id,case when cashbook_is_expense then 'expense' else 'income' end,
+      round(original_transaction.amount,2),normalized_method,(requested_effective_date::timestamp at time zone 'Asia/Dhaka'),
+      requested_effective_date,reversal_journal_id,actor_profile_id
+    );
+  end if;
+
+  insert into public.receivable_transactions(
+    id,receivable_account_id,transaction_type,direction,amount,effective_date,payment_method,source,
+    operation_id,journal_entry_id,cashbook_entry_id,reversal_of_transaction_id,accounting_treatment,notes,metadata,created_by
+  ) values(
+    reversal_transaction_id,account.id,reversed_transaction_type,reversed_direction,original_transaction.amount,
+    requested_effective_date,normalized_method,'accounting',requested_operation_id,reversal_journal_id,reversal_cashbook_id,
+    original_transaction.id,normalized_treatment,requested_reason,jsonb_build_object('reversal_of_posting_id',original.id),actor_profile_id
+  );
+  insert into public.receivable_accounting_postings(
+    id,receivable_transaction_id,journal_entry_id,cashbook_entry_id,posting_type,accounting_treatment,
+    operation_id,payload_hash,posting_status,accounting_date,posted_by,posted_at,reversal_of_posting_id,metadata
+  ) values(
+    reversal_posting_id,reversal_transaction_id,reversal_journal_id,reversal_cashbook_id,'reversal',normalized_treatment,
+    requested_operation_id,payload_hash,'posted',requested_effective_date,actor_profile_id,now(),original.id,
+    jsonb_build_object('phase','5','reversal_of_posting_id',original.id)
+  );
+  outstanding_after:=public.receivable_current_outstanding(account.id);
+  update public.receivable_accounts set status=case when outstanding_after<=0 then 'fully_repaid' else 'active' end,
+    updated_by=actor_profile_id,updated_at=now() where id=account.id;
+  select role into actor_role from public.profiles where id=actor_profile_id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,new_values,metadata)
+  values(actor_profile_id,actor_role,'receivables.accounting_reversal','receivables','receivable_accounting_posting',reversal_posting_id,
+    'Receivable Accounting posting reversed immutably.',jsonb_build_object('reversal_of_posting_id',original.id,'amount',original_transaction.amount),
+    jsonb_build_object('receivable_account_id',account.id,'operation_id',requested_operation_id));
+  return jsonb_build_object('posting_id',reversal_posting_id,'receivable_transaction_id',reversal_transaction_id,
+    'journal_entry_id',reversal_journal_id,'cashbook_entry_id',reversal_cashbook_id,'posting_status','posted','replayed',false);
+end $$;
+
+alter table public.receivable_accounting_postings enable row level security;
+create policy "authorized finance reads receivable accounting postings"
+on public.receivable_accounting_postings for select to authenticated
+using(
+  public.is_current_user_admin()
+  or (
+    public.current_user_has_permission('receivables.view_loans')
+    and public.current_user_has_permission('accounting.view')
+  )
+);
+
+revoke all on public.receivable_accounting_postings from public,anon,authenticated;
+grant select on public.receivable_accounting_postings to authenticated;
+grant all on public.receivable_accounting_postings to service_role;
+revoke all on public.receivable_accounting_reconciliation_v from public,anon,authenticated;
+grant select on public.receivable_accounting_reconciliation_v to service_role;
+
+revoke all on function public.receivable_accounting_payload_hash(uuid,uuid,text,numeric,date,text,text,uuid,text),
+  public.receivable_accounting_payment_account(text),
+  public.receivable_accounting_control_account(),
+  public.receivable_accounting_expense_account(text),
+  public.receivable_accounting_assert_authority(uuid,text,boolean),
+  public.post_receivable_accounting_operation(uuid,uuid,uuid,text,numeric,date,text,text,text,uuid,text),
+  public.post_receivable_disbursement(uuid,uuid,uuid,numeric,date,text,text),
+  public.post_receivable_repayment(uuid,uuid,uuid,numeric,date,text,text),
+  public.post_receivable_adjustment(uuid,uuid,uuid,text,numeric,date,text,text,text),
+  public.reverse_receivable_accounting_posting(uuid,uuid,uuid,uuid,date,text)
+from public,anon,authenticated;
+
+grant execute on function public.receivable_accounting_payload_hash(uuid,uuid,text,numeric,date,text,text,uuid,text),
+  public.receivable_accounting_payment_account(text),
+  public.receivable_accounting_control_account(),
+  public.receivable_accounting_expense_account(text),
+  public.receivable_accounting_assert_authority(uuid,text,boolean),
+  public.post_receivable_accounting_operation(uuid,uuid,uuid,text,numeric,date,text,text,text,uuid,text),
+  public.post_receivable_disbursement(uuid,uuid,uuid,numeric,date,text,text),
+  public.post_receivable_repayment(uuid,uuid,uuid,numeric,date,text,text),
+  public.post_receivable_adjustment(uuid,uuid,uuid,text,numeric,date,text,text,text),
+  public.reverse_receivable_accounting_posting(uuid,uuid,uuid,uuid,date,text)
+to service_role;
+
+-- Explicit wrapper grants keep the trusted boundary obvious to migration auditors.
+revoke all on function public.post_receivable_disbursement(uuid,uuid,uuid,numeric,date,text,text) from public,anon,authenticated;
+revoke all on function public.post_receivable_repayment(uuid,uuid,uuid,numeric,date,text,text) from public,anon,authenticated;
+revoke all on function public.post_receivable_adjustment(uuid,uuid,uuid,text,numeric,date,text,text,text) from public,anon,authenticated;
+revoke all on function public.reverse_receivable_accounting_posting(uuid,uuid,uuid,uuid,date,text) from public,anon,authenticated;
+grant execute on function public.post_receivable_disbursement(uuid,uuid,uuid,numeric,date,text,text) to service_role;
+grant execute on function public.post_receivable_repayment(uuid,uuid,uuid,numeric,date,text,text) to service_role;
+grant execute on function public.post_receivable_adjustment(uuid,uuid,uuid,text,numeric,date,text,text,text) to service_role;
+grant execute on function public.reverse_receivable_accounting_posting(uuid,uuid,uuid,uuid,date,text) to service_role;
+
+select pg_notify('pgrst','reload schema');
+
+commit;
+
+-- Immutable, optional Sales money receipts.  This migration deliberately has no
+-- accounting, inventory, shipment, invoice, or payment-recording side effects.
+
+create sequence if not exists public.sale_money_receipt_number_seq;
+
+create or replace function public.next_sale_money_receipt_number()
+returns text
+language sql
+volatile
+security definer
+set search_path=''
+as $$
+  select 'SEN-MR-' || to_char(timezone('Asia/Dhaka',pg_catalog.clock_timestamp()),'YYYYMMDD') || '-' ||
+    pg_catalog.lpad(nextval('public.sale_money_receipt_number_seq')::text,5,'0');
+$$;
+
+create or replace function public.sale_money_receipt_amount_in_words(
+  requested_amount numeric,
+  requested_currency text default 'BDT'
+)
+returns text
+language plpgsql
+immutable
+strict
+security definer
+set search_path=''
+as $$
+declare
+  amount_rounded numeric := round(requested_amount,2);
+  amount_abs numeric := abs(amount_rounded);
+  whole_amount bigint := trunc(amount_abs);
+  poisha integer := round((amount_abs - trunc(amount_abs)) * 100)::integer;
+  chunk integer;
+  remainder integer;
+  scale_index integer := 1;
+  chunk_words text;
+  result_words text := '';
+  currency_code text := upper(nullif(trim(requested_currency),''));
+  currency_label text;
+  fractional_label text;
+  units text[] := array['Zero','One','Two','Three','Four','Five','Six','Seven','Eight','Nine','Ten','Eleven','Twelve','Thirteen','Fourteen','Fifteen','Sixteen','Seventeen','Eighteen','Nineteen'];
+  tens text[] := array['','','Twenty','Thirty','Forty','Fifty','Sixty','Seventy','Eighty','Ninety'];
+  scales text[] := array['','Thousand','Million','Billion','Trillion'];
+begin
+  currency_code := coalesce(currency_code,'XXX');
+  if currency_code = 'BDT' then
+    currency_label := 'Bangladeshi Taka';
+    fractional_label := 'Poisha';
+  else
+    currency_label := currency_code;
+    fractional_label := 'Cents';
+  end if;
+
+  if poisha >= 100 then
+    whole_amount := whole_amount + poisha / 100;
+    poisha := poisha % 100;
+  end if;
+
+  if whole_amount = 0 then
+    result_words := 'Zero';
+  else
+    while whole_amount > 0 loop
+      chunk := (whole_amount % 1000)::integer;
+      if chunk > 0 then
+        chunk_words := '';
+        if chunk >= 100 then
+          chunk_words := units[(chunk / 100) + 1] || ' Hundred';
+          remainder := chunk % 100;
+        else
+          remainder := chunk;
+        end if;
+        if remainder > 0 then
+          if chunk_words <> '' then chunk_words := chunk_words || ' '; end if;
+          if remainder < 20 then
+            chunk_words := chunk_words || units[remainder + 1];
+          else
+            chunk_words := chunk_words || tens[(remainder / 10) + 1];
+            if remainder % 10 > 0 then chunk_words := chunk_words || ' ' || units[(remainder % 10) + 1]; end if;
+          end if;
+        end if;
+        if scale_index > 1 then chunk_words := chunk_words || ' ' || scales[scale_index]; end if;
+        result_words := case when result_words='' then chunk_words else chunk_words || ' ' || result_words end;
+      end if;
+      whole_amount := whole_amount / 1000;
+      scale_index := scale_index + 1;
+    end loop;
+  end if;
+  if amount_rounded < 0 then result_words := 'Minus ' || result_words; end if;
+  result_words := currency_label || ' ' || result_words;
+  if poisha > 0 then
+    chunk_words := '';
+    if poisha < 20 then chunk_words := units[poisha + 1];
+    else
+      chunk_words := tens[(poisha / 10) + 1];
+      if poisha % 10 > 0 then chunk_words := chunk_words || ' ' || units[(poisha % 10) + 1]; end if;
+    end if;
+    result_words := result_words || ' and ' || chunk_words || ' ' || fractional_label;
+  end if;
+  return result_words || ' Only';
+end
+$$;
+
+create table if not exists public.sale_money_receipts (
+  id uuid primary key default gen_random_uuid(),
+  payment_id uuid not null unique references public.sale_payments(id) on delete restrict,
+  order_id uuid not null references public.sales_orders(id) on delete restrict,
+  receipt_number text not null unique,
+  receipt_date date not null,
+  snapshot jsonb not null,
+  generated_by uuid not null references public.profiles(id) on delete restrict,
+  created_at timestamptz not null default now(),
+  check (jsonb_typeof(snapshot)='object')
+);
+create index if not exists sale_money_receipts_order_idx on public.sale_money_receipts(order_id,created_at desc);
+
+-- Build every authoritative receipt field from the saved Sale and Payment.
+-- The generator and the insert trigger both use this function so a client
+-- cannot provide a second source of truth for financial or customer data.
+create or replace function public.build_sale_money_receipt_snapshot(
+  requested_payment_id uuid,
+  requested_order_id uuid,
+  requested_receipt_number text,
+  requested_receipt_date date,
+  requested_generated_at timestamptz
+)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path=''
+as $$
+declare
+  sale public.sales_orders%rowtype;
+  payment public.sale_payments%rowtype;
+  customer public.profiles%rowtype;
+  received_by public.profiles%rowtype;
+  latest_invoice_number text;
+  previously_paid numeric := 0;
+  this_payment numeric;
+  total_paid numeric;
+  remaining numeric;
+  history_status text;
+begin
+  if requested_payment_id is null or requested_order_id is null then
+    raise exception 'Payment and sale are required';
+  end if;
+  if pg_catalog.btrim(coalesce(requested_receipt_number,'')) = '' then
+    raise exception 'Receipt number is required';
+  end if;
+  if requested_receipt_number !~ '^SEN-MR-[0-9]{8}-[0-9]{5,}$' then
+    raise exception 'Receipt number is invalid';
+  end if;
+  if requested_receipt_date is null or requested_generated_at is null then
+    raise exception 'Receipt date and generated time are required';
+  end if;
+
+  select * into payment
+  from public.sale_payments
+  where id=requested_payment_id;
+  if payment.id is null then raise exception 'Payment not found'; end if;
+  if payment.order_id is distinct from requested_order_id then
+    raise exception 'Payment does not belong to the sale';
+  end if;
+  if payment.status <> 'received' then
+    raise exception 'Only received payments can have a money receipt';
+  end if;
+  if payment.payment_date is distinct from requested_receipt_date then
+    raise exception 'Receipt date must match the saved payment date';
+  end if;
+
+  select * into sale
+  from public.sales_orders
+  where id=requested_order_id;
+  if sale.id is null then raise exception 'Sale not found'; end if;
+
+  select * into customer
+  from public.profiles
+  where id=sale.customer_profile_id;
+  if customer.id is null then raise exception 'Customer not found'; end if;
+
+  select * into received_by
+  from public.profiles
+  where id=payment.received_by;
+  if received_by.id is null then raise exception 'Receiving profile not found'; end if;
+
+  select document_number into latest_invoice_number
+  from public.sale_documents
+  where order_id=sale.id and document_type='invoice' and status='generated'
+  order by revision_number desc,created_at desc limit 1;
+
+  this_payment := payment.amount;
+  select coalesce(sum(history.amount),0) into previously_paid
+  from (
+    select p.amount
+    from public.sale_payments p
+    where p.order_id=sale.id and p.status='received'
+      and (p.created_at,p.id) < (payment.created_at,payment.id)
+    order by created_at,id
+  ) history;
+  total_paid := previously_paid + this_payment;
+  remaining := greatest(sale.total_amount-total_paid,0);
+  history_status := case when total_paid >= sale.total_amount then 'FULL PAYMENT' else 'PARTIAL PAYMENT' end;
+
+  return jsonb_build_object(
+    'receipt_number',requested_receipt_number,
+    'receipt_date',requested_receipt_date,
+    'generated_at',requested_generated_at,
+    'sale',jsonb_build_object('id',sale.id,'order_number',sale.order_number,'total_amount',sale.total_amount,'currency',sale.currency),
+    'customer',jsonb_build_object('id',customer.id,'full_name',customer.full_name,'company_name',customer.company_name,'email',customer.email,'phone',customer.phone),
+    'contact',jsonb_build_object('full_name',customer.full_name,'email',customer.email,'phone',customer.phone),
+    'address',coalesce(nullif(sale.billing_address_snapshot,'{}'::jsonb),sale.shipping_address_snapshot,'{}'::jsonb),
+    'payment',jsonb_build_object('id',payment.id,'amount',payment.amount,'payment_date',payment.payment_date,'method',payment.method,'reference_number',payment.reference_number,'status',payment.status,'received_by',jsonb_build_object('id',received_by.id,'full_name',received_by.full_name)),
+    'invoice_number',latest_invoice_number,
+    'summary',jsonb_build_object('previously_paid',previously_paid,'this_payment',this_payment,'total_paid',total_paid,'remaining',remaining,'status',history_status),
+    'amount_in_words',public.sale_money_receipt_amount_in_words(this_payment,sale.currency)
+  );
+end
+$$;
+
+create or replace function public.reject_sale_money_receipt_mutation()
+returns trigger
+language plpgsql
+security definer
+set search_path=''
+as $$
+begin
+  raise exception 'Sales money receipts are immutable';
+end
+$$;
+
+create or replace function public.validate_sale_money_receipt_insert()
+returns trigger
+language plpgsql
+security invoker
+set search_path=''
+as $$
+declare
+  generated_at timestamptz;
+  expected_snapshot jsonb;
+  generator_owner text;
+begin
+  -- Keep the insert path closed even if a generated/native schema later
+  -- re-grants table INSERT to an API role.  The only approved writer is the
+  -- security-definer generator below; a direct service_role INSERT is still
+  -- rejected by this invoker trigger before snapshot validation.
+  generator_owner := pg_catalog.pg_get_userbyid(
+    (
+      select p.proowner
+      from pg_catalog.pg_proc p
+      where p.oid=pg_catalog.to_regprocedure('public.generate_sale_money_receipt(uuid,uuid)')
+    )
+  );
+  if generator_owner is null or current_user is distinct from generator_owner then
+    raise exception 'Money receipts may only be created by the controlled generator';
+  end if;
+
+  if new.snapshot is null or jsonb_typeof(new.snapshot) <> 'object' then
+    raise exception 'Money receipt snapshot must be an object';
+  end if;
+
+  begin
+    generated_at := nullif(new.snapshot->>'generated_at','')::timestamptz;
+  exception when others then
+    raise exception 'Money receipt generated time is invalid';
+  end;
+
+  expected_snapshot := public.build_sale_money_receipt_snapshot(
+    new.payment_id,
+    new.order_id,
+    new.receipt_number,
+    new.receipt_date,
+    generated_at
+  );
+  if new.snapshot is distinct from expected_snapshot then
+    raise exception 'Money receipt snapshot must be generated from saved sale payment';
+  end if;
+  return new;
+end
+$$;
+
+drop trigger if exists reject_sale_money_receipt_mutation on public.sale_money_receipts;
+create trigger reject_sale_money_receipt_mutation
+before update or delete on public.sale_money_receipts
+for each row execute function public.reject_sale_money_receipt_mutation();
+drop trigger if exists validate_sale_money_receipt_insert on public.sale_money_receipts;
+create trigger validate_sale_money_receipt_insert
+before insert on public.sale_money_receipts
+for each row execute function public.validate_sale_money_receipt_insert();
+
+-- Only the active, sensitive permission is seeded; permission templates are untouched.
+insert into public.permissions(module_id,key,name,description,action,is_sensitive,sort_order,is_active)
+select m.id,'sales.money_receipt','Generate sales money receipts','Generate an immutable receipt for a received sale payment.','money_receipt',true,140,true
+from public.app_modules m
+where m.key='sales'
+on conflict(key) do update set
+  module_id=excluded.module_id,name=excluded.name,description=excluded.description,
+  action=excluded.action,is_sensitive=true,is_active=true,sort_order=excluded.sort_order;
+
+alter table public.sale_money_receipts enable row level security;
+
+-- Resolve the parent-sale scope without consulting the parent table's RLS
+-- policy.  The normal sales_orders policy intentionally exposes only broad
+-- Sales access; this isolated security-definer lookup also supports an
+-- employee who has the narrower sales.view_own permission.  It accepts only
+-- the current authenticated identity, so callers cannot probe another actor
+-- by passing an arbitrary profile id.
+create or replace function public.can_current_user_view_sale_money_receipt(
+  requested_order_id uuid
+)
+returns boolean
+language sql
+stable
+security definer
+set search_path=''
+as $$
+  select exists (
+    select 1
+    from public.sales_orders o
+    where o.id=requested_order_id
+      and (
+        public.current_user_has_permission('sales.view')
+        or public.current_user_has_permission('sales.view_all')
+        or (
+          o.created_by=auth.uid()
+          and public.current_user_has_permission('sales.view_own')
+        )
+      )
+  );
+$$;
+
+drop policy if exists "staff read sale money receipts" on public.sale_money_receipts;
+create policy "staff read sale money receipts" on public.sale_money_receipts
+for select to authenticated
+using (
+  public.current_user_has_permission('sales.money_receipt')
+  and (
+    public.can_current_user_view_sale_money_receipt(order_id)
+  )
+);
+
+revoke all privileges on table public.sale_money_receipts from public,anon,authenticated,service_role;
+grant select on public.sale_money_receipts to authenticated,service_role;
+revoke all on function public.can_current_user_view_sale_money_receipt(uuid) from public,anon;
+grant execute on function public.can_current_user_view_sale_money_receipt(uuid) to authenticated,service_role;
+
+create or replace function public.generate_sale_money_receipt(
+  actor_profile_id uuid,
+  requested_payment_id uuid
+)
+returns uuid
+language plpgsql
+security definer
+set search_path=''
+as $$
+declare
+  sale public.sales_orders%rowtype;
+  payment public.sale_payments%rowtype;
+  existing_id uuid;
+  receipt_id uuid := gen_random_uuid();
+  receipt_number text;
+  snapshot jsonb;
+  inserted boolean := false;
+  actor_role public.account_role;
+  payment_order_id uuid;
+begin
+  if not exists(select 1 from public.profiles p where p.id=actor_profile_id and p.status='active') then
+    raise exception 'Inactive actor';
+  end if;
+  perform public.assert_actor_permission(actor_profile_id,'sales.money_receipt');
+
+  -- Resolve and lock the parent sale first, then lock the payment row.
+  select order_id into payment_order_id from public.sale_payments where id=requested_payment_id;
+  if payment_order_id is null then raise exception 'Payment not found'; end if;
+  select * into sale from public.sales_orders where id=payment_order_id for update;
+  if sale.id is null then raise exception 'Sale not found'; end if;
+  select * into payment from public.sale_payments where id=requested_payment_id for update;
+  if payment.order_id is distinct from sale.id then raise exception 'Payment does not belong to the sale'; end if;
+
+  if not exists(
+    select 1 from public.effective_permissions_for_profile(actor_profile_id) e
+    where e.permission_key in ('sales.view','sales.view_all')
+  ) and not exists(
+    select 1 from public.effective_permissions_for_profile(actor_profile_id) e
+    where e.permission_key='sales.view_own' and sale.created_by=actor_profile_id
+  ) then
+    raise exception 'Sales view permission required';
+  end if;
+
+  -- An already-issued receipt is idempotent, including after a later refund.
+  select id into existing_id from public.sale_money_receipts where payment_id=payment.id;
+  if existing_id is not null then return existing_id; end if;
+  if payment.status <> 'received' then raise exception 'Only received payments can have a money receipt'; end if;
+
+  receipt_number := public.next_sale_money_receipt_number();
+  snapshot := public.build_sale_money_receipt_snapshot(
+    payment.id,
+    sale.id,
+    receipt_number,
+    payment.payment_date,
+    pg_catalog.clock_timestamp()
+  );
+
+  insert into public.sale_money_receipts(id,payment_id,order_id,receipt_number,receipt_date,snapshot,generated_by)
+  values(receipt_id,payment.id,sale.id,receipt_number,payment.payment_date,snapshot,actor_profile_id)
+  on conflict (payment_id) do nothing
+  returning id into existing_id;
+  if existing_id is null then
+    select id into existing_id from public.sale_money_receipts where payment_id=payment.id;
+  else
+    inserted := true;
+  end if;
+
+  if inserted then
+    select role into actor_role from public.profiles where id=actor_profile_id;
+    insert into public.audit_logs(actor_id,actor_role,target_profile_id,action,module,entity_type,entity_id,description,new_values)
+    values(actor_profile_id,actor_role,sale.customer_profile_id,'sales.money_receipt_generated','sales','sale_money_receipt',existing_id::text,'Sales money receipt generated.',jsonb_build_object('receipt_id',existing_id,'payment_id',payment.id,'order_id',sale.id,'receipt_number',receipt_number));
+  end if;
+  return existing_id;
+end
+$$;
+
+revoke all on function public.generate_sale_money_receipt(uuid,uuid) from public,anon,authenticated;
+grant execute on function public.generate_sale_money_receipt(uuid,uuid) to service_role;
+revoke all on function public.build_sale_money_receipt_snapshot(uuid,uuid,text,date,timestamptz) from public,anon,authenticated,service_role;
+revoke all on function public.next_sale_money_receipt_number() from public,anon,authenticated,service_role;
+revoke all on function public.sale_money_receipt_amount_in_words(numeric,text) from public,anon,authenticated,service_role;
+revoke all on sequence public.sale_money_receipt_number_seq from public,anon,authenticated,service_role;
+
+notify pgrst, 'reload schema';
 
 -- Add an immutable, permission-protected review state to finalized Cash Book days.
 
@@ -19664,7 +24772,7 @@ alter table public.cashbook_days
   add column if not exists correction_requested_at timestamptz,
   add column if not exists correction_requested_by uuid references public.profiles(id) on delete set null;
 
-do $ begin
+do $$ begin
   if not exists (
     select 1 from pg_constraint
     where conname='cashbook_days_audit_status_check'
@@ -19674,7 +24782,7 @@ do $ begin
       add constraint cashbook_days_audit_status_check
       check (audit_status in ('OPEN','PENDING_AUDIT','CORRECTION_REQUIRED','APPROVED'));
   end if;
-end $;
+end $$;
 
 -- Existing finalized days have not been reviewed by this workflow; do not invent approval.
 update public.cashbook_days
@@ -19707,7 +24815,7 @@ create or replace function public.close_cashbook_day(
 language plpgsql
 security definer
 set search_path=public
-as $
+as $$
 declare
   day_row public.cashbook_days%rowtype;
   income_total numeric(18,2);
@@ -19757,7 +24865,7 @@ begin
       'expense',expense_total,'closing_balance',final_balance)
   );
   return final_balance;
-end $;
+end $$;
 
 create or replace function public.approve_cashbook_audit(
   actor_profile_id uuid,
@@ -19767,7 +24875,7 @@ create or replace function public.approve_cashbook_audit(
 language plpgsql
 security definer
 set search_path=public
-as $
+as $$
 declare
   day_row public.cashbook_days%rowtype;
   actor_role public.account_role;
@@ -19806,7 +24914,7 @@ begin
     requested_business_date::text,'Cashbook day audit approved.',
     jsonb_build_object('audit_status',day_row.audit_status),
     jsonb_build_object('audit_status','APPROVED','review_comment',normalized_comment));
-end $;
+end $$;
 
 create or replace function public.request_cashbook_correction(
   actor_profile_id uuid,
@@ -19816,7 +24924,7 @@ create or replace function public.request_cashbook_correction(
 language plpgsql
 security definer
 set search_path=public
-as $
+as $$
 declare
   day_row public.cashbook_days%rowtype;
   actor_role public.account_role;
@@ -19859,7 +24967,7 @@ begin
     requested_business_date::text,'Cashbook correction requested.',
     jsonb_build_object('audit_status',day_row.audit_status),
     jsonb_build_object('audit_status','CORRECTION_REQUIRED','correction_reason',normalized_reason));
-end $;
+end $$;
 
 revoke all on function public.approve_cashbook_audit(uuid,date,text) from public,anon,authenticated;
 revoke all on function public.request_cashbook_correction(uuid,date,text) from public,anon,authenticated;
@@ -19867,6 +24975,4240 @@ grant execute on function public.approve_cashbook_audit(uuid,date,text) to servi
 grant execute on function public.request_cashbook_correction(uuid,date,text) to service_role;
 
 notify pgrst, 'reload schema';
+
+-- Local validation migration for closed Cashbook Admin audit/edit/approve.
+
+alter table public.cashbook_days
+  add column if not exists audit_status text not null default 'OPEN',
+  add column if not exists reviewed_at timestamptz,
+  add column if not exists reviewed_by uuid references public.profiles(id) on delete set null,
+  add column if not exists review_comment text;
+
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname='cashbook_days_audit_status_check' and conrelid='public.cashbook_days'::regclass) then
+    alter table public.cashbook_days add constraint cashbook_days_audit_status_check
+      check (audit_status in ('OPEN','PENDING_AUDIT','APPROVED'));
+  end if;
+end $$;
+
+update public.cashbook_days set audit_status='PENDING_AUDIT'
+where is_closed=true and audit_status='OPEN';
+
+insert into public.permissions(module_id,key,name,description,action,is_sensitive,sort_order)
+select id,'accounting.audit_cashbook','Audit cashbook days',
+  'Review, correct, and approve closed Cashbook days.','audit_cashbook',true,60
+from public.app_modules where key='accounting'
+on conflict(key) do update set name=excluded.name,description=excluded.description,
+  action=excluded.action,is_sensitive=true,is_active=true,sort_order=excluded.sort_order;
+
+create or replace function public.close_cashbook_day(actor_profile_id uuid,requested_business_date date)
+returns numeric language plpgsql security definer set search_path=public as $$
+declare day_row public.cashbook_days%rowtype; income_total numeric(18,2); expense_total numeric(18,2);
+  final_balance numeric(18,2); actor_role public.account_role;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'accounting.create_entry');
+  if requested_business_date is null then raise exception 'Business date is required'; end if;
+  perform public.lock_cashbook_timeline();
+  perform public.assert_cashbook_predecessor_closed(requested_business_date);
+  insert into public.cashbook_days(business_date,opening_balance,updated_by)
+  values(requested_business_date,public.cashbook_opening_balance_for(requested_business_date),actor_profile_id)
+  on conflict(business_date) do nothing;
+  select * into day_row from public.cashbook_days where business_date=requested_business_date for update;
+  if day_row.is_closed then raise exception 'This cashbook day is already closed'; end if;
+  select coalesce(sum(amount) filter(where transaction_type='income'),0),
+    coalesce(sum(amount) filter(where transaction_type='expense'),0)
+  into income_total,expense_total from public.cashbook_entries where business_date=requested_business_date;
+  final_balance:=day_row.opening_balance+income_total-expense_total;
+  update public.cashbook_days set is_closed=true,closing_balance=final_balance,closed_at=now(),
+    closed_by=actor_profile_id,audit_status='PENDING_AUDIT',reviewed_at=null,reviewed_by=null,
+    review_comment=null,updated_by=actor_profile_id,updated_at=now()
+  where business_date=requested_business_date;
+  select role into actor_role from public.profiles where id=actor_profile_id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,new_values)
+  values(actor_profile_id,actor_role,'accounting.cashbook_day_closed','accounting','cashbook_day',
+    requested_business_date::text,'Cashbook day closed.',jsonb_build_object('closing_balance',final_balance,'audit_status','PENDING_AUDIT'));
+  return final_balance;
+end $$;
+
+create or replace function public.edit_pending_cashbook_entry(
+  actor_profile_id uuid, requested_entry_id uuid, requested_description_id uuid,
+  requested_amount numeric, requested_payment_method text, requested_occurred_at timestamptz,
+  requested_remark text default null
+) returns uuid language plpgsql security definer set search_path=public as $$
+declare entry_row public.cashbook_entries%rowtype; day_row public.cashbook_days%rowtype;
+  description_row public.cashbook_descriptions%rowtype; journal_row public.journal_entries%rowtype;
+  payment_account_id uuid; counter_account_id uuid; normalized_method text:=lower(trim(coalesce(requested_payment_method,'')));
+  normalized_remark text:=trim(coalesce(requested_remark,'')); actor_role public.account_role;
+  income_total numeric(18,2); expense_total numeric(18,2); final_balance numeric(18,2);
+begin
+  perform public.assert_actor_permission(actor_profile_id,'accounting.audit_cashbook');
+  if requested_amount is null or requested_amount<=0 then raise exception 'Amount must be greater than zero'; end if;
+  if normalized_method not in ('cash','bank','mfs') then raise exception 'Payment method must be Cash, Bank, or MFS'; end if;
+  if char_length(coalesce(normalized_remark,''))>240 then raise exception 'Remark cannot exceed 240 characters'; end if;
+  perform public.lock_cashbook_timeline();
+  select * into entry_row from public.cashbook_entries where id=requested_entry_id for update;
+  if entry_row.id is null then raise exception 'Cashbook entry not found'; end if;
+  if entry_row.sale_payment_id is not null then raise exception 'Automated Sales cashbook entries are not editable here'; end if;
+  select * into day_row from public.cashbook_days where business_date=entry_row.business_date for update;
+  if not day_row.is_closed or day_row.audit_status<>'PENDING_AUDIT' then raise exception 'Only a closed day pending audit can be edited'; end if;
+  if requested_occurred_at is null or (requested_occurred_at at time zone 'Asia/Dhaka')::date<>entry_row.business_date then
+    raise exception 'Transaction date must match the cashbook date';
+  end if;
+  select * into description_row from public.cashbook_descriptions where id=requested_description_id and is_active=true;
+  if description_row.id is null then raise exception 'Select an active cashbook description'; end if;
+  select * into journal_row from public.journal_entries where id=entry_row.journal_entry_id for update;
+  if journal_row.id is null or journal_row.status<>'posted' or journal_row.reference_id is distinct from entry_row.id then
+    raise exception 'The linked posted Journal is unavailable';
+  end if;
+  select id into payment_account_id from public.accounting_accounts where code=case normalized_method when 'cash' then '1010' when 'bank' then '1020' else '1030' end and currency='BDT' and is_active=true;
+  select id into counter_account_id from public.accounting_accounts where code=case description_row.transaction_type when 'income' then '4000' else '6000' end and currency='BDT' and is_active=true;
+  if payment_account_id is null or counter_account_id is null then raise exception 'Required accounting account is unavailable'; end if;
+  update public.cashbook_entries set description_id=description_row.id,transaction_type=description_row.transaction_type,
+    amount=round(requested_amount,2),payment_method=normalized_method,transaction_at=requested_occurred_at,
+    remark=normalized_remark where id=entry_row.id;
+  update public.journal_entries set entry_date=entry_row.business_date,description=description_row.name where id=journal_row.id;
+  delete from public.journal_lines where journal_entry_id=journal_row.id;
+  if description_row.transaction_type='income' then
+    insert into public.journal_lines(journal_entry_id,account_id,description,debit,credit) values
+      (journal_row.id,payment_account_id,description_row.name,round(requested_amount,2),0),
+      (journal_row.id,counter_account_id,description_row.name,0,round(requested_amount,2));
+  else
+    insert into public.journal_lines(journal_entry_id,account_id,description,debit,credit) values
+      (journal_row.id,counter_account_id,description_row.name,round(requested_amount,2),0),
+      (journal_row.id,payment_account_id,description_row.name,0,round(requested_amount,2));
+  end if;
+  select coalesce(sum(amount) filter(where transaction_type='income'),0),coalesce(sum(amount) filter(where transaction_type='expense'),0)
+    into income_total,expense_total from public.cashbook_entries where business_date=entry_row.business_date;
+  final_balance:=day_row.opening_balance+income_total-expense_total;
+  update public.cashbook_days set closing_balance=final_balance,updated_by=actor_profile_id,updated_at=now() where business_date=entry_row.business_date;
+  select role into actor_role from public.profiles where id=actor_profile_id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,old_values,new_values)
+  values(actor_profile_id,actor_role,'accounting.cashbook_audit_entry_edited','accounting','cashbook_entry',entry_row.id::text,
+    'Pending Cashbook entry and linked Journal synchronized.',jsonb_build_object('amount',entry_row.amount,'journal_entry_id',journal_row.id),
+    jsonb_build_object('amount',round(requested_amount,2),'journal_entry_id',journal_row.id));
+  return journal_row.id;
+end $$;
+
+create or replace function public.add_pending_cashbook_entry(
+  actor_profile_id uuid, requested_description_id uuid, requested_amount numeric,
+  requested_payment_method text, requested_occurred_at timestamptz, requested_business_date date,
+  requested_remark text default null
+) returns uuid language plpgsql security definer set search_path=public as $$
+declare day_row public.cashbook_days%rowtype; created_id uuid; income_total numeric(18,2); expense_total numeric(18,2);
+begin
+  perform public.assert_actor_permission(actor_profile_id,'accounting.audit_cashbook');
+  perform public.lock_cashbook_timeline();
+  select * into day_row from public.cashbook_days where business_date=requested_business_date for update;
+  if day_row.business_date is null or not day_row.is_closed or day_row.audit_status<>'PENDING_AUDIT' then
+    raise exception 'Only a closed day pending audit can receive an audit entry';
+  end if;
+  update public.cashbook_days set is_closed=false,closing_balance=null,closed_at=null,closed_by=null
+  where business_date=requested_business_date;
+  created_id:=public.create_cashbook_entry(actor_profile_id,requested_description_id,requested_amount,
+    requested_payment_method,requested_occurred_at,requested_business_date,coalesce(requested_remark,''));
+  select coalesce(sum(amount) filter(where transaction_type='income'),0),coalesce(sum(amount) filter(where transaction_type='expense'),0)
+    into income_total,expense_total from public.cashbook_entries where business_date=requested_business_date;
+  update public.cashbook_days set is_closed=true,closing_balance=day_row.opening_balance+income_total-expense_total,
+    closed_at=day_row.closed_at,closed_by=day_row.closed_by,audit_status='PENDING_AUDIT',updated_by=actor_profile_id,updated_at=now()
+  where business_date=requested_business_date;
+  return created_id;
+end $$;
+
+create or replace function public.remove_pending_cashbook_entry(actor_profile_id uuid, requested_entry_id uuid)
+returns void language plpgsql security definer set search_path=public as $$
+declare entry_row public.cashbook_entries%rowtype; day_row public.cashbook_days%rowtype;
+  journal_row public.journal_entries%rowtype; actor_role public.account_role;
+  income_total numeric(18,2); expense_total numeric(18,2); final_balance numeric(18,2);
+begin
+  perform public.assert_actor_permission(actor_profile_id,'accounting.audit_cashbook');
+  perform public.lock_cashbook_timeline();
+  select * into entry_row from public.cashbook_entries where id=requested_entry_id for update;
+  if entry_row.id is null then raise exception 'Cashbook entry not found'; end if;
+  if entry_row.sale_payment_id is not null then raise exception 'Automated Sales cashbook entries cannot be removed here'; end if;
+  select * into day_row from public.cashbook_days where business_date=entry_row.business_date for update;
+  if not day_row.is_closed or day_row.audit_status<>'PENDING_AUDIT' then
+    raise exception 'Only a closed day pending audit can be edited';
+  end if;
+  select * into journal_row from public.journal_entries where id=entry_row.journal_entry_id for update;
+  if journal_row.id is null or journal_row.status<>'posted' or journal_row.reference_id is distinct from entry_row.id then
+    raise exception 'The linked posted Journal is unavailable';
+  end if;
+  delete from public.cashbook_entries where id=entry_row.id;
+  delete from public.journal_lines where journal_entry_id=journal_row.id;
+  delete from public.journal_entries where id=journal_row.id;
+  select coalesce(sum(amount) filter(where transaction_type='income'),0),coalesce(sum(amount) filter(where transaction_type='expense'),0)
+    into income_total,expense_total from public.cashbook_entries where business_date=entry_row.business_date;
+  final_balance:=day_row.opening_balance+income_total-expense_total;
+  update public.cashbook_days set closing_balance=final_balance,updated_by=actor_profile_id,updated_at=now()
+  where business_date=entry_row.business_date;
+  select role into actor_role from public.profiles where id=actor_profile_id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,old_values)
+  values(actor_profile_id,actor_role,'accounting.cashbook_audit_entry_removed','accounting','cashbook_entry',entry_row.id::text,
+    'Pending Cashbook entry and its linked Journal removed.',jsonb_build_object('amount',entry_row.amount,'journal_entry_id',journal_row.id));
+end $$;
+
+create or replace function public.approve_cashbook_audit(actor_profile_id uuid,requested_business_date date,requested_comment text default null)
+returns void language plpgsql security definer set search_path=public as $$
+declare day_row public.cashbook_days%rowtype; actor_role public.account_role; normalized_comment text:=nullif(trim(coalesce(requested_comment,'')),'');
+begin
+  perform public.assert_actor_permission(actor_profile_id,'accounting.audit_cashbook');
+  select * into day_row from public.cashbook_days where business_date=requested_business_date for update;
+  if day_row.business_date is null or not day_row.is_closed or day_row.audit_status<>'PENDING_AUDIT' then raise exception 'Only a closed day pending audit can be approved'; end if;
+  update public.cashbook_days set audit_status='APPROVED',reviewed_at=now(),reviewed_by=actor_profile_id,
+    review_comment=normalized_comment,updated_by=actor_profile_id,updated_at=now() where business_date=requested_business_date and audit_status='PENDING_AUDIT';
+  if not found then raise exception 'Only a closed day pending audit can be approved'; end if;
+  select role into actor_role from public.profiles where id=actor_profile_id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,old_values,new_values)
+  values(actor_profile_id,actor_role,'accounting.cashbook_audit_approved','accounting','cashbook_day',requested_business_date::text,
+    'Cashbook day audit approved.',jsonb_build_object('audit_status','PENDING_AUDIT'),jsonb_build_object('audit_status','APPROVED'));
+end $$;
+
+revoke all on function public.edit_pending_cashbook_entry(uuid,uuid,uuid,numeric,text,timestamptz,text) from public,anon,authenticated;
+revoke all on function public.add_pending_cashbook_entry(uuid,uuid,numeric,text,timestamptz,date,text) from public,anon,authenticated;
+revoke all on function public.remove_pending_cashbook_entry(uuid,uuid) from public,anon,authenticated;
+revoke all on function public.approve_cashbook_audit(uuid,date,text) from public,anon,authenticated;
+grant execute on function public.edit_pending_cashbook_entry(uuid,uuid,uuid,numeric,text,timestamptz,text) to service_role;
+grant execute on function public.add_pending_cashbook_entry(uuid,uuid,numeric,text,timestamptz,date,text) to service_role;
+grant execute on function public.remove_pending_cashbook_entry(uuid,uuid) to service_role;
+grant execute on function public.approve_cashbook_audit(uuid,date,text) to service_role;
+notify pgrst,'reload schema';
+
+-- Monthly warehouse expense vouchers. Document-only; no accounting posting.
+
+create table if not exists public.warehouse_expense_templates (
+  id uuid primary key default gen_random_uuid(),
+  warehouse_id uuid not null unique references public.warehouses(id) on delete restrict,
+  payee_organization text not null,
+  contact_person text,
+  payee_address text,
+  payee_phone text,
+  default_rent_amount numeric(14,2) not null default 0 check (default_rent_amount >= 0),
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.warehouse_expense_vouchers (
+  id uuid primary key default gen_random_uuid(),
+  voucher_month date not null check (voucher_month = date_trunc('month', voucher_month)::date),
+  warehouse_id uuid not null references public.warehouses(id) on delete restrict,
+  template_id uuid references public.warehouse_expense_templates(id) on delete set null,
+  payee_organization text not null,
+  contact_person text,
+  payee_address text,
+  payee_phone text,
+  rent_amount numeric(14,2) not null default 0 check (rent_amount >= 0),
+  electricity_amount numeric(14,2) not null default 0 check (electricity_amount >= 0),
+  staff_food_amount numeric(14,2) not null default 0 check (staff_food_amount >= 0),
+  other_amount numeric(14,2) not null default 0 check (other_amount >= 0),
+  total_amount numeric(14,2) generated always as
+    (rent_amount + electricity_amount + staff_food_amount + other_amount) stored,
+  status text not null default 'draft' check (status in ('draft','paid')),
+  payment_date date,
+  payment_method text,
+  payment_reference text,
+  note text,
+  created_by uuid references public.profiles(id) on delete set null,
+  updated_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (warehouse_id, voucher_month)
+);
+
+create index if not exists warehouse_expense_vouchers_month_idx
+  on public.warehouse_expense_vouchers(voucher_month desc);
+
+alter table public.warehouse_expense_templates enable row level security;
+alter table public.warehouse_expense_vouchers enable row level security;
+
+grant select, insert, update on table public.warehouse_expense_templates to service_role;
+grant select, insert, update on table public.warehouse_expense_vouchers to service_role;
+
+insert into public.warehouse_expense_templates (
+  warehouse_id,
+  payee_organization,
+  contact_person,
+  payee_address,
+  default_rent_amount
+)
+select
+  warehouse.id,
+  'Data Recovery Planet',
+  'Mr. Abdullah Al Mamun',
+  warehouse.address,
+  25000
+from public.warehouses warehouse
+where warehouse.is_active
+  and (warehouse.name ilike '%dhaka%' or coalesce(warehouse.address, '') ilike '%dhaka%')
+order by case when warehouse.name ilike '%dhaka%' then 0 else 1 end, warehouse.created_at
+limit 1
+on conflict (warehouse_id) do nothing;
+
+-- Isolated Phase 1 China-to-Bangladesh cargo tracking.
+-- No sales, inventory, purchasing, billing or accounting posting.
+
+begin;
+
+create table public.cargo_shipping_jobs (
+  id uuid primary key default gen_random_uuid(),
+  customer_id uuid not null references public.profiles(id) on delete restrict,
+  courier_tracking_number text not null unique,
+  goods_summary text not null,
+  shipping_method text not null check (shipping_method in ('air','sea','hand_carry')),
+  charge_basis text not null check (charge_basis in ('per_kg','per_piece','per_cbm','per_ton','flat')),
+  rate numeric(14,2) not null default 0 check (rate >= 0),
+  china_warehouse_id uuid references public.warehouses(id) on delete restrict,
+  bangladesh_warehouse_id uuid references public.warehouses(id) on delete restrict,
+  bangladesh_location_id uuid references public.warehouse_locations(id) on delete restrict,
+  current_status text not null default 'requested' check (current_status in (
+    'requested','expected_china','received_china','dispatched_china','in_transit',
+    'arrived_bangladesh','received_bd_warehouse','ready_for_customer','handed_over',
+    'delivered','closed'
+  )),
+  expected_china_at timestamptz,
+  china_received_at timestamptz,
+  dispatched_china_at timestamptz,
+  arrived_bangladesh_at timestamptz,
+  bangladesh_received_at timestamptz,
+  ready_for_customer_at timestamptz,
+  handed_over_at timestamptz,
+  delivered_at timestamptz,
+  closed_at timestamptz,
+  note text,
+  created_by uuid not null references public.profiles(id) on delete restrict,
+  updated_by uuid not null references public.profiles(id) on delete restrict,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table public.cargo_shipping_packages (
+  id uuid primary key default gen_random_uuid(),
+  job_id uuid not null references public.cargo_shipping_jobs(id) on delete restrict,
+  sequence_number integer not null check (sequence_number > 0),
+  description text not null,
+  quantity numeric(14,3) not null default 1 check (quantity > 0),
+  unit text not null,
+  weight numeric(14,3) check (weight is null or weight >= 0),
+  dimensions text,
+  cbm numeric(14,4) check (cbm is null or cbm >= 0),
+  created_at timestamptz not null default now(),
+  unique (job_id, sequence_number)
+);
+
+create table public.cargo_shipping_events (
+  id uuid primary key default gen_random_uuid(),
+  job_id uuid not null references public.cargo_shipping_jobs(id) on delete restrict,
+  status text not null check (status in (
+    'requested','expected_china','received_china','dispatched_china','in_transit',
+    'arrived_bangladesh','received_bd_warehouse','ready_for_customer','handed_over',
+    'delivered','closed'
+  )),
+  event_at timestamptz not null default now(),
+  warehouse_id uuid references public.warehouses(id) on delete restrict,
+  location_id uuid references public.warehouse_locations(id) on delete restrict,
+  note text,
+  actor_id uuid not null references public.profiles(id) on delete restrict,
+  created_at timestamptz not null default now()
+);
+
+create index cargo_shipping_jobs_status_idx on public.cargo_shipping_jobs(current_status, updated_at desc);
+create index cargo_shipping_jobs_customer_idx on public.cargo_shipping_jobs(customer_id, created_at desc);
+create index cargo_shipping_packages_job_idx on public.cargo_shipping_packages(job_id, sequence_number);
+create index cargo_shipping_events_job_idx on public.cargo_shipping_events(job_id, event_at desc, created_at desc);
+
+alter table public.cargo_shipping_jobs enable row level security;
+alter table public.cargo_shipping_packages enable row level security;
+alter table public.cargo_shipping_events enable row level security;
+
+grant select, insert, update on public.cargo_shipping_jobs to service_role;
+grant select, insert on public.cargo_shipping_packages to service_role;
+grant select, insert on public.cargo_shipping_events to service_role;
+
+create or replace function public.create_cargo_shipping_job(
+  actor_profile_id uuid,
+  requested_customer_id uuid,
+  requested_tracking_number text,
+  requested_goods_summary text,
+  requested_shipping_method text,
+  requested_charge_basis text,
+  requested_rate numeric,
+  requested_china_warehouse_id uuid,
+  requested_bangladesh_warehouse_id uuid,
+  requested_note text,
+  requested_packages jsonb
+) returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  job_id uuid := gen_random_uuid();
+  package_row jsonb;
+  package_number integer := 0;
+begin
+  if not exists (
+    select 1 from public.profiles
+    where id = actor_profile_id and role = 'admin' and status = 'active'
+  ) then raise exception 'Permission denied'; end if;
+  if not exists (
+    select 1 from public.profiles
+    where id = requested_customer_id and role = 'customer' and status = 'active'
+  ) then raise exception 'Choose an active customer'; end if;
+  if nullif(btrim(requested_tracking_number), '') is null then raise exception 'Courier tracking number is required'; end if;
+  if nullif(btrim(requested_goods_summary), '') is null then raise exception 'Goods description is required'; end if;
+  if requested_shipping_method not in ('air','sea','hand_carry') then raise exception 'Invalid shipping method'; end if;
+  if requested_charge_basis not in ('per_kg','per_piece','per_cbm','per_ton','flat') then raise exception 'Invalid charge basis'; end if;
+  if coalesce(requested_rate, 0) < 0 then raise exception 'Rate cannot be negative'; end if;
+  if jsonb_typeof(requested_packages) <> 'array' or jsonb_array_length(requested_packages) = 0 then
+    raise exception 'Add at least one package';
+  end if;
+
+  insert into public.cargo_shipping_jobs (
+    id, customer_id, courier_tracking_number, goods_summary, shipping_method,
+    charge_basis, rate, china_warehouse_id, bangladesh_warehouse_id, note,
+    created_by, updated_by
+  ) values (
+    job_id, requested_customer_id, left(btrim(requested_tracking_number), 160),
+    left(btrim(requested_goods_summary), 2000), requested_shipping_method,
+    requested_charge_basis, coalesce(requested_rate, 0), requested_china_warehouse_id,
+    requested_bangladesh_warehouse_id, nullif(left(btrim(coalesce(requested_note, '')), 3000), ''),
+    actor_profile_id, actor_profile_id
+  );
+
+  for package_row in select value from jsonb_array_elements(requested_packages) loop
+    package_number := package_number + 1;
+    if nullif(btrim(package_row->>'description'), '') is null then raise exception 'Package description is required'; end if;
+    if coalesce((package_row->>'quantity')::numeric, 0) <= 0 then raise exception 'Package quantity must be greater than zero'; end if;
+    if nullif(btrim(package_row->>'unit'), '') is null then raise exception 'Package unit is required'; end if;
+    insert into public.cargo_shipping_packages (
+      job_id, sequence_number, description, quantity, unit, weight, dimensions, cbm
+    ) values (
+      job_id, package_number, left(btrim(package_row->>'description'), 1000),
+      (package_row->>'quantity')::numeric, left(btrim(package_row->>'unit'), 40),
+      nullif(package_row->>'weight', '')::numeric,
+      nullif(left(btrim(coalesce(package_row->>'dimensions', '')), 200), ''),
+      nullif(package_row->>'cbm', '')::numeric
+    );
+  end loop;
+
+  insert into public.cargo_shipping_events(job_id, status, note, actor_id)
+  values (job_id, 'requested', 'Cargo job created.', actor_profile_id);
+  return job_id;
+end;
+$$;
+
+create or replace function public.advance_cargo_shipping_job(
+  actor_profile_id uuid,
+  requested_job_id uuid,
+  requested_status text,
+  requested_event_at timestamptz,
+  requested_warehouse_id uuid,
+  requested_location_id uuid,
+  requested_note text
+) returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  job_row public.cargo_shipping_jobs%rowtype;
+  expected_next text;
+  event_time timestamptz := coalesce(requested_event_at, now());
+begin
+  if not exists (
+    select 1 from public.profiles
+    where id = actor_profile_id and role = 'admin' and status = 'active'
+  ) then raise exception 'Permission denied'; end if;
+
+  select * into job_row from public.cargo_shipping_jobs
+  where id = requested_job_id for update;
+  if job_row.id is null then raise exception 'Cargo job not found'; end if;
+
+  expected_next := case job_row.current_status
+    when 'requested' then 'expected_china'
+    when 'expected_china' then 'received_china'
+    when 'received_china' then 'dispatched_china'
+    when 'dispatched_china' then 'in_transit'
+    when 'in_transit' then 'arrived_bangladesh'
+    when 'arrived_bangladesh' then 'received_bd_warehouse'
+    when 'received_bd_warehouse' then 'ready_for_customer'
+    when 'ready_for_customer' then 'handed_over'
+    when 'handed_over' then 'delivered'
+    when 'delivered' then 'closed'
+    else null
+  end;
+  if expected_next is null or requested_status <> expected_next then
+    raise exception 'Invalid next cargo status';
+  end if;
+
+  if requested_location_id is not null and not exists (
+    select 1 from public.warehouse_locations
+    where id = requested_location_id and warehouse_id = requested_warehouse_id and is_active
+  ) then raise exception 'Choose a valid warehouse location'; end if;
+
+  update public.cargo_shipping_jobs set
+    current_status = requested_status,
+    bangladesh_warehouse_id = case when requested_warehouse_id is not null then requested_warehouse_id else bangladesh_warehouse_id end,
+    bangladesh_location_id = case when requested_location_id is not null then requested_location_id else bangladesh_location_id end,
+    expected_china_at = case when requested_status = 'expected_china' then event_time else expected_china_at end,
+    china_received_at = case when requested_status = 'received_china' then event_time else china_received_at end,
+    dispatched_china_at = case when requested_status = 'dispatched_china' then event_time else dispatched_china_at end,
+    arrived_bangladesh_at = case when requested_status = 'arrived_bangladesh' then event_time else arrived_bangladesh_at end,
+    bangladesh_received_at = case when requested_status = 'received_bd_warehouse' then event_time else bangladesh_received_at end,
+    ready_for_customer_at = case when requested_status = 'ready_for_customer' then event_time else ready_for_customer_at end,
+    handed_over_at = case when requested_status = 'handed_over' then event_time else handed_over_at end,
+    delivered_at = case when requested_status = 'delivered' then event_time else delivered_at end,
+    closed_at = case when requested_status = 'closed' then event_time else closed_at end,
+    updated_by = actor_profile_id,
+    updated_at = now()
+  where id = requested_job_id;
+
+  insert into public.cargo_shipping_events(
+    job_id, status, event_at, warehouse_id, location_id, note, actor_id
+  ) values (
+    requested_job_id, requested_status, event_time, requested_warehouse_id,
+    requested_location_id, nullif(left(btrim(coalesce(requested_note, '')), 2000), ''), actor_profile_id
+  );
+end;
+$$;
+
+revoke all on function public.create_cargo_shipping_job(uuid,uuid,text,text,text,text,numeric,uuid,uuid,text,jsonb) from public, anon, authenticated;
+revoke all on function public.advance_cargo_shipping_job(uuid,uuid,text,timestamptz,uuid,uuid,text) from public, anon, authenticated;
+grant execute on function public.create_cargo_shipping_job(uuid,uuid,text,text,text,text,numeric,uuid,uuid,text,jsonb) to service_role;
+grant execute on function public.advance_cargo_shipping_job(uuid,uuid,text,timestamptz,uuid,uuid,text) to service_role;
+
+commit;
+
+-- Add the shared Purchasing carrier reference to isolated Cargo Tracking jobs.
+
+begin;
+
+alter table public.cargo_shipping_jobs
+  add column carrier_id uuid references public.purchase_carriers(id) on delete restrict,
+  add column carrier_reference text;
+
+create index cargo_shipping_jobs_carrier_idx
+  on public.cargo_shipping_jobs(carrier_id) where carrier_id is not null;
+
+create function public.create_cargo_shipping_job(
+  actor_profile_id uuid,
+  requested_customer_id uuid,
+  requested_tracking_number text,
+  requested_goods_summary text,
+  requested_shipping_method text,
+  requested_charge_basis text,
+  requested_rate numeric,
+  requested_china_warehouse_id uuid,
+  requested_bangladesh_warehouse_id uuid,
+  requested_note text,
+  requested_packages jsonb,
+  requested_carrier_id uuid,
+  requested_carrier_reference text
+) returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  job_id uuid;
+begin
+  if requested_carrier_id is not null and not exists (
+    select 1 from public.purchase_carriers
+    where id = requested_carrier_id and status = 'active'
+  ) then
+    raise exception 'Choose an active carrier';
+  end if;
+
+  job_id := public.create_cargo_shipping_job(
+    actor_profile_id,
+    requested_customer_id,
+    requested_tracking_number,
+    requested_goods_summary,
+    requested_shipping_method,
+    requested_charge_basis,
+    requested_rate,
+    requested_china_warehouse_id,
+    requested_bangladesh_warehouse_id,
+    requested_note,
+    requested_packages
+  );
+
+  update public.cargo_shipping_jobs
+  set carrier_id = requested_carrier_id,
+      carrier_reference = nullif(left(btrim(coalesce(requested_carrier_reference, '')), 200), '')
+  where id = job_id;
+
+  return job_id;
+end;
+$$;
+
+revoke all on function public.create_cargo_shipping_job(uuid,uuid,text,text,text,text,numeric,uuid,uuid,text,jsonb,uuid,text) from public, anon, authenticated;
+grant execute on function public.create_cargo_shipping_job(uuid,uuid,text,text,text,text,numeric,uuid,uuid,text,jsonb,uuid,text) to service_role;
+
+commit;
+
+-- Cargo Tracking Phase 2: isolated warehouse operations and package labels.
+
+begin;
+
+alter table public.cargo_shipping_jobs
+  add column internal_cargo_id text generated always as (
+    'CGO-' || upper(substr(md5(id::text), 1, 10))
+  ) stored,
+  add column handover_verified_at timestamptz,
+  add column handover_verified_by uuid references public.profiles(id) on delete restrict,
+  add column handover_recipient text,
+  add column handover_reference text;
+
+alter table public.cargo_shipping_packages
+  add column package_identifier text generated always as (
+    'CGO-' || upper(substr(md5(job_id::text), 1, 10)) || '-P' || lpad(sequence_number::text, 2, '0')
+  ) stored,
+  add column warehouse_location_id uuid references public.warehouse_locations(id) on delete restrict,
+  add column china_received_at timestamptz,
+  add column china_received_by uuid references public.profiles(id) on delete restrict,
+  add column ready_verified_at timestamptz,
+  add column ready_verified_by uuid references public.profiles(id) on delete restrict,
+  add column handed_over_at timestamptz,
+  add column handed_over_by uuid references public.profiles(id) on delete restrict;
+
+create unique index cargo_shipping_jobs_internal_cargo_id_uidx
+  on public.cargo_shipping_jobs(internal_cargo_id);
+
+create unique index cargo_shipping_packages_identifier_uidx
+  on public.cargo_shipping_packages(package_identifier);
+
+create index cargo_shipping_packages_location_idx
+  on public.cargo_shipping_packages(warehouse_location_id)
+  where warehouse_location_id is not null;
+
+create or replace function public.verify_cargo_package_china_receive(
+  actor_profile_id uuid,
+  requested_job_id uuid,
+  requested_package_id uuid,
+  requested_event_at timestamptz
+) returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  package_row public.cargo_shipping_packages%rowtype;
+  job_status text;
+begin
+  if not exists (
+    select 1 from public.profiles
+    where id = actor_profile_id and role = 'admin' and status = 'active'
+  ) then raise exception 'Permission denied'; end if;
+
+  select current_status into job_status
+  from public.cargo_shipping_jobs
+  where id = requested_job_id
+  for update;
+  if job_status is null then raise exception 'Cargo job not found'; end if;
+  if job_status not in ('expected_china', 'received_china') then
+    raise exception 'Package China receipt is available only during the China receiving stage';
+  end if;
+
+  select * into package_row
+  from public.cargo_shipping_packages
+  where id = requested_package_id and job_id = requested_job_id
+  for update;
+  if package_row.id is null then raise exception 'Cargo package not found'; end if;
+  if package_row.china_received_at is not null then raise exception 'Package China receipt is already verified'; end if;
+
+  update public.cargo_shipping_packages
+  set china_received_at = coalesce(requested_event_at, now()),
+      china_received_by = actor_profile_id
+  where id = requested_package_id;
+end;
+$$;
+
+create or replace function public.assign_cargo_package_location(
+  actor_profile_id uuid,
+  requested_job_id uuid,
+  requested_package_id uuid,
+  requested_location_id uuid
+) returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  package_row public.cargo_shipping_packages%rowtype;
+  location_warehouse_id uuid;
+  job_status text;
+begin
+  if not exists (
+    select 1 from public.profiles
+    where id = actor_profile_id and role = 'admin' and status = 'active'
+  ) then raise exception 'Permission denied'; end if;
+
+  select current_status into job_status
+  from public.cargo_shipping_jobs
+  where id = requested_job_id
+  for update;
+  if job_status is null then raise exception 'Cargo job not found'; end if;
+  if job_status not in ('arrived_bangladesh', 'received_bd_warehouse', 'ready_for_customer') then
+    raise exception 'Package location can be assigned only after Bangladesh arrival';
+  end if;
+
+  select * into package_row
+  from public.cargo_shipping_packages
+  where id = requested_package_id and job_id = requested_job_id
+  for update;
+  if package_row.id is null then raise exception 'Cargo package not found'; end if;
+  if package_row.handed_over_at is not null then raise exception 'Handed-over packages cannot be moved'; end if;
+
+  select warehouse_id into location_warehouse_id
+  from public.warehouse_locations
+  where id = requested_location_id and is_active;
+  if location_warehouse_id is null then raise exception 'Choose an active warehouse location'; end if;
+
+  update public.cargo_shipping_packages
+  set warehouse_location_id = requested_location_id
+  where id = requested_package_id;
+
+  update public.cargo_shipping_jobs
+  set bangladesh_warehouse_id = location_warehouse_id,
+      bangladesh_location_id = requested_location_id,
+      updated_by = actor_profile_id,
+      updated_at = now()
+  where id = requested_job_id;
+end;
+$$;
+
+create or replace function public.verify_cargo_package_ready(
+  actor_profile_id uuid,
+  requested_job_id uuid,
+  requested_package_id uuid,
+  requested_event_at timestamptz
+) returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  package_row public.cargo_shipping_packages%rowtype;
+  job_status text;
+begin
+  if not exists (
+    select 1 from public.profiles
+    where id = actor_profile_id and role = 'admin' and status = 'active'
+  ) then raise exception 'Permission denied'; end if;
+
+  select current_status into job_status
+  from public.cargo_shipping_jobs
+  where id = requested_job_id
+  for update;
+  if job_status is null then raise exception 'Cargo job not found'; end if;
+  if job_status not in ('received_bd_warehouse', 'ready_for_customer') then
+    raise exception 'Package readiness is available only after Bangladesh warehouse receipt';
+  end if;
+
+  select * into package_row
+  from public.cargo_shipping_packages
+  where id = requested_package_id and job_id = requested_job_id
+  for update;
+  if package_row.id is null then raise exception 'Cargo package not found'; end if;
+  if package_row.china_received_at is null then raise exception 'Verify China receipt first'; end if;
+  if package_row.warehouse_location_id is null then raise exception 'Assign a Bangladesh warehouse location first'; end if;
+  if package_row.ready_verified_at is not null then raise exception 'Package readiness is already verified'; end if;
+
+  update public.cargo_shipping_packages
+  set ready_verified_at = coalesce(requested_event_at, now()),
+      ready_verified_by = actor_profile_id
+  where id = requested_package_id;
+end;
+$$;
+
+create or replace function public.validate_cargo_phase2_status_update()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if new.current_status = 'ready_for_customer' and old.current_status = 'received_bd_warehouse' then
+    if exists (
+      select 1 from public.cargo_shipping_packages
+      where job_id = new.id and ready_verified_at is null
+    ) then raise exception 'Verify every package as ready first'; end if;
+  end if;
+
+  if new.current_status = 'handed_over' and old.current_status = 'ready_for_customer' then
+    if new.handover_verified_at is null or exists (
+      select 1 from public.cargo_shipping_packages
+      where job_id = new.id and handed_over_at is null
+    ) then raise exception 'Use verified cargo handover'; end if;
+  end if;
+  return new;
+end;
+$$;
+
+create trigger validate_cargo_phase2_status_update_trigger
+before update of current_status on public.cargo_shipping_jobs
+for each row execute function public.validate_cargo_phase2_status_update();
+
+create or replace function public.verify_cargo_job_handover(
+  actor_profile_id uuid,
+  requested_job_id uuid,
+  requested_recipient text,
+  requested_reference text,
+  requested_event_at timestamptz
+) returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  job_row public.cargo_shipping_jobs%rowtype;
+  event_time timestamptz := coalesce(requested_event_at, now());
+begin
+  if not exists (
+    select 1 from public.profiles
+    where id = actor_profile_id and role = 'admin' and status = 'active'
+  ) then raise exception 'Permission denied'; end if;
+  if nullif(btrim(requested_recipient), '') is null then raise exception 'Handover recipient is required'; end if;
+
+  select * into job_row
+  from public.cargo_shipping_jobs
+  where id = requested_job_id
+  for update;
+  if job_row.id is null then raise exception 'Cargo job not found'; end if;
+  if job_row.current_status <> 'ready_for_customer' then raise exception 'Cargo job is not ready for handover'; end if;
+  if job_row.handover_verified_at is not null then raise exception 'Cargo handover is already verified'; end if;
+
+  perform 1 from public.cargo_shipping_packages
+  where job_id = requested_job_id
+  for update;
+
+  if exists (
+    select 1 from public.cargo_shipping_packages
+    where job_id = requested_job_id and ready_verified_at is null
+  ) then raise exception 'Verify every package as ready first'; end if;
+  if exists (
+    select 1 from public.cargo_shipping_packages
+    where job_id = requested_job_id and handed_over_at is not null
+  ) then raise exception 'A package in this cargo job is already handed over'; end if;
+
+  update public.cargo_shipping_packages
+  set handed_over_at = event_time,
+      handed_over_by = actor_profile_id
+  where job_id = requested_job_id;
+
+  update public.cargo_shipping_jobs
+  set current_status = 'handed_over',
+      handed_over_at = event_time,
+      handover_verified_at = event_time,
+      handover_verified_by = actor_profile_id,
+      handover_recipient = left(btrim(requested_recipient), 200),
+      handover_reference = nullif(left(btrim(coalesce(requested_reference, '')), 200), ''),
+      updated_by = actor_profile_id,
+      updated_at = now()
+  where id = requested_job_id;
+
+  insert into public.cargo_shipping_events(job_id, status, event_at, note, actor_id)
+  values (
+    requested_job_id,
+    'handed_over',
+    event_time,
+    'Verified handover to ' || left(btrim(requested_recipient), 200) ||
+      case when nullif(btrim(coalesce(requested_reference, '')), '') is null
+        then '' else ' · Reference ' || left(btrim(requested_reference), 200) end,
+    actor_profile_id
+  );
+end;
+$$;
+
+revoke all on function public.verify_cargo_package_china_receive(uuid,uuid,uuid,timestamptz) from public, anon, authenticated;
+revoke all on function public.assign_cargo_package_location(uuid,uuid,uuid,uuid) from public, anon, authenticated;
+revoke all on function public.verify_cargo_package_ready(uuid,uuid,uuid,timestamptz) from public, anon, authenticated;
+revoke all on function public.verify_cargo_job_handover(uuid,uuid,text,text,timestamptz) from public, anon, authenticated;
+
+grant execute on function public.verify_cargo_package_china_receive(uuid,uuid,uuid,timestamptz) to service_role;
+grant execute on function public.assign_cargo_package_location(uuid,uuid,uuid,uuid) to service_role;
+grant execute on function public.verify_cargo_package_ready(uuid,uuid,uuid,timestamptz) to service_role;
+grant execute on function public.verify_cargo_job_handover(uuid,uuid,text,text,timestamptz) to service_role;
+
+commit;
+
+-- Cargo Tracking Phase 2 corrections: country-aware warehouses, canonical units, and location integrity.
+
+begin;
+
+create or replace function public.create_cargo_shipping_job(
+  actor_profile_id uuid,
+  requested_customer_id uuid,
+  requested_tracking_number text,
+  requested_goods_summary text,
+  requested_shipping_method text,
+  requested_charge_basis text,
+  requested_rate numeric,
+  requested_china_warehouse_id uuid,
+  requested_bangladesh_warehouse_id uuid,
+  requested_note text,
+  requested_packages jsonb,
+  requested_carrier_id uuid,
+  requested_carrier_reference text
+) returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  job_id uuid;
+  package_row jsonb;
+  package_unit text;
+begin
+  if requested_china_warehouse_id is not null and not exists (
+    select 1 from public.warehouses
+    where id = requested_china_warehouse_id
+      and is_active
+      and upper(btrim(country_code)) = 'CN'
+  ) then
+    raise exception 'China warehouse must be an active CN warehouse';
+  end if;
+
+  if requested_bangladesh_warehouse_id is not null and not exists (
+    select 1 from public.warehouses
+    where id = requested_bangladesh_warehouse_id
+      and is_active
+      and upper(btrim(country_code)) = 'BD'
+  ) then
+    raise exception 'Bangladesh destination must be an active BD warehouse';
+  end if;
+
+  if requested_carrier_id is not null and not exists (
+    select 1 from public.purchase_carriers
+    where id = requested_carrier_id and status = 'active'
+  ) then
+    raise exception 'Choose an active carrier';
+  end if;
+
+  if jsonb_typeof(requested_packages) = 'array' then
+    for package_row in select value from jsonb_array_elements(requested_packages) loop
+      package_unit := btrim(coalesce(package_row->>'unit', ''));
+      if package_unit = '' then raise exception 'Package unit is required'; end if;
+      if package_unit not in ('Piece','Carton','Box','Wooden Box','Pallet','Bag/Sack','Roll','Set') then
+        raise exception 'Choose a valid package unit';
+      end if;
+    end loop;
+  end if;
+
+  job_id := public.create_cargo_shipping_job(
+    actor_profile_id,
+    requested_customer_id,
+    requested_tracking_number,
+    requested_goods_summary,
+    requested_shipping_method,
+    requested_charge_basis,
+    requested_rate,
+    requested_china_warehouse_id,
+    requested_bangladesh_warehouse_id,
+    requested_note,
+    requested_packages
+  );
+
+  update public.cargo_shipping_jobs
+  set carrier_id = requested_carrier_id,
+      carrier_reference = nullif(left(btrim(coalesce(requested_carrier_reference, '')), 200), '')
+  where id = job_id;
+
+  return job_id;
+end;
+$$;
+
+create or replace function public.advance_cargo_shipping_job(
+  actor_profile_id uuid,
+  requested_job_id uuid,
+  requested_status text,
+  requested_event_at timestamptz,
+  requested_warehouse_id uuid,
+  requested_location_id uuid,
+  requested_note text
+) returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  job_row public.cargo_shipping_jobs%rowtype;
+  expected_next text;
+  event_time timestamptz := coalesce(requested_event_at, now());
+  effective_warehouse_id uuid;
+begin
+  if not exists (
+    select 1 from public.profiles
+    where id = actor_profile_id and role = 'admin' and status = 'active'
+  ) then raise exception 'Permission denied'; end if;
+
+  select * into job_row from public.cargo_shipping_jobs
+  where id = requested_job_id for update;
+  if job_row.id is null then raise exception 'Cargo job not found'; end if;
+
+  expected_next := case job_row.current_status
+    when 'requested' then 'expected_china'
+    when 'expected_china' then 'received_china'
+    when 'received_china' then 'dispatched_china'
+    when 'dispatched_china' then 'in_transit'
+    when 'in_transit' then 'arrived_bangladesh'
+    when 'arrived_bangladesh' then 'received_bd_warehouse'
+    when 'received_bd_warehouse' then 'ready_for_customer'
+    when 'ready_for_customer' then 'handed_over'
+    when 'handed_over' then 'delivered'
+    when 'delivered' then 'closed'
+    else null
+  end;
+  if expected_next is null or requested_status <> expected_next then
+    raise exception 'Invalid next cargo status';
+  end if;
+
+  effective_warehouse_id := coalesce(requested_warehouse_id, job_row.bangladesh_warehouse_id);
+  if requested_status = 'received_bd_warehouse' and effective_warehouse_id is null then
+    raise exception 'Choose a Bangladesh warehouse';
+  end if;
+  if effective_warehouse_id is not null and not exists (
+    select 1 from public.warehouses
+    where id = effective_warehouse_id
+      and is_active
+      and upper(btrim(country_code)) = 'BD'
+  ) then
+    raise exception 'Bangladesh destination must be an active BD warehouse';
+  end if;
+  if requested_location_id is not null and not exists (
+    select 1 from public.warehouse_locations
+    where id = requested_location_id
+      and warehouse_id = effective_warehouse_id
+      and is_active
+  ) then
+    raise exception 'Choose an active location belonging to the selected Bangladesh warehouse';
+  end if;
+
+  update public.cargo_shipping_jobs set
+    current_status = requested_status,
+    bangladesh_warehouse_id = case when requested_warehouse_id is not null then requested_warehouse_id else bangladesh_warehouse_id end,
+    bangladesh_location_id = case when requested_location_id is not null then requested_location_id else bangladesh_location_id end,
+    expected_china_at = case when requested_status = 'expected_china' then event_time else expected_china_at end,
+    china_received_at = case when requested_status = 'received_china' then event_time else china_received_at end,
+    dispatched_china_at = case when requested_status = 'dispatched_china' then event_time else dispatched_china_at end,
+    arrived_bangladesh_at = case when requested_status = 'arrived_bangladesh' then event_time else arrived_bangladesh_at end,
+    bangladesh_received_at = case when requested_status = 'received_bd_warehouse' then event_time else bangladesh_received_at end,
+    ready_for_customer_at = case when requested_status = 'ready_for_customer' then event_time else ready_for_customer_at end,
+    handed_over_at = case when requested_status = 'handed_over' then event_time else handed_over_at end,
+    delivered_at = case when requested_status = 'delivered' then event_time else delivered_at end,
+    closed_at = case when requested_status = 'closed' then event_time else closed_at end,
+    updated_by = actor_profile_id,
+    updated_at = now()
+  where id = requested_job_id;
+
+  insert into public.cargo_shipping_events(
+    job_id, status, event_at, warehouse_id, location_id, note, actor_id
+  ) values (
+    requested_job_id, requested_status, event_time, requested_warehouse_id,
+    requested_location_id, nullif(left(btrim(coalesce(requested_note, '')), 2000), ''), actor_profile_id
+  );
+end;
+$$;
+
+create or replace function public.assign_cargo_package_location(
+  actor_profile_id uuid,
+  requested_job_id uuid,
+  requested_package_id uuid,
+  requested_location_id uuid
+) returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  package_row public.cargo_shipping_packages%rowtype;
+  job_status text;
+  job_warehouse_id uuid;
+begin
+  if not exists (
+    select 1 from public.profiles
+    where id = actor_profile_id and role = 'admin' and status = 'active'
+  ) then raise exception 'Permission denied'; end if;
+
+  select current_status, bangladesh_warehouse_id into job_status, job_warehouse_id
+  from public.cargo_shipping_jobs
+  where id = requested_job_id
+  for update;
+  if job_status is null then raise exception 'Cargo job not found'; end if;
+  if job_status not in ('arrived_bangladesh', 'received_bd_warehouse', 'ready_for_customer') then
+    raise exception 'Package location can be assigned only after Bangladesh arrival';
+  end if;
+  if job_warehouse_id is null or not exists (
+    select 1 from public.warehouses
+    where id = job_warehouse_id
+      and is_active
+      and upper(btrim(country_code)) = 'BD'
+  ) then
+    raise exception 'Choose an active Bangladesh destination first';
+  end if;
+
+  select * into package_row
+  from public.cargo_shipping_packages
+  where id = requested_package_id and job_id = requested_job_id
+  for update;
+  if package_row.id is null then raise exception 'Cargo package not found'; end if;
+  if package_row.handed_over_at is not null then raise exception 'Handed-over packages cannot be moved'; end if;
+
+  if not exists (
+    select 1 from public.warehouse_locations
+    where id = requested_location_id
+      and warehouse_id = job_warehouse_id
+      and is_active
+  ) then
+    raise exception 'Choose an active location belonging to the selected Bangladesh warehouse';
+  end if;
+
+  update public.cargo_shipping_packages
+  set warehouse_location_id = requested_location_id
+  where id = requested_package_id;
+
+  update public.cargo_shipping_jobs
+  set bangladesh_location_id = requested_location_id,
+      updated_by = actor_profile_id,
+      updated_at = now()
+  where id = requested_job_id;
+end;
+$$;
+
+revoke execute on function public.create_cargo_shipping_job(uuid,uuid,text,text,text,text,numeric,uuid,uuid,text,jsonb) from service_role;
+revoke all on function public.create_cargo_shipping_job(uuid,uuid,text,text,text,text,numeric,uuid,uuid,text,jsonb,uuid,text) from public, anon, authenticated;
+revoke all on function public.advance_cargo_shipping_job(uuid,uuid,text,timestamptz,uuid,uuid,text) from public, anon, authenticated;
+revoke all on function public.assign_cargo_package_location(uuid,uuid,uuid,uuid) from public, anon, authenticated;
+
+grant execute on function public.create_cargo_shipping_job(uuid,uuid,text,text,text,text,numeric,uuid,uuid,text,jsonb,uuid,text) to service_role;
+grant execute on function public.advance_cargo_shipping_job(uuid,uuid,text,timestamptz,uuid,uuid,text) to service_role;
+grant execute on function public.assign_cargo_package_location(uuid,uuid,uuid,uuid) to service_role;
+
+commit;
+
+-- Isolated RMB / China Payment Service Phase 1 operational records.
+
+begin;
+
+create table public.rmb_payment_jobs (
+  id uuid primary key default gen_random_uuid(),
+  job_reference text not null default (
+    'RMB-' || to_char(now(), 'YYYY') || '-' || upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 8))
+  ),
+  customer_id uuid not null references public.profiles(id),
+  foreign_currency text not null check (foreign_currency in ('RMB', 'USD')),
+  foreign_amount numeric(18,4) not null check (foreign_amount > 0),
+  agreed_bdt_rate numeric(18,6) not null check (agreed_bdt_rate > 0),
+  calculated_bdt_payable numeric(20,2) generated always as (round(foreign_amount * agreed_bdt_rate, 2)) stored,
+  customer_payment_date date,
+  customer_payment_method text,
+  customer_payment_reference text,
+  customer_payment_note text,
+  payee_organization text,
+  payee_name text,
+  payee_address text,
+  payee_phone text,
+  payee_account_details text,
+  china_payment_date date,
+  china_payment_method text,
+  china_payment_reference text,
+  china_payment_note text,
+  note text,
+  current_status text not null default 'AWAITING_CUSTOMER_PAYMENT' check (
+    current_status in (
+      'AWAITING_CUSTOMER_PAYMENT', 'CUSTOMER_PAID', 'CHINA_PAYMENT_PENDING',
+      'PAYEE_PAID', 'COMPLETED', 'CLOSED'
+    )
+  ),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  created_by uuid not null references public.profiles(id),
+  updated_by uuid not null references public.profiles(id),
+  constraint rmb_payment_jobs_reference_key unique (job_reference)
+);
+
+create table public.rmb_payment_events (
+  id uuid primary key default gen_random_uuid(),
+  job_id uuid not null references public.rmb_payment_jobs(id) on delete restrict,
+  status text not null check (
+    status in (
+      'AWAITING_CUSTOMER_PAYMENT', 'CUSTOMER_PAID', 'CHINA_PAYMENT_PENDING',
+      'PAYEE_PAID', 'COMPLETED', 'CLOSED'
+    )
+  ),
+  event_at timestamptz not null default now(),
+  actor_id uuid not null references public.profiles(id),
+  note text,
+  created_at timestamptz not null default now()
+);
+
+create index rmb_payment_jobs_customer_updated_idx
+  on public.rmb_payment_jobs(customer_id, updated_at desc);
+create index rmb_payment_jobs_status_updated_idx
+  on public.rmb_payment_jobs(current_status, updated_at desc);
+create index rmb_payment_events_job_event_idx
+  on public.rmb_payment_events(job_id, event_at desc, created_at desc);
+
+alter table public.rmb_payment_jobs enable row level security;
+alter table public.rmb_payment_events enable row level security;
+
+create or replace function public.create_rmb_payment_job(
+  actor_profile_id uuid,
+  requested_customer_id uuid,
+  requested_foreign_currency text,
+  requested_foreign_amount numeric,
+  requested_agreed_bdt_rate numeric,
+  requested_customer_payment_date date,
+  requested_customer_payment_method text,
+  requested_customer_payment_reference text,
+  requested_customer_payment_note text,
+  requested_payee_organization text,
+  requested_payee_name text,
+  requested_payee_address text,
+  requested_payee_phone text,
+  requested_payee_account_details text,
+  requested_china_payment_date date,
+  requested_china_payment_method text,
+  requested_china_payment_reference text,
+  requested_china_payment_note text,
+  requested_note text
+) returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  job_id uuid;
+begin
+  if not exists (
+    select 1 from public.profiles
+    where id = actor_profile_id and role = 'admin' and status = 'active'
+  ) then raise exception 'Permission denied'; end if;
+
+  if not exists (
+    select 1 from public.profiles
+    where id = requested_customer_id and role = 'customer' and status = 'active'
+  ) then raise exception 'Choose an active customer'; end if;
+
+  if requested_foreign_currency not in ('RMB', 'USD') then
+    raise exception 'Choose RMB or USD';
+  end if;
+  if requested_foreign_amount is null or requested_foreign_amount <= 0 then
+    raise exception 'Foreign amount must be greater than zero';
+  end if;
+  if requested_agreed_bdt_rate is null or requested_agreed_bdt_rate <= 0 then
+    raise exception 'Agreed BDT rate must be greater than zero';
+  end if;
+
+  insert into public.rmb_payment_jobs (
+    customer_id, foreign_currency, foreign_amount, agreed_bdt_rate,
+    customer_payment_date, customer_payment_method, customer_payment_reference,
+    customer_payment_note, payee_organization, payee_name, payee_address,
+    payee_phone, payee_account_details, china_payment_date, china_payment_method,
+    china_payment_reference, china_payment_note, note, created_by, updated_by
+  ) values (
+    requested_customer_id, requested_foreign_currency, requested_foreign_amount,
+    requested_agreed_bdt_rate, requested_customer_payment_date,
+    nullif(left(btrim(coalesce(requested_customer_payment_method, '')), 100), ''),
+    nullif(left(btrim(coalesce(requested_customer_payment_reference, '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_customer_payment_note, '')), 1000), ''),
+    nullif(left(btrim(coalesce(requested_payee_organization, '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_payee_name, '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_payee_address, '')), 1000), ''),
+    nullif(left(btrim(coalesce(requested_payee_phone, '')), 100), ''),
+    nullif(left(btrim(coalesce(requested_payee_account_details, '')), 2000), ''),
+    requested_china_payment_date,
+    nullif(left(btrim(coalesce(requested_china_payment_method, '')), 100), ''),
+    nullif(left(btrim(coalesce(requested_china_payment_reference, '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_china_payment_note, '')), 1000), ''),
+    nullif(left(btrim(coalesce(requested_note, '')), 2000), ''),
+    actor_profile_id, actor_profile_id
+  ) returning id into job_id;
+
+  insert into public.rmb_payment_events(job_id, status, actor_id, note)
+  values (job_id, 'AWAITING_CUSTOMER_PAYMENT', actor_profile_id, 'RMB payment job created.');
+
+  return job_id;
+end;
+$$;
+
+create or replace function public.advance_rmb_payment_job(
+  actor_profile_id uuid,
+  requested_job_id uuid,
+  requested_status text,
+  requested_note text
+) returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  current_value text;
+  expected_next text;
+begin
+  if not exists (
+    select 1 from public.profiles
+    where id = actor_profile_id and role = 'admin' and status = 'active'
+  ) then raise exception 'Permission denied'; end if;
+
+  select current_status into current_value
+  from public.rmb_payment_jobs
+  where id = requested_job_id
+  for update;
+  if current_value is null then raise exception 'RMB payment job not found'; end if;
+
+  expected_next := case current_value
+    when 'AWAITING_CUSTOMER_PAYMENT' then 'CUSTOMER_PAID'
+    when 'CUSTOMER_PAID' then 'CHINA_PAYMENT_PENDING'
+    when 'CHINA_PAYMENT_PENDING' then 'PAYEE_PAID'
+    when 'PAYEE_PAID' then 'COMPLETED'
+    when 'COMPLETED' then 'CLOSED'
+    else null
+  end;
+  if expected_next is null or requested_status <> expected_next then
+    raise exception 'Invalid next RMB payment status';
+  end if;
+
+  update public.rmb_payment_jobs
+  set current_status = requested_status,
+      updated_by = actor_profile_id,
+      updated_at = now()
+  where id = requested_job_id;
+
+  insert into public.rmb_payment_events(job_id, status, actor_id, note)
+  values (
+    requested_job_id,
+    requested_status,
+    actor_profile_id,
+    nullif(left(btrim(coalesce(requested_note, '')), 1000), '')
+  );
+end;
+$$;
+
+create or replace function public.prevent_rmb_payment_event_mutation()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  raise exception 'RMB payment event history is immutable';
+end;
+$$;
+
+create trigger rmb_payment_events_immutable
+before update or delete on public.rmb_payment_events
+for each row execute function public.prevent_rmb_payment_event_mutation();
+
+revoke all on public.rmb_payment_jobs from public, anon, authenticated;
+revoke all on public.rmb_payment_events from public, anon, authenticated;
+grant select, insert, update on public.rmb_payment_jobs to service_role;
+grant select, insert on public.rmb_payment_events to service_role;
+
+revoke all on function public.create_rmb_payment_job(
+  uuid, uuid, text, numeric, numeric, date, text, text, text, text,
+  text, text, text, text, date, text, text, text, text
+) from public, anon, authenticated;
+revoke all on function public.advance_rmb_payment_job(uuid, uuid, text, text)
+  from public, anon, authenticated;
+grant execute on function public.create_rmb_payment_job(
+  uuid, uuid, text, numeric, numeric, date, text, text, text, text,
+  text, text, text, text, date, text, text, text, text
+) to service_role;
+grant execute on function public.advance_rmb_payment_job(uuid, uuid, text, text)
+  to service_role;
+
+commit;
+
+-- RMB Phase 1 operational corrections: dynamic setup, private proofs and payment destination snapshots.
+
+begin;
+
+create table public.rmb_currencies (
+  code text primary key check (code ~ '^[A-Z]{3,5}$'),
+  name text not null check (length(btrim(name)) between 1 and 100),
+  symbol text not null check (length(btrim(symbol)) between 1 and 12),
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  created_by uuid references public.profiles(id)
+);
+
+create table public.rmb_payment_methods (
+  id uuid primary key default gen_random_uuid(),
+  name text not null check (length(btrim(name)) between 1 and 100),
+  context text not null check (context in ('CUSTOMER_PAYMENT', 'CHINA_PAYMENT', 'BOTH')),
+  method_type text not null check (method_type in ('BANK', 'WECHAT', 'ALIPAY', 'CASH', 'OTHER')),
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  created_by uuid references public.profiles(id)
+);
+
+create unique index rmb_payment_methods_name_key on public.rmb_payment_methods(lower(name));
+
+insert into public.rmb_currencies(code, name, symbol) values
+  ('RMB', 'Chinese Renminbi', '¥'),
+  ('USD', 'US Dollar', '$'),
+  ('SAR', 'Saudi Riyal', 'SAR'),
+  ('INR', 'Indian Rupee', '₹'),
+  ('AED', 'UAE Dirham', 'AED'),
+  ('EUR', 'Euro', '€');
+
+insert into public.rmb_payment_methods(name, context, method_type) values
+  ('bKash', 'CUSTOMER_PAYMENT', 'OTHER'),
+  ('Nagad', 'CUSTOMER_PAYMENT', 'OTHER'),
+  ('Bank Transfer', 'CUSTOMER_PAYMENT', 'BANK'),
+  ('BRAC Bank', 'CUSTOMER_PAYMENT', 'BANK'),
+  ('WeChat', 'CHINA_PAYMENT', 'WECHAT'),
+  ('Alipay', 'CHINA_PAYMENT', 'ALIPAY'),
+  ('Bank', 'CHINA_PAYMENT', 'BANK'),
+  ('Bank of China', 'CHINA_PAYMENT', 'BANK'),
+  ('ABC Bank', 'CHINA_PAYMENT', 'BANK'),
+  ('Cash', 'BOTH', 'CASH');
+
+alter table public.rmb_payment_jobs
+  add column customer_payment_method_id uuid references public.rmb_payment_methods(id),
+  add column china_payment_method_id uuid references public.rmb_payment_methods(id),
+  add column customer_payment_proof_path text,
+  add column china_payment_proof_path text,
+  add column china_destination_type text check (china_destination_type in ('BANK', 'WECHAT', 'ALIPAY', 'CASH', 'OTHER')),
+  add column china_bank_name text,
+  add column china_account_name text,
+  add column china_account_number text,
+  add column china_bank_branch text,
+  add column china_bank_code text,
+  add column china_wallet_id text,
+  add column china_destination_qr_path text,
+  add column china_cash_recipient_name text,
+  add column china_cash_recipient_contact text,
+  add column china_cash_instruction_note text;
+
+alter table public.rmb_payment_jobs drop constraint if exists rmb_payment_jobs_foreign_currency_check;
+alter table public.rmb_payment_jobs
+  add constraint rmb_payment_jobs_currency_fk foreign key (foreign_currency) references public.rmb_currencies(code);
+
+alter table public.rmb_currencies enable row level security;
+alter table public.rmb_payment_methods enable row level security;
+revoke all on public.rmb_currencies from public, anon, authenticated;
+revoke all on public.rmb_payment_methods from public, anon, authenticated;
+grant select, insert, update on public.rmb_currencies to service_role;
+grant select, insert, update on public.rmb_payment_methods to service_role;
+
+insert into storage.buckets(id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'rmb-payment-proofs',
+  'rmb-payment-proofs',
+  false,
+  900000,
+  array['image/jpeg', 'image/png', 'image/webp', 'image/gif']
+)
+on conflict (id) do nothing;
+
+create or replace function public.create_rmb_payment_job_v2(
+  actor_profile_id uuid,
+  requested_job_id uuid,
+  requested_customer_id uuid,
+  requested_foreign_currency text,
+  requested_foreign_amount numeric,
+  requested_agreed_bdt_rate numeric,
+  requested_customer_payment_date date,
+  requested_customer_payment_method_id uuid,
+  requested_customer_payment_reference text,
+  requested_customer_payment_note text,
+  requested_payee_organization text,
+  requested_payee_name text,
+  requested_payee_address text,
+  requested_payee_phone text,
+  requested_payee_account_details text,
+  requested_china_payment_method_id uuid,
+  requested_china_destination_type text,
+  requested_china_bank_name text,
+  requested_china_account_name text,
+  requested_china_account_number text,
+  requested_china_bank_branch text,
+  requested_china_bank_code text,
+  requested_china_wallet_id text,
+  requested_china_destination_qr_path text,
+  requested_china_cash_recipient_name text,
+  requested_china_cash_recipient_contact text,
+  requested_china_cash_instruction_note text,
+  requested_note text
+) returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  customer_method_name text;
+  china_method_name text;
+  china_method_type text;
+begin
+  if not exists (
+    select 1 from public.profiles where id = actor_profile_id and role = 'admin' and status = 'active'
+  ) then raise exception 'Permission denied'; end if;
+  if not exists (
+    select 1 from public.profiles where id = requested_customer_id and role = 'customer' and status = 'active'
+  ) then raise exception 'Choose an active customer'; end if;
+  if not exists (
+    select 1 from public.rmb_currencies where code = requested_foreign_currency and is_active
+  ) then raise exception 'Choose an active currency'; end if;
+  if requested_foreign_amount is null or requested_foreign_amount <= 0 then
+    raise exception 'Foreign amount must be greater than zero';
+  end if;
+  if requested_agreed_bdt_rate is null or requested_agreed_bdt_rate <= 0 then
+    raise exception 'Agreed BDT rate must be greater than zero';
+  end if;
+
+  if requested_customer_payment_method_id is not null then
+    select name into customer_method_name from public.rmb_payment_methods
+    where id = requested_customer_payment_method_id and is_active
+      and context in ('CUSTOMER_PAYMENT', 'BOTH');
+    if customer_method_name is null then raise exception 'Choose a valid Bangladesh customer payment method'; end if;
+  end if;
+
+  select name, method_type into china_method_name, china_method_type
+  from public.rmb_payment_methods
+  where id = requested_china_payment_method_id and is_active
+    and context in ('CHINA_PAYMENT', 'BOTH');
+  if china_method_name is null then raise exception 'Choose a valid China payment method'; end if;
+  if requested_china_destination_type is distinct from china_method_type then
+    raise exception 'China payment destination does not match the selected method';
+  end if;
+
+  if china_method_type = 'BANK' and (
+    nullif(btrim(coalesce(requested_china_bank_name, '')), '') is null or
+    nullif(btrim(coalesce(requested_china_account_name, '')), '') is null or
+    nullif(btrim(coalesce(requested_china_account_number, '')), '') is null or
+    nullif(btrim(coalesce(requested_china_bank_branch, '')), '') is null or
+    nullif(btrim(coalesce(requested_china_bank_code, '')), '') is null
+  ) then raise exception 'Complete all China bank destination fields'; end if;
+  if china_method_type in ('WECHAT', 'ALIPAY') and (
+    nullif(btrim(coalesce(requested_china_wallet_id, '')), '') is null or
+    nullif(btrim(coalesce(requested_china_destination_qr_path, '')), '') is null
+  ) then raise exception 'Wallet ID/phone and QR image are required'; end if;
+  if china_method_type = 'CASH' and
+    nullif(btrim(coalesce(requested_china_cash_recipient_name, '')), '') is null
+  then raise exception 'Cash recipient name is required'; end if;
+
+  insert into public.rmb_payment_jobs (
+    id, customer_id, foreign_currency, foreign_amount, agreed_bdt_rate,
+    customer_payment_date, customer_payment_method, customer_payment_method_id,
+    customer_payment_reference, customer_payment_note,
+    payee_organization, payee_name, payee_address, payee_phone, payee_account_details,
+    china_payment_method, china_payment_method_id, china_destination_type,
+    china_bank_name, china_account_name, china_account_number, china_bank_branch,
+    china_bank_code, china_wallet_id, china_destination_qr_path,
+    china_cash_recipient_name, china_cash_recipient_contact, china_cash_instruction_note,
+    note, created_by, updated_by
+  ) values (
+    requested_job_id, requested_customer_id, requested_foreign_currency,
+    requested_foreign_amount, requested_agreed_bdt_rate,
+    requested_customer_payment_date, customer_method_name, requested_customer_payment_method_id,
+    nullif(left(btrim(coalesce(requested_customer_payment_reference, '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_customer_payment_note, '')), 1000), ''),
+    nullif(left(btrim(coalesce(requested_payee_organization, '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_payee_name, '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_payee_address, '')), 1000), ''),
+    nullif(left(btrim(coalesce(requested_payee_phone, '')), 100), ''),
+    nullif(left(btrim(coalesce(requested_payee_account_details, '')), 2000), ''),
+    china_method_name, requested_china_payment_method_id, china_method_type,
+    nullif(left(btrim(coalesce(requested_china_bank_name, '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_china_account_name, '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_china_account_number, '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_china_bank_branch, '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_china_bank_code, '')), 100), ''),
+    nullif(left(btrim(coalesce(requested_china_wallet_id, '')), 200), ''),
+    requested_china_destination_qr_path,
+    nullif(left(btrim(coalesce(requested_china_cash_recipient_name, '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_china_cash_recipient_contact, '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_china_cash_instruction_note, '')), 1000), ''),
+    nullif(left(btrim(coalesce(requested_note, '')), 2000), ''),
+    actor_profile_id, actor_profile_id
+  );
+
+  insert into public.rmb_payment_events(job_id, status, actor_id, note)
+  values (requested_job_id, 'AWAITING_CUSTOMER_PAYMENT', actor_profile_id, 'RMB payment job created.');
+  return requested_job_id;
+end;
+$$;
+
+create or replace function public.advance_rmb_payment_job(
+  actor_profile_id uuid,
+  requested_job_id uuid,
+  requested_status text,
+  requested_note text
+) returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  current_value text;
+  expected_next text;
+  job_row public.rmb_payment_jobs%rowtype;
+begin
+  if not exists (
+    select 1 from public.profiles where id = actor_profile_id and role = 'admin' and status = 'active'
+  ) then raise exception 'Permission denied'; end if;
+
+  select * into job_row from public.rmb_payment_jobs where id = requested_job_id for update;
+  current_value := job_row.current_status;
+  if current_value is null then raise exception 'RMB payment job not found'; end if;
+  expected_next := case current_value
+    when 'AWAITING_CUSTOMER_PAYMENT' then 'CUSTOMER_PAID'
+    when 'CUSTOMER_PAID' then 'CHINA_PAYMENT_PENDING'
+    when 'CHINA_PAYMENT_PENDING' then 'PAYEE_PAID'
+    when 'PAYEE_PAID' then 'COMPLETED'
+    when 'COMPLETED' then 'CLOSED'
+    else null
+  end;
+  if expected_next is null or requested_status <> expected_next then
+    raise exception 'Invalid next RMB payment status';
+  end if;
+  if requested_status = 'CUSTOMER_PAID' and job_row.customer_payment_proof_path is null then
+    raise exception 'Customer payment evidence is required';
+  end if;
+  if requested_status = 'PAYEE_PAID' and (
+    job_row.china_payment_proof_path is null or
+    job_row.china_payment_date is null or
+    nullif(btrim(coalesce(job_row.china_payment_reference, '')), '') is null
+  ) then raise exception 'China payment date, reference and evidence are required'; end if;
+
+  update public.rmb_payment_jobs
+  set current_status = requested_status, updated_by = actor_profile_id, updated_at = now()
+  where id = requested_job_id;
+  insert into public.rmb_payment_events(job_id, status, actor_id, note)
+  values (requested_job_id, requested_status, actor_profile_id,
+    nullif(left(btrim(coalesce(requested_note, '')), 1000), ''));
+end;
+$$;
+
+revoke all on function public.create_rmb_payment_job_v2(
+  uuid, uuid, uuid, text, numeric, numeric, date, uuid, text, text, text, text,
+  text, text, text, uuid, text, text, text, text, text, text, text, text, text,
+  text, text, text
+) from public, anon, authenticated;
+grant execute on function public.create_rmb_payment_job_v2(
+  uuid, uuid, uuid, text, numeric, numeric, date, uuid, text, text, text, text,
+  text, text, text, uuid, text, text, text, text, text, text, text, text, text,
+  text, text, text
+) to service_role;
+
+commit;
+
+-- Cargo Tracking Phase 3: employee-specific view and operational action permissions.
+
+begin;
+
+insert into public.app_modules (
+  key, name, description, icon_key, sort_order, is_active, is_implemented
+) values (
+  'cargo', 'Cargo Tracking', 'China to Bangladesh cargo tracking operations.', 'shipments', 105, true, true
+)
+on conflict (key) do update set
+  name = excluded.name,
+  description = excluded.description,
+  icon_key = excluded.icon_key,
+  sort_order = excluded.sort_order,
+  is_active = excluded.is_active,
+  is_implemented = excluded.is_implemented;
+
+with catalogue(permission_key, name, description, action, sensitive, position) as (values
+  ('cargo.view', 'View cargo tracking', 'View cargo jobs, packages, labels, and event history.', 'view', false, 10),
+  ('cargo.create', 'Create cargo jobs', 'Create new cargo jobs and packages.', 'create', true, 20),
+  ('cargo.china_receive', 'Confirm China receipt', 'Confirm China warehouse receipt and receiving-stage updates.', 'china_receive', true, 30),
+  ('cargo.china_dispatch', 'Manage China dispatch', 'Confirm China dispatch and in-transit updates.', 'china_dispatch', true, 40),
+  ('cargo.bd_receive', 'Confirm Bangladesh receipt', 'Confirm Bangladesh arrival and warehouse receipt.', 'bd_receive', true, 50),
+  ('cargo.assign_location', 'Assign cargo location', 'Assign Bangladesh warehouse rack or storage locations.', 'assign_location', true, 60),
+  ('cargo.mark_ready', 'Mark cargo ready', 'Verify packages are ready for customer collection.', 'mark_ready', true, 70),
+  ('cargo.handover', 'Handover cargo', 'Verify handover and delivery actions.', 'handover', true, 80),
+  ('cargo.close', 'Close cargo jobs', 'Close delivered cargo jobs.', 'close', true, 90)
+)
+insert into public.permissions(module_id, key, name, description, action, is_sensitive, sort_order)
+select module.id, catalogue.permission_key, catalogue.name, catalogue.description,
+  catalogue.action, catalogue.sensitive, catalogue.position
+from catalogue
+join public.app_modules module on module.key = 'cargo'
+on conflict (key) do update set
+  module_id = excluded.module_id,
+  name = excluded.name,
+  description = excluded.description,
+  action = excluded.action,
+  is_sensitive = excluded.is_sensitive,
+  sort_order = excluded.sort_order,
+  is_active = true;
+
+create or replace function public.cargo_actor_has_permission(
+  actor_profile_id uuid,
+  requested_permission_key text
+) returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.effective_permissions_for_profile(actor_profile_id)
+    where permission_key = requested_permission_key
+  );
+$$;
+
+revoke all on function public.cargo_actor_has_permission(uuid,text) from public, anon, authenticated;
+grant execute on function public.cargo_actor_has_permission(uuid,text) to service_role;
+
+create or replace function public.create_cargo_shipping_job(
+  actor_profile_id uuid,
+  requested_customer_id uuid,
+  requested_tracking_number text,
+  requested_goods_summary text,
+  requested_shipping_method text,
+  requested_charge_basis text,
+  requested_rate numeric,
+  requested_china_warehouse_id uuid,
+  requested_bangladesh_warehouse_id uuid,
+  requested_note text,
+  requested_packages jsonb
+) returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  job_id uuid := gen_random_uuid();
+  package_row jsonb;
+  package_number integer := 0;
+begin
+  if not public.cargo_actor_has_permission(actor_profile_id, 'cargo.create') then
+    raise exception 'Permission denied';
+  end if;
+  if not exists (
+    select 1 from public.profiles
+    where id = requested_customer_id and role = 'customer' and status = 'active'
+  ) then raise exception 'Choose an active customer'; end if;
+  if nullif(btrim(requested_tracking_number), '') is null then raise exception 'Courier tracking number is required'; end if;
+  if nullif(btrim(requested_goods_summary), '') is null then raise exception 'Goods description is required'; end if;
+  if requested_shipping_method not in ('air','sea','hand_carry') then raise exception 'Invalid shipping method'; end if;
+  if requested_charge_basis not in ('per_kg','per_piece','per_cbm','per_ton','flat') then raise exception 'Invalid charge basis'; end if;
+  if coalesce(requested_rate, 0) < 0 then raise exception 'Rate cannot be negative'; end if;
+  if jsonb_typeof(requested_packages) <> 'array' or jsonb_array_length(requested_packages) = 0 then
+    raise exception 'Add at least one package';
+  end if;
+
+  insert into public.cargo_shipping_jobs (
+    id, customer_id, courier_tracking_number, goods_summary, shipping_method,
+    charge_basis, rate, china_warehouse_id, bangladesh_warehouse_id, note,
+    created_by, updated_by
+  ) values (
+    job_id, requested_customer_id, left(btrim(requested_tracking_number), 160),
+    left(btrim(requested_goods_summary), 2000), requested_shipping_method,
+    requested_charge_basis, coalesce(requested_rate, 0), requested_china_warehouse_id,
+    requested_bangladesh_warehouse_id, nullif(left(btrim(coalesce(requested_note, '')), 3000), ''),
+    actor_profile_id, actor_profile_id
+  );
+
+  for package_row in select value from jsonb_array_elements(requested_packages) loop
+    package_number := package_number + 1;
+    if nullif(btrim(package_row->>'description'), '') is null then raise exception 'Package description is required'; end if;
+    if coalesce((package_row->>'quantity')::numeric, 0) <= 0 then raise exception 'Package quantity must be greater than zero'; end if;
+    if nullif(btrim(package_row->>'unit'), '') is null then raise exception 'Package unit is required'; end if;
+    insert into public.cargo_shipping_packages (
+      job_id, sequence_number, description, quantity, unit, weight, dimensions, cbm
+    ) values (
+      job_id, package_number, left(btrim(package_row->>'description'), 1000),
+      (package_row->>'quantity')::numeric, left(btrim(package_row->>'unit'), 40),
+      nullif(package_row->>'weight', '')::numeric,
+      nullif(left(btrim(coalesce(package_row->>'dimensions', '')), 200), ''),
+      nullif(package_row->>'cbm', '')::numeric
+    );
+  end loop;
+
+  insert into public.cargo_shipping_events(job_id, status, note, actor_id)
+  values (job_id, 'requested', 'Cargo job created.', actor_profile_id);
+  return job_id;
+end;
+$$;
+
+create or replace function public.advance_cargo_shipping_job(
+  actor_profile_id uuid,
+  requested_job_id uuid,
+  requested_status text,
+  requested_event_at timestamptz,
+  requested_warehouse_id uuid,
+  requested_location_id uuid,
+  requested_note text
+) returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  job_row public.cargo_shipping_jobs%rowtype;
+  expected_next text;
+  required_permission text;
+  event_time timestamptz := coalesce(requested_event_at, now());
+  effective_warehouse_id uuid;
+begin
+  required_permission := case
+    when requested_status in ('expected_china', 'received_china') then 'cargo.china_receive'
+    when requested_status in ('dispatched_china', 'in_transit') then 'cargo.china_dispatch'
+    when requested_status in ('arrived_bangladesh', 'received_bd_warehouse') then 'cargo.bd_receive'
+    when requested_status = 'ready_for_customer' then 'cargo.mark_ready'
+    when requested_status in ('handed_over', 'delivered') then 'cargo.handover'
+    when requested_status = 'closed' then 'cargo.close'
+    else null
+  end;
+  if required_permission is null or not public.cargo_actor_has_permission(actor_profile_id, required_permission) then
+    raise exception 'Permission denied';
+  end if;
+
+  select * into job_row from public.cargo_shipping_jobs
+  where id = requested_job_id for update;
+  if job_row.id is null then raise exception 'Cargo job not found'; end if;
+
+  expected_next := case job_row.current_status
+    when 'requested' then 'expected_china'
+    when 'expected_china' then 'received_china'
+    when 'received_china' then 'dispatched_china'
+    when 'dispatched_china' then 'in_transit'
+    when 'in_transit' then 'arrived_bangladesh'
+    when 'arrived_bangladesh' then 'received_bd_warehouse'
+    when 'received_bd_warehouse' then 'ready_for_customer'
+    when 'ready_for_customer' then 'handed_over'
+    when 'handed_over' then 'delivered'
+    when 'delivered' then 'closed'
+    else null
+  end;
+  if expected_next is null or requested_status <> expected_next then
+    raise exception 'Invalid next cargo status';
+  end if;
+
+  effective_warehouse_id := coalesce(requested_warehouse_id, job_row.bangladesh_warehouse_id);
+  if requested_status = 'received_bd_warehouse' and effective_warehouse_id is null then
+    raise exception 'Choose a Bangladesh warehouse';
+  end if;
+  if effective_warehouse_id is not null and not exists (
+    select 1 from public.warehouses
+    where id = effective_warehouse_id and is_active and upper(btrim(country_code)) = 'BD'
+  ) then raise exception 'Bangladesh destination must be an active BD warehouse'; end if;
+  if requested_location_id is not null and not exists (
+    select 1 from public.warehouse_locations
+    where id = requested_location_id and warehouse_id = effective_warehouse_id and is_active
+  ) then raise exception 'Choose an active location belonging to the selected Bangladesh warehouse'; end if;
+
+  update public.cargo_shipping_jobs set
+    current_status = requested_status,
+    bangladesh_warehouse_id = case when requested_warehouse_id is not null then requested_warehouse_id else bangladesh_warehouse_id end,
+    bangladesh_location_id = case when requested_location_id is not null then requested_location_id else bangladesh_location_id end,
+    expected_china_at = case when requested_status = 'expected_china' then event_time else expected_china_at end,
+    china_received_at = case when requested_status = 'received_china' then event_time else china_received_at end,
+    dispatched_china_at = case when requested_status = 'dispatched_china' then event_time else dispatched_china_at end,
+    arrived_bangladesh_at = case when requested_status = 'arrived_bangladesh' then event_time else arrived_bangladesh_at end,
+    bangladesh_received_at = case when requested_status = 'received_bd_warehouse' then event_time else bangladesh_received_at end,
+    ready_for_customer_at = case when requested_status = 'ready_for_customer' then event_time else ready_for_customer_at end,
+    handed_over_at = case when requested_status = 'handed_over' then event_time else handed_over_at end,
+    delivered_at = case when requested_status = 'delivered' then event_time else delivered_at end,
+    closed_at = case when requested_status = 'closed' then event_time else closed_at end,
+    updated_by = actor_profile_id,
+    updated_at = now()
+  where id = requested_job_id;
+
+  insert into public.cargo_shipping_events(job_id, status, event_at, warehouse_id, location_id, note, actor_id)
+  values (requested_job_id, requested_status, event_time, requested_warehouse_id, requested_location_id,
+    nullif(left(btrim(coalesce(requested_note, '')), 2000), ''), actor_profile_id);
+end;
+$$;
+
+create or replace function public.verify_cargo_package_china_receive(
+  actor_profile_id uuid,
+  requested_job_id uuid,
+  requested_package_id uuid,
+  requested_event_at timestamptz
+) returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  package_row public.cargo_shipping_packages%rowtype;
+  job_status text;
+begin
+  if not public.cargo_actor_has_permission(actor_profile_id, 'cargo.china_receive') then
+    raise exception 'Permission denied';
+  end if;
+  select current_status into job_status from public.cargo_shipping_jobs
+  where id = requested_job_id for update;
+  if job_status is null then raise exception 'Cargo job not found'; end if;
+  if job_status not in ('expected_china', 'received_china') then
+    raise exception 'Package China receipt is available only during the China receiving stage';
+  end if;
+  select * into package_row from public.cargo_shipping_packages
+  where id = requested_package_id and job_id = requested_job_id for update;
+  if package_row.id is null then raise exception 'Cargo package not found'; end if;
+  if package_row.china_received_at is not null then raise exception 'Package China receipt is already verified'; end if;
+  update public.cargo_shipping_packages
+  set china_received_at = coalesce(requested_event_at, now()), china_received_by = actor_profile_id
+  where id = requested_package_id;
+end;
+$$;
+
+create or replace function public.assign_cargo_package_location(
+  actor_profile_id uuid,
+  requested_job_id uuid,
+  requested_package_id uuid,
+  requested_location_id uuid
+) returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  package_row public.cargo_shipping_packages%rowtype;
+  job_status text;
+  job_warehouse_id uuid;
+begin
+  if not public.cargo_actor_has_permission(actor_profile_id, 'cargo.assign_location') then
+    raise exception 'Permission denied';
+  end if;
+  select current_status, bangladesh_warehouse_id into job_status, job_warehouse_id
+  from public.cargo_shipping_jobs where id = requested_job_id for update;
+  if job_status is null then raise exception 'Cargo job not found'; end if;
+  if job_status not in ('arrived_bangladesh', 'received_bd_warehouse', 'ready_for_customer') then
+    raise exception 'Package location can be assigned only after Bangladesh arrival';
+  end if;
+  if job_warehouse_id is null or not exists (
+    select 1 from public.warehouses
+    where id = job_warehouse_id and is_active and upper(btrim(country_code)) = 'BD'
+  ) then raise exception 'Choose an active Bangladesh destination first'; end if;
+  select * into package_row from public.cargo_shipping_packages
+  where id = requested_package_id and job_id = requested_job_id for update;
+  if package_row.id is null then raise exception 'Cargo package not found'; end if;
+  if package_row.handed_over_at is not null then raise exception 'Handed-over packages cannot be moved'; end if;
+  if not exists (
+    select 1 from public.warehouse_locations
+    where id = requested_location_id and warehouse_id = job_warehouse_id and is_active
+  ) then raise exception 'Choose an active location belonging to the selected Bangladesh warehouse'; end if;
+  update public.cargo_shipping_packages set warehouse_location_id = requested_location_id
+  where id = requested_package_id;
+  update public.cargo_shipping_jobs
+  set bangladesh_location_id = requested_location_id, updated_by = actor_profile_id, updated_at = now()
+  where id = requested_job_id;
+end;
+$$;
+
+create or replace function public.verify_cargo_package_ready(
+  actor_profile_id uuid,
+  requested_job_id uuid,
+  requested_package_id uuid,
+  requested_event_at timestamptz
+) returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  package_row public.cargo_shipping_packages%rowtype;
+  job_status text;
+begin
+  if not public.cargo_actor_has_permission(actor_profile_id, 'cargo.mark_ready') then
+    raise exception 'Permission denied';
+  end if;
+  select current_status into job_status from public.cargo_shipping_jobs
+  where id = requested_job_id for update;
+  if job_status is null then raise exception 'Cargo job not found'; end if;
+  if job_status not in ('received_bd_warehouse', 'ready_for_customer') then
+    raise exception 'Package readiness is available only after Bangladesh warehouse receipt';
+  end if;
+  select * into package_row from public.cargo_shipping_packages
+  where id = requested_package_id and job_id = requested_job_id for update;
+  if package_row.id is null then raise exception 'Cargo package not found'; end if;
+  if package_row.china_received_at is null then raise exception 'Verify China receipt first'; end if;
+  if package_row.warehouse_location_id is null then raise exception 'Assign a Bangladesh warehouse location first'; end if;
+  if package_row.ready_verified_at is not null then raise exception 'Package readiness is already verified'; end if;
+  update public.cargo_shipping_packages
+  set ready_verified_at = coalesce(requested_event_at, now()), ready_verified_by = actor_profile_id
+  where id = requested_package_id;
+end;
+$$;
+
+create or replace function public.verify_cargo_job_handover(
+  actor_profile_id uuid,
+  requested_job_id uuid,
+  requested_recipient text,
+  requested_reference text,
+  requested_event_at timestamptz
+) returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  job_row public.cargo_shipping_jobs%rowtype;
+  event_time timestamptz := coalesce(requested_event_at, now());
+begin
+  if not public.cargo_actor_has_permission(actor_profile_id, 'cargo.handover') then
+    raise exception 'Permission denied';
+  end if;
+  if nullif(btrim(requested_recipient), '') is null then raise exception 'Handover recipient is required'; end if;
+  select * into job_row from public.cargo_shipping_jobs
+  where id = requested_job_id for update;
+  if job_row.id is null then raise exception 'Cargo job not found'; end if;
+  if job_row.current_status <> 'ready_for_customer' then raise exception 'Cargo job is not ready for handover'; end if;
+  if job_row.handover_verified_at is not null then raise exception 'Cargo handover is already verified'; end if;
+  perform 1 from public.cargo_shipping_packages where job_id = requested_job_id for update;
+  if exists (
+    select 1 from public.cargo_shipping_packages
+    where job_id = requested_job_id and ready_verified_at is null
+  ) then raise exception 'Verify every package as ready first'; end if;
+  if exists (
+    select 1 from public.cargo_shipping_packages
+    where job_id = requested_job_id and handed_over_at is not null
+  ) then raise exception 'A package in this cargo job is already handed over'; end if;
+  update public.cargo_shipping_packages
+  set handed_over_at = event_time, handed_over_by = actor_profile_id
+  where job_id = requested_job_id;
+  update public.cargo_shipping_jobs
+  set current_status = 'handed_over', handed_over_at = event_time,
+    handover_verified_at = event_time, handover_verified_by = actor_profile_id,
+    handover_recipient = left(btrim(requested_recipient), 200),
+    handover_reference = nullif(left(btrim(coalesce(requested_reference, '')), 200), ''),
+    updated_by = actor_profile_id, updated_at = now()
+  where id = requested_job_id;
+  insert into public.cargo_shipping_events(job_id, status, event_at, note, actor_id)
+  values (
+    requested_job_id, 'handed_over', event_time,
+    'Verified handover to ' || left(btrim(requested_recipient), 200) ||
+      case when nullif(btrim(coalesce(requested_reference, '')), '') is null
+        then '' else ' · Reference ' || left(btrim(requested_reference), 200) end,
+    actor_profile_id
+  );
+end;
+$$;
+
+revoke all on function public.create_cargo_shipping_job(uuid,uuid,text,text,text,text,numeric,uuid,uuid,text,jsonb) from public, anon, authenticated;
+revoke all on function public.advance_cargo_shipping_job(uuid,uuid,text,timestamptz,uuid,uuid,text) from public, anon, authenticated;
+revoke all on function public.verify_cargo_package_china_receive(uuid,uuid,uuid,timestamptz) from public, anon, authenticated;
+revoke all on function public.assign_cargo_package_location(uuid,uuid,uuid,uuid) from public, anon, authenticated;
+revoke all on function public.verify_cargo_package_ready(uuid,uuid,uuid,timestamptz) from public, anon, authenticated;
+revoke all on function public.verify_cargo_job_handover(uuid,uuid,text,text,timestamptz) from public, anon, authenticated;
+
+grant execute on function public.create_cargo_shipping_job(uuid,uuid,text,text,text,text,numeric,uuid,uuid,text,jsonb) to service_role;
+grant execute on function public.advance_cargo_shipping_job(uuid,uuid,text,timestamptz,uuid,uuid,text) to service_role;
+grant execute on function public.verify_cargo_package_china_receive(uuid,uuid,uuid,timestamptz) to service_role;
+grant execute on function public.assign_cargo_package_location(uuid,uuid,uuid,uuid) to service_role;
+grant execute on function public.verify_cargo_package_ready(uuid,uuid,uuid,timestamptz) to service_role;
+grant execute on function public.verify_cargo_job_handover(uuid,uuid,text,text,timestamptz) to service_role;
+
+commit;
+
+begin;
+
+create sequence if not exists public.donation_beneficiary_reference_seq;
+create sequence if not exists public.donation_expense_reference_seq;
+
+create table public.donation_relationship_types (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  constraint donation_relationship_types_name_not_blank check (btrim(name) <> '')
+);
+
+create unique index donation_relationship_types_name_unique
+  on public.donation_relationship_types (lower(btrim(name)));
+
+create table public.donation_expense_categories (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  constraint donation_expense_categories_name_not_blank check (btrim(name) <> '')
+);
+
+create unique index donation_expense_categories_name_unique
+  on public.donation_expense_categories (lower(btrim(name)));
+
+create table public.donation_payment_methods (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  constraint donation_payment_methods_name_not_blank check (btrim(name) <> '')
+);
+
+create unique index donation_payment_methods_name_unique
+  on public.donation_payment_methods (lower(btrim(name)));
+
+create table public.donation_beneficiaries (
+  id uuid primary key default gen_random_uuid(),
+  beneficiary_reference text not null default (
+    'BEN-' || to_char(current_date, 'YYYY') || '-' ||
+    lpad(nextval('public.donation_beneficiary_reference_seq')::text, 6, '0')
+  ),
+  beneficiary_type text not null,
+  name text not null,
+  phone text,
+  alternate_phone text,
+  address text,
+  city_district text,
+  country text,
+  whatsapp text,
+  notes text,
+  relationship_group text,
+  relationship_type_id uuid references public.donation_relationship_types(id) on delete restrict,
+  relationship_note text,
+  referred_by_name text,
+  referred_by_phone text,
+  referred_by_note text,
+  monthly_support_enabled boolean not null default false,
+  default_monthly_amount numeric(18,2),
+  reminder_day_of_month smallint,
+  support_start_date date,
+  support_end_date date,
+  default_purpose text,
+  default_category_id uuid references public.donation_expense_categories(id) on delete restrict,
+  default_payment_method_id uuid references public.donation_payment_methods(id) on delete restrict,
+  is_active boolean not null default true,
+  created_by uuid references public.profiles(id) on delete set null,
+  updated_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint donation_beneficiaries_reference_unique unique (beneficiary_reference),
+  constraint donation_beneficiaries_type_valid check (
+    beneficiary_type in ('INDIVIDUAL','FAMILY','INSTITUTION','MADRASA_MOSQUE','OTHER')
+  ),
+  constraint donation_beneficiaries_name_not_blank check (btrim(name) <> ''),
+  constraint donation_beneficiaries_monthly_amount_valid check (
+    default_monthly_amount is null or default_monthly_amount > 0
+  ),
+  constraint donation_beneficiaries_reminder_day_valid check (
+    reminder_day_of_month is null or reminder_day_of_month between 1 and 28
+  ),
+  constraint donation_beneficiaries_support_dates_valid check (
+    support_end_date is null or support_start_date is null or support_end_date >= support_start_date
+  ),
+  constraint donation_beneficiaries_monthly_settings_complete check (
+    not monthly_support_enabled or (
+      default_monthly_amount is not null and reminder_day_of_month is not null and support_start_date is not null
+    )
+  )
+);
+
+create index donation_beneficiaries_name_idx on public.donation_beneficiaries (lower(name));
+
+create table public.donation_monthly_support (
+  id uuid primary key default gen_random_uuid(),
+  beneficiary_id uuid not null references public.donation_beneficiaries(id) on delete restrict,
+  support_month date not null,
+  reminder_day_of_month smallint not null,
+  amount numeric(18,2) not null,
+  category_id uuid references public.donation_expense_categories(id) on delete restrict,
+  payment_method_id uuid references public.donation_payment_methods(id) on delete restrict,
+  purpose text,
+  status text not null default 'PENDING',
+  expense_id uuid,
+  completed_at timestamptz,
+  skipped_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint donation_monthly_support_month_start check (support_month = date_trunc('month', support_month)::date),
+  constraint donation_monthly_support_amount_positive check (amount > 0),
+  constraint donation_monthly_support_day_valid check (reminder_day_of_month between 1 and 28),
+  constraint donation_monthly_support_status_valid check (status in ('PENDING','COMPLETED','SKIPPED')),
+  constraint donation_monthly_support_unique_month unique (beneficiary_id, support_month)
+);
+
+create table public.donation_expenses (
+  id uuid primary key default gen_random_uuid(),
+  expense_reference text not null default (
+    'DON-' || to_char(current_date, 'YYYY') || '-' ||
+    lpad(nextval('public.donation_expense_reference_seq')::text, 6, '0')
+  ),
+  beneficiary_id uuid not null references public.donation_beneficiaries(id) on delete restrict,
+  category_id uuid not null references public.donation_expense_categories(id) on delete restrict,
+  amount numeric(18,2) not null,
+  donation_date date not null,
+  payment_method_id uuid not null references public.donation_payment_methods(id) on delete restrict,
+  payment_reference text,
+  purpose text not null,
+  note text,
+  proof_path text,
+  proof_file_name text,
+  proof_mime_type text,
+  monthly_support_id uuid references public.donation_monthly_support(id) on delete restrict,
+  status text not null default 'DRAFT',
+  completed_at timestamptz,
+  closed_at timestamptz,
+  created_by uuid references public.profiles(id) on delete set null,
+  updated_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint donation_expenses_reference_unique unique (expense_reference),
+  constraint donation_expenses_amount_positive check (amount > 0),
+  constraint donation_expenses_purpose_not_blank check (btrim(purpose) <> ''),
+  constraint donation_expenses_status_valid check (status in ('DRAFT','COMPLETED','CLOSED'))
+);
+
+alter table public.donation_monthly_support
+  add constraint donation_monthly_support_expense_fk
+  foreign key (expense_id) references public.donation_expenses(id) on delete restrict;
+
+create unique index donation_expenses_monthly_support_unique
+  on public.donation_expenses (monthly_support_id)
+  where monthly_support_id is not null;
+create index donation_expenses_beneficiary_date_idx
+  on public.donation_expenses (beneficiary_id, donation_date desc, created_at desc);
+
+create table public.donation_expense_events (
+  id uuid primary key default gen_random_uuid(),
+  expense_id uuid not null references public.donation_expenses(id) on delete restrict,
+  status text not null,
+  event_at timestamptz not null default now(),
+  actor_id uuid references public.profiles(id) on delete set null,
+  note text,
+  constraint donation_expense_events_status_valid check (status in ('DRAFT','COMPLETED','CLOSED'))
+);
+
+create index donation_expense_events_history_idx
+  on public.donation_expense_events (expense_id, event_at desc, id desc);
+
+create or replace function public.set_donation_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+create trigger donation_beneficiaries_updated_at
+before update on public.donation_beneficiaries
+for each row execute function public.set_donation_updated_at();
+
+create trigger donation_monthly_support_updated_at
+before update on public.donation_monthly_support
+for each row execute function public.set_donation_updated_at();
+
+create trigger donation_expenses_updated_at
+before update on public.donation_expenses
+for each row execute function public.set_donation_updated_at();
+
+create or replace function public.guard_donation_expense_status()
+returns trigger language plpgsql as $$
+begin
+  if old.status = new.status then return new; end if;
+  if not ((old.status = 'DRAFT' and new.status = 'COMPLETED') or
+          (old.status = 'COMPLETED' and new.status = 'CLOSED')) then
+    raise exception 'Invalid donation expense status transition from % to %', old.status, new.status
+      using errcode = '22023';
+  end if;
+  if new.status = 'COMPLETED' then new.completed_at = coalesce(new.completed_at, now()); end if;
+  if new.status = 'CLOSED' then new.closed_at = coalesce(new.closed_at, now()); end if;
+  return new;
+end;
+$$;
+
+create trigger donation_expenses_status_guard
+before update of status on public.donation_expenses
+for each row execute function public.guard_donation_expense_status();
+
+create or replace function public.keep_donation_events_immutable()
+returns trigger language plpgsql as $$
+begin
+  raise exception 'Donation expense events are immutable' using errcode = '55000';
+end;
+$$;
+
+create trigger donation_expense_events_immutable
+before update or delete on public.donation_expense_events
+for each row execute function public.keep_donation_events_immutable();
+
+create or replace function public.create_donation_expense(
+  requested_beneficiary_id uuid,
+  requested_category_id uuid,
+  requested_amount numeric,
+  requested_donation_date date,
+  requested_payment_method_id uuid,
+  requested_payment_reference text,
+  requested_purpose text,
+  requested_note text,
+  requested_monthly_support_id uuid,
+  requested_actor_id uuid
+) returns uuid
+language plpgsql security definer set search_path = public as $$
+declare
+  new_id uuid;
+  reminder record;
+begin
+  if requested_amount is null or requested_amount <= 0 then
+    raise exception 'Donation amount must be greater than zero' using errcode = '22023';
+  end if;
+  if requested_donation_date is null then
+    raise exception 'Donation date is required' using errcode = '22023';
+  end if;
+  if btrim(coalesce(requested_purpose, '')) = '' then
+    raise exception 'Purpose is required' using errcode = '22023';
+  end if;
+  if not exists (select 1 from public.donation_beneficiaries where id = requested_beneficiary_id and is_active) then
+    raise exception 'Active beneficiary not found' using errcode = '23503';
+  end if;
+  if not exists (select 1 from public.donation_expense_categories where id = requested_category_id and is_active) then
+    raise exception 'Active donation category not found' using errcode = '23503';
+  end if;
+  if not exists (select 1 from public.donation_payment_methods where id = requested_payment_method_id and is_active) then
+    raise exception 'Active donation payment method not found' using errcode = '23503';
+  end if;
+  if requested_monthly_support_id is not null then
+    select * into reminder from public.donation_monthly_support where id = requested_monthly_support_id for update;
+    if not found or reminder.beneficiary_id <> requested_beneficiary_id or reminder.status <> 'PENDING' then
+      raise exception 'Monthly support reminder is not available for this beneficiary' using errcode = '23514';
+    end if;
+  end if;
+
+  insert into public.donation_expenses (
+    beneficiary_id, category_id, amount, donation_date, payment_method_id,
+    payment_reference, purpose, note, monthly_support_id, created_by, updated_by
+  ) values (
+    requested_beneficiary_id, requested_category_id, round(requested_amount, 2), requested_donation_date,
+    requested_payment_method_id, nullif(btrim(coalesce(requested_payment_reference, '')), ''),
+    btrim(requested_purpose), nullif(btrim(coalesce(requested_note, '')), ''),
+    requested_monthly_support_id, requested_actor_id, requested_actor_id
+  ) returning id into new_id;
+
+  insert into public.donation_expense_events (expense_id, status, actor_id, note)
+  values (new_id, 'DRAFT', requested_actor_id, 'Donation expense created');
+  return new_id;
+end;
+$$;
+
+create or replace function public.advance_donation_expense_status(
+  requested_expense_id uuid,
+  requested_status text,
+  requested_actor_id uuid,
+  requested_note text default null
+) returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  current_row record;
+  expected_status text;
+begin
+  select * into current_row from public.donation_expenses where id = requested_expense_id for update;
+  if not found then raise exception 'Donation expense not found' using errcode = 'P0002'; end if;
+  expected_status := case current_row.status when 'DRAFT' then 'COMPLETED' when 'COMPLETED' then 'CLOSED' else null end;
+  if expected_status is null then raise exception 'Closed donation expense is terminal' using errcode = '22023'; end if;
+  if requested_status <> expected_status then
+    raise exception 'Invalid donation expense status transition. Expected %', expected_status using errcode = '22023';
+  end if;
+
+  update public.donation_expenses set status = requested_status, updated_by = requested_actor_id where id = requested_expense_id;
+  insert into public.donation_expense_events (expense_id, status, actor_id, note)
+  values (requested_expense_id, requested_status, requested_actor_id, nullif(btrim(coalesce(requested_note, '')), ''));
+
+  if requested_status = 'COMPLETED' and current_row.monthly_support_id is not null then
+    update public.donation_monthly_support
+      set status = 'COMPLETED', expense_id = requested_expense_id, completed_at = now()
+      where id = current_row.monthly_support_id and status = 'PENDING';
+  end if;
+  return requested_status;
+end;
+$$;
+
+create or replace function public.ensure_donation_monthly_support_reminders(requested_date date default current_date)
+returns integer
+language plpgsql security definer set search_path = public as $$
+declare inserted_count integer;
+begin
+  insert into public.donation_monthly_support (
+    beneficiary_id, support_month, reminder_day_of_month, amount, category_id, payment_method_id, purpose
+  )
+  select id, date_trunc('month', requested_date)::date, reminder_day_of_month,
+         default_monthly_amount, default_category_id, default_payment_method_id, default_purpose
+  from public.donation_beneficiaries
+  where is_active and monthly_support_enabled
+    and support_start_date <= requested_date
+    and (support_end_date is null or support_end_date >= date_trunc('month', requested_date)::date)
+  on conflict (beneficiary_id, support_month) do nothing;
+  get diagnostics inserted_count = row_count;
+  return inserted_count;
+end;
+$$;
+
+insert into public.donation_relationship_types (name) values
+  ('Mother'),('Father'),('Brother'),('Sister'),('Uncle'),('Aunt'),('Cousin'),
+  ('Nephew'),('Niece'),('In-law'),('Extended Relative'),('Other')
+on conflict do nothing;
+
+insert into public.donation_expense_categories (name) values
+  ('Sadaqah'),('Donation'),('Charity'),('Family Support'),('Welfare Support'),
+  ('Medical Assistance'),('Education Support'),('Emergency Support'),
+  ('Religious Contribution'),('Other')
+on conflict do nothing;
+
+insert into public.donation_payment_methods (name) values
+  ('Cash'),('Bank Transfer'),('bKash'),('Nagad'),('Other')
+on conflict do nothing;
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'donation-expense-proofs', 'donation-expense-proofs', false, 10485760,
+  array['image/jpeg','image/png','image/webp','application/pdf']
+)
+on conflict (id) do update set public = false, file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
+
+alter table public.donation_relationship_types enable row level security;
+alter table public.donation_expense_categories enable row level security;
+alter table public.donation_payment_methods enable row level security;
+alter table public.donation_beneficiaries enable row level security;
+alter table public.donation_monthly_support enable row level security;
+alter table public.donation_expenses enable row level security;
+alter table public.donation_expense_events enable row level security;
+
+grant usage on sequence public.donation_beneficiary_reference_seq to service_role;
+grant usage on sequence public.donation_expense_reference_seq to service_role;
+grant select, insert, update on public.donation_relationship_types to service_role;
+grant select, insert, update on public.donation_expense_categories to service_role;
+grant select, insert, update on public.donation_payment_methods to service_role;
+grant select, insert, update on public.donation_beneficiaries to service_role;
+grant select, insert, update on public.donation_monthly_support to service_role;
+grant select, insert, update on public.donation_expenses to service_role;
+grant select, insert on public.donation_expense_events to service_role;
+grant execute on function public.create_donation_expense(uuid,uuid,numeric,date,uuid,text,text,text,uuid,uuid) to service_role;
+grant execute on function public.advance_donation_expense_status(uuid,text,uuid,text) to service_role;
+grant execute on function public.ensure_donation_monthly_support_reminders(date) to service_role;
+
+commit;
+
+-- Donation recurring-support reminder controls only.
+
+alter table public.donation_monthly_support
+  add column if not exists skip_note text,
+  add column if not exists skipped_by uuid references public.profiles(id) on delete set null;
+
+create or replace function public.ensure_donation_monthly_support_reminders(requested_date date default current_date)
+returns integer
+language plpgsql security definer set search_path = public as $$
+declare inserted_count integer;
+begin
+  insert into public.donation_monthly_support (
+    beneficiary_id, support_month, reminder_day_of_month, amount, category_id, payment_method_id, purpose
+  )
+  select id, date_trunc('month', requested_date)::date, reminder_day_of_month,
+         default_monthly_amount, default_category_id, default_payment_method_id, default_purpose
+  from public.donation_beneficiaries
+  where is_active and monthly_support_enabled
+    and date_trunc('month', support_start_date) <= date_trunc('month', requested_date)
+    and (support_end_date is null or support_end_date >= date_trunc('month', requested_date)::date)
+  on conflict (beneficiary_id, support_month) do nothing;
+  get diagnostics inserted_count = row_count;
+  return inserted_count;
+end;
+$$;
+
+create or replace function public.skip_donation_monthly_support_reminder(
+  requested_reminder_id uuid,
+  requested_actor_id uuid,
+  requested_note text default null
+) returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  current_status text;
+begin
+  select status into current_status
+  from public.donation_monthly_support
+  where id = requested_reminder_id
+  for update;
+
+  if not found then
+    raise exception 'Monthly support reminder not found' using errcode = 'P0002';
+  end if;
+  if current_status <> 'PENDING' then
+    raise exception 'Monthly support reminder is no longer pending' using errcode = '23514';
+  end if;
+
+  update public.donation_monthly_support
+  set status = 'SKIPPED',
+      skipped_at = now(),
+      skipped_by = requested_actor_id,
+      skip_note = nullif(btrim(coalesce(requested_note, '')), '')
+  where id = requested_reminder_id;
+
+  return 'SKIPPED';
+end;
+$$;
+
+revoke all on function public.skip_donation_monthly_support_reminder(uuid, uuid, text) from public;
+grant execute on function public.skip_donation_monthly_support_reminder(uuid, uuid, text) to service_role;
+
+-- RMB Phase 2: customer requests and RMB-owned active-rate snapshots.
+begin;
+
+create table public.rmb_rate_history (
+  id uuid primary key default gen_random_uuid(),
+  currency_code text not null references public.rmb_currencies(code),
+  rate_bdt numeric(18,6) not null check (rate_bdt > 0 and rate_bdt <> 'NaN'::numeric),
+  is_active boolean not null default true,
+  effective_at timestamptz not null default now(),
+  created_by uuid not null references public.profiles(id),
+  created_at timestamptz not null default now()
+);
+
+create unique index rmb_rate_history_one_active_currency
+  on public.rmb_rate_history(currency_code) where is_active;
+create index rmb_rate_history_currency_effective_idx
+  on public.rmb_rate_history(currency_code, effective_at desc);
+
+alter table public.rmb_payment_jobs
+  add column applied_rate_id uuid references public.rmb_rate_history(id),
+  add column customer_instruction text;
+
+create or replace function public.prevent_rmb_customer_snapshot_mutation()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if old.applied_rate_id is not null and (
+    new.customer_id is distinct from old.customer_id or
+    new.foreign_currency is distinct from old.foreign_currency or
+    new.foreign_amount is distinct from old.foreign_amount or
+    new.agreed_bdt_rate is distinct from old.agreed_bdt_rate or
+    new.applied_rate_id is distinct from old.applied_rate_id
+  ) then
+    raise exception 'RMB customer request financial snapshot is immutable';
+  end if;
+  return new;
+end;
+$$;
+
+create trigger rmb_payment_jobs_customer_snapshot_immutable
+before update on public.rmb_payment_jobs
+for each row execute function public.prevent_rmb_customer_snapshot_mutation();
+
+create or replace function public.set_rmb_active_rate(
+  actor_profile_id uuid,
+  requested_currency_code text,
+  requested_rate numeric
+) returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  rate_id uuid;
+begin
+  if not exists (
+    select 1 from public.profiles
+    where id = actor_profile_id and role = 'admin' and status = 'active'
+  ) then raise exception 'Permission denied'; end if;
+  if requested_rate is null or requested_rate <= 0 or requested_rate = 'NaN'::numeric then
+    raise exception 'Rate must be greater than zero';
+  end if;
+  if requested_rate <> round(requested_rate, 6) then
+    raise exception 'Rate supports up to 6 decimal places';
+  end if;
+  if not exists (
+    select 1 from public.rmb_currencies
+    where code = upper(btrim(requested_currency_code)) and is_active
+  ) then raise exception 'Choose an active RMB currency'; end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(upper(btrim(requested_currency_code)), 0));
+  update public.rmb_rate_history
+  set is_active = false
+  where currency_code = upper(btrim(requested_currency_code)) and is_active;
+
+  insert into public.rmb_rate_history(currency_code, rate_bdt, is_active, created_by)
+  values (upper(btrim(requested_currency_code)), requested_rate, true, actor_profile_id)
+  returning id into rate_id;
+  return rate_id;
+end;
+$$;
+
+create or replace function public.create_rmb_customer_request(
+  requested_job_id uuid,
+  expected_rate_id uuid,
+  requested_payload jsonb
+) returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  actor_id uuid := auth.uid();
+  requested_currency_code text := upper(btrim(coalesce(requested_payload->>'foreign_currency', '')));
+  amount numeric := nullif(btrim(coalesce(requested_payload->>'foreign_amount', '')), '')::numeric;
+  rate_row public.rmb_rate_history%rowtype;
+  method_type text;
+  customer_method_name text;
+  destination_type text := upper(btrim(coalesce(requested_payload->>'china_destination_type', '')));
+  customer_proof_path text := nullif(btrim(coalesce(requested_payload->>'customer_payment_proof_path', '')), '');
+  destination_qr_path text := nullif(btrim(coalesce(requested_payload->>'china_destination_qr_path', '')), '');
+begin
+  if actor_id is null or not exists (
+    select 1 from public.profiles where id = actor_id and role = 'customer' and status = 'active'
+  ) then raise exception 'Customer authentication required'; end if;
+  if not exists (
+    select 1 from public.rmb_currencies where code = requested_currency_code and is_active
+  ) then raise exception 'Choose an active currency'; end if;
+  if amount is null or amount <= 0 then raise exception 'Foreign amount must be greater than zero'; end if;
+
+  select * into rate_row
+  from public.rmb_rate_history
+  where id = expected_rate_id and rmb_rate_history.currency_code = requested_currency_code and is_active
+  for update;
+  if rate_row.id is null then raise exception 'RATE_CHANGED'; end if;
+
+  if nullif(btrim(coalesce(requested_payload->>'payee_name', '')), '') is null then
+    raise exception 'Payee name is required';
+  end if;
+  if nullif(btrim(coalesce(requested_payload->>'payee_account_details', '')), '') is null
+    and nullif(btrim(coalesce(requested_payload->>'china_bank_account_number', '')), '') is null
+    and nullif(btrim(coalesce(requested_payload->>'china_wallet_id', '')), '') is null then
+    raise exception 'Payment destination details are required';
+  end if;
+
+  if nullif(btrim(coalesce(requested_payload->>'customer_payment_method_id', '')), '') is not null then
+    select name into customer_method_name
+    from public.rmb_payment_methods
+    where id = (requested_payload->>'customer_payment_method_id')::uuid
+      and is_active and context in ('CUSTOMER_PAYMENT', 'BOTH');
+    if customer_method_name is null then raise exception 'Choose a valid Bangladesh customer payment method'; end if;
+  end if;
+
+  if nullif(btrim(coalesce(requested_payload->>'china_payment_method_id', '')), '') is not null then
+    select pm.method_type into method_type
+    from public.rmb_payment_methods as pm
+    where id = (requested_payload->>'china_payment_method_id')::uuid
+      and is_active and context in ('CHINA_PAYMENT', 'BOTH');
+    if method_type is null then raise exception 'Choose a valid China payment method'; end if;
+    if destination_type is distinct from method_type then raise exception 'China payment destination does not match the selected method'; end if;
+  end if;
+
+  if customer_proof_path is not null and position(requested_job_id::text || '/customer-payment/' || actor_id::text || '-' in customer_proof_path) <> 1 then
+    raise exception 'Invalid customer proof path';
+  end if;
+  if destination_qr_path is not null and position(requested_job_id::text || '/destination/' || actor_id::text || '-' in destination_qr_path) <> 1 then
+    raise exception 'Invalid destination proof path';
+  end if;
+
+  insert into public.rmb_payment_jobs(
+    id, customer_id, foreign_currency, foreign_amount, agreed_bdt_rate, applied_rate_id,
+    customer_payment_method_id, customer_payment_method, customer_payment_reference,
+    customer_payment_note, customer_payment_proof_path, payee_organization, payee_name,
+    payee_address, payee_phone, payee_account_details, china_payment_method_id,
+    china_payment_method, china_destination_type, china_bank_name, china_account_name,
+    china_account_number, china_bank_branch, china_bank_code, china_wallet_id,
+    china_destination_qr_path, china_cash_recipient_name, china_cash_recipient_contact,
+    china_cash_instruction_note, customer_instruction, created_by, updated_by
+  ) values (
+    requested_job_id, actor_id, requested_currency_code, amount, rate_row.rate_bdt, rate_row.id,
+    nullif(btrim(coalesce(requested_payload->>'customer_payment_method_id', '')), '')::uuid,
+    customer_method_name, nullif(left(btrim(coalesce(requested_payload->>'customer_payment_reference', '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_payload->>'customer_payment_note', '')), 1000), ''),
+    customer_proof_path, nullif(left(btrim(coalesce(requested_payload->>'payee_organization', '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_payload->>'payee_name', '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_payload->>'payee_address', '')), 1000), ''),
+    nullif(left(btrim(coalesce(requested_payload->>'payee_phone', '')), 100), ''),
+    nullif(left(btrim(coalesce(requested_payload->>'payee_account_details', '')), 2000), ''),
+    nullif(btrim(coalesce(requested_payload->>'china_payment_method_id', '')), '')::uuid,
+    nullif(left(btrim(coalesce(requested_payload->>'china_payment_method_name', '')), 100), ''),
+    nullif(left(destination_type, 20), ''),
+    nullif(left(btrim(coalesce(requested_payload->>'china_bank_name', '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_payload->>'china_account_name', '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_payload->>'china_bank_account_number', '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_payload->>'china_bank_branch', '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_payload->>'china_bank_code', '')), 100), ''),
+    nullif(left(btrim(coalesce(requested_payload->>'china_wallet_id', '')), 200), ''),
+    destination_qr_path,
+    nullif(left(btrim(coalesce(requested_payload->>'china_cash_recipient_name', '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_payload->>'china_cash_recipient_contact', '')), 200), ''),
+    nullif(left(btrim(coalesce(requested_payload->>'china_cash_instruction_note', '')), 1000), ''),
+    nullif(left(btrim(coalesce(requested_payload->>'customer_instruction', '')), 2000), ''),
+    actor_id, actor_id
+  );
+  insert into public.rmb_payment_events(job_id, status, actor_id, note)
+  values (requested_job_id, 'AWAITING_CUSTOMER_PAYMENT', actor_id, 'Customer submitted RMB payment request.');
+  return requested_job_id;
+exception
+  when invalid_text_representation then raise exception 'Invalid request data';
+end;
+$$;
+
+alter table public.rmb_rate_history enable row level security;
+revoke all on public.rmb_rate_history from public, anon, authenticated;
+grant select on public.rmb_rate_history to service_role;
+revoke all on function public.set_rmb_active_rate(uuid, text, numeric) from public, anon, authenticated;
+revoke all on function public.create_rmb_customer_request(uuid, uuid, jsonb) from public, anon, authenticated;
+grant execute on function public.create_rmb_customer_request(uuid, uuid, jsonb) to authenticated;
+grant execute on function public.set_rmb_active_rate(uuid, text, numeric) to service_role;
+
+commit;
+
+-- Cargo customer portal and Cargo-owned billing only.
+begin;
+
+alter table public.cargo_shipping_jobs
+  add column if not exists customer_reference text,
+  add column if not exists customer_contact_person text,
+  add column if not exists customer_contact_phone text,
+  add column if not exists customer_service_location text,
+  add column if not exists customer_preferred_date date,
+  add column if not exists customer_instruction text,
+  add column if not exists final_billable_weight_kg numeric(18,3)
+    check (final_billable_weight_kg is null or final_billable_weight_kg > 0);
+
+-- Required Cargo-only relaxation: unknown courier tracking is stored as NULL.
+do $$
+begin
+  if exists (select 1 from information_schema.columns where table_schema='public' and table_name='cargo_shipping_jobs' and column_name='courier_tracking_number' and is_nullable='NO') then
+    alter table public.cargo_shipping_jobs alter column courier_tracking_number drop not null;
+  end if;
+end $$;
+
+-- Required Cargo-only relaxation: zero-value invoices may use a zero billable weight.
+do $$
+begin
+  if exists (select 1 from pg_constraint where conrelid='public.cargo_shipping_jobs'::regclass and conname='cargo_shipping_jobs_final_billable_weight_kg_check') then
+    if position('>=' in (select pg_get_constraintdef(oid) from pg_constraint where conrelid='public.cargo_shipping_jobs'::regclass and conname='cargo_shipping_jobs_final_billable_weight_kg_check')) = 0 then
+      alter table public.cargo_shipping_jobs drop constraint cargo_shipping_jobs_final_billable_weight_kg_check;
+    end if;
+  end if;
+  if not exists (select 1 from pg_constraint where conrelid='public.cargo_shipping_jobs'::regclass and conname='cargo_shipping_jobs_final_billable_weight_kg_check') then
+    alter table public.cargo_shipping_jobs add constraint cargo_shipping_jobs_final_billable_weight_kg_check check (final_billable_weight_kg is null or final_billable_weight_kg >= 0);
+  end if;
+end $$;
+
+create table if not exists public.cargo_rates (
+  id uuid primary key default gen_random_uuid(),
+  shipping_method text not null check (shipping_method in ('air','sea','hand_carry')),
+  rate_bdt_per_kg numeric(18,4) not null check (rate_bdt_per_kg > 0),
+  is_active boolean not null default true,
+  effective_at timestamptz not null default now(),
+  created_by uuid not null references public.profiles(id),
+  created_at timestamptz not null default now()
+);
+create unique index if not exists cargo_rates_one_active_method
+  on public.cargo_rates(shipping_method) where is_active;
+
+create table if not exists public.cargo_invoices (
+  id uuid primary key default gen_random_uuid(),
+  invoice_number text not null unique default ('CINV-' || upper(substr(replace(gen_random_uuid()::text,'-',''),1,10))),
+  cargo_job_id uuid not null unique references public.cargo_shipping_jobs(id) on delete restrict,
+  customer_id uuid not null references public.profiles(id) on delete restrict,
+  invoice_date date not null default current_date,
+  currency text not null default 'BDT' check (currency = 'BDT'),
+  final_billable_weight_kg numeric(18,3) not null check (final_billable_weight_kg > 0),
+  applied_rate_per_kg numeric(18,4) not null check (applied_rate_per_kg > 0),
+  base_cargo_charge numeric(20,2) generated always as (round(final_billable_weight_kg * applied_rate_per_kg, 2)) stored,
+  total_amount numeric(20,2) generated always as (round(final_billable_weight_kg * applied_rate_per_kg, 2)) stored,
+  payment_status text not null default 'UNPAID' check (payment_status in ('UNPAID','PAID')),
+  customer_visible boolean not null default false,
+  payment_method text,
+  payment_reference text,
+  payment_note text,
+  payment_proof_path text,
+  generated_at timestamptz not null default now(),
+  generated_by uuid not null references public.profiles(id),
+  paid_at timestamptz,
+  confirmed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+do $$
+begin
+  if exists (select 1 from pg_constraint where conrelid='public.cargo_invoices'::regclass and conname='cargo_invoices_final_billable_weight_kg_check') then
+    if position('>=' in (select pg_get_constraintdef(oid) from pg_constraint where conrelid='public.cargo_invoices'::regclass and conname='cargo_invoices_final_billable_weight_kg_check')) = 0 then
+      alter table public.cargo_invoices drop constraint cargo_invoices_final_billable_weight_kg_check;
+    end if;
+  end if;
+  if not exists (select 1 from pg_constraint where conrelid='public.cargo_invoices'::regclass and conname='cargo_invoices_final_billable_weight_kg_check') then
+    alter table public.cargo_invoices add constraint cargo_invoices_final_billable_weight_kg_check check (final_billable_weight_kg >= 0);
+  end if;
+end $$;
+create index if not exists cargo_invoices_customer_idx on public.cargo_invoices(customer_id, created_at desc);
+
+insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types)
+values ('cargo-invoice-proofs','cargo-invoice-proofs',false,10485760,array['image/jpeg','image/png','image/webp','application/pdf'])
+on conflict(id) do update set public=false,file_size_limit=excluded.file_size_limit,allowed_mime_types=excluded.allowed_mime_types;
+
+alter table public.cargo_rates enable row level security;
+alter table public.cargo_invoices enable row level security;
+alter table public.cargo_shipping_jobs enable row level security;
+alter table public.cargo_shipping_packages enable row level security;
+alter table public.cargo_shipping_events enable row level security;
+do $$ begin if exists (select 1 from pg_policies where schemaname='public' and tablename='cargo_shipping_jobs' and policyname='cargo owners read own jobs') then drop policy "cargo owners read own jobs" on public.cargo_shipping_jobs; end if; end $$;
+create policy "cargo owners read own jobs" on public.cargo_shipping_jobs for select to authenticated using (customer_id = auth.uid());
+do $$ begin if exists (select 1 from pg_policies where schemaname='public' and tablename='cargo_shipping_packages' and policyname='cargo owners read own packages') then drop policy "cargo owners read own packages" on public.cargo_shipping_packages; end if; end $$;
+create policy "cargo owners read own packages" on public.cargo_shipping_packages for select to authenticated using (exists(select 1 from public.cargo_shipping_jobs j where j.id=job_id and j.customer_id=auth.uid()));
+do $$ begin if exists (select 1 from pg_policies where schemaname='public' and tablename='cargo_shipping_events' and policyname='cargo owners read own events') then drop policy "cargo owners read own events" on public.cargo_shipping_events; end if; end $$;
+create policy "cargo owners read own events" on public.cargo_shipping_events for select to authenticated using (exists(select 1 from public.cargo_shipping_jobs j where j.id=job_id and j.customer_id=auth.uid()));
+do $$ begin if exists (select 1 from pg_policies where schemaname='public' and tablename='cargo_invoices' and policyname='cargo owners read visible invoices') then drop policy "cargo owners read visible invoices" on public.cargo_invoices; end if; end $$;
+create policy "cargo owners read visible invoices" on public.cargo_invoices for select to authenticated
+  using (customer_id = auth.uid() and customer_visible = true);
+grant select on public.cargo_rates, public.cargo_invoices to authenticated;
+grant select on public.cargo_shipping_jobs, public.cargo_shipping_packages, public.cargo_shipping_events to authenticated;
+grant all on public.cargo_rates, public.cargo_invoices to service_role;
+
+create or replace function public.create_cargo_customer_request(
+  actor_profile_id uuid,
+  requested_payload jsonb
+) returns uuid
+language plpgsql security definer set search_path = '' as $$
+declare
+  job_id uuid := gen_random_uuid();
+  tracking text := nullif(left(btrim(coalesce(requested_payload->>'tracking_number','')),160),'');
+  package_row jsonb;
+  package_number integer := 0;
+begin
+  if actor_profile_id is null or actor_profile_id <> auth.uid() or not exists (
+    select 1 from public.profiles where id=actor_profile_id and role='customer' and status='active'
+  ) then raise exception 'Customer authentication required'; end if;
+  if nullif(btrim(coalesce(requested_payload->>'goods_summary','')), '') is null then raise exception 'Goods description is required'; end if;
+  if coalesce(requested_payload->>'shipping_method','air') not in ('air','sea','hand_carry') then raise exception 'Invalid shipping method'; end if;
+  if jsonb_typeof(coalesce(requested_payload->'packages','[]'::jsonb)) <> 'array' or jsonb_array_length(coalesce(requested_payload->'packages','[]'::jsonb)) = 0 then raise exception 'Add at least one package'; end if;
+  insert into public.cargo_shipping_jobs(
+    id,customer_id,courier_tracking_number,goods_summary,shipping_method,charge_basis,rate,note,
+    customer_reference,customer_contact_person,customer_contact_phone,customer_service_location,customer_preferred_date,customer_instruction,
+    created_by,updated_by
+  ) values (
+    job_id,actor_profile_id,tracking,left(btrim(requested_payload->>'goods_summary'),2000),coalesce(requested_payload->>'shipping_method','air'),'per_kg',0,
+    nullif(left(btrim(coalesce(requested_payload->>'note','')),3000),''),
+    nullif(left(btrim(coalesce(requested_payload->>'customer_reference','')),200),''),
+    nullif(left(btrim(coalesce(requested_payload->>'contact_person','')),200),''),
+    nullif(left(btrim(coalesce(requested_payload->>'contact_phone','')),80),''),
+    nullif(left(btrim(coalesce(requested_payload->>'service_location','')),500),''),
+    nullif(requested_payload->>'preferred_date','')::date,
+    nullif(left(btrim(coalesce(requested_payload->>'customer_instruction','')),2000),''),
+    actor_profile_id,actor_profile_id
+  );
+  for package_row in select value from jsonb_array_elements(requested_payload->'packages') loop
+    package_number := package_number + 1;
+    if nullif(btrim(package_row->>'description'),'') is null then raise exception 'Package description is required'; end if;
+    insert into public.cargo_shipping_packages(job_id,sequence_number,description,quantity,unit,weight,dimensions,cbm)
+    values(job_id,package_number,left(btrim(package_row->>'description'),1000),greatest(coalesce((package_row->>'quantity')::numeric,1),1),left(coalesce(package_row->>'unit','Piece'),40),nullif(package_row->>'weight','')::numeric,nullif(left(btrim(coalesce(package_row->>'dimensions','')),200),''),nullif(package_row->>'cbm','')::numeric);
+  end loop;
+  insert into public.cargo_shipping_events(job_id,status,note,actor_id) values(job_id,'requested','Customer cargo request submitted.',actor_profile_id);
+  return job_id;
+exception when invalid_text_representation then raise exception 'Invalid request data';
+end;
+$$;
+
+create or replace function public.set_cargo_active_rate(actor_profile_id uuid, requested_shipping_method text, requested_rate numeric) returns uuid
+language plpgsql security definer set search_path = '' as $$
+declare rate_id uuid;
+begin
+  if not exists(select 1 from public.profiles where id=actor_profile_id and role='admin' and status='active') then raise exception 'Permission denied'; end if;
+  if requested_shipping_method not in ('air','sea','hand_carry') or requested_rate is null or requested_rate <= 0 then raise exception 'Rate must be greater than zero'; end if;
+  update public.cargo_rates set is_active=false where shipping_method=requested_shipping_method and is_active;
+  insert into public.cargo_rates(shipping_method,rate_bdt_per_kg,created_by) values(requested_shipping_method,requested_rate,actor_profile_id) returning id into rate_id;
+  return rate_id;
+end;
+$$;
+
+create or replace function public.generate_cargo_invoice(actor_profile_id uuid, requested_job_id uuid, requested_weight numeric, requested_rate_id uuid) returns uuid
+language plpgsql security definer set search_path = '' as $$
+declare job_row public.cargo_shipping_jobs%rowtype; rate_row public.cargo_rates%rowtype; invoice_id uuid;
+begin
+  if not exists(select 1 from public.profiles where id=actor_profile_id and role='admin' and status='active') then raise exception 'Permission denied'; end if;
+  if requested_weight is null or requested_weight < 0 then raise exception 'Final billable weight cannot be negative'; end if;
+  select * into job_row from public.cargo_shipping_jobs where id=requested_job_id for update;
+  if job_row.id is null then raise exception 'Cargo job not found'; end if;
+  if job_row.current_status not in ('received_bd_warehouse','ready_for_customer') then raise exception 'Invoice can be generated after Bangladesh warehouse receipt'; end if;
+  select * into rate_row from public.cargo_rates where id=requested_rate_id and is_active for update;
+  if rate_row.id is null then raise exception 'Choose an active Cargo rate'; end if;
+  update public.cargo_shipping_jobs set final_billable_weight_kg=requested_weight, updated_by=actor_profile_id, updated_at=now() where id=requested_job_id;
+  insert into public.cargo_invoices(cargo_job_id,customer_id,final_billable_weight_kg,applied_rate_per_kg,generated_by)
+  values(requested_job_id,job_row.customer_id,requested_weight,rate_row.rate_bdt_per_kg,actor_profile_id)
+  on conflict(cargo_job_id) do update set final_billable_weight_kg=excluded.final_billable_weight_kg,applied_rate_per_kg=excluded.applied_rate_per_kg,updated_at=now()
+  returning id into invoice_id;
+  return invoice_id;
+end;
+$$;
+
+create or replace function public.set_cargo_invoice_visibility(actor_profile_id uuid, requested_invoice_id uuid, requested_visible boolean) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not exists(select 1 from public.profiles where id=actor_profile_id and role='admin' and status='active') then raise exception 'Permission denied'; end if;
+  update public.cargo_invoices set customer_visible=requested_visible,updated_at=now() where id=requested_invoice_id;
+end;
+$$;
+
+create or replace function public.confirm_cargo_invoice_payment(actor_profile_id uuid, requested_invoice_id uuid, requested_method text, requested_reference text, requested_note text, requested_proof_path text) returns void
+language plpgsql security definer set search_path = '' as $$
+begin
+  if not exists(select 1 from public.profiles where id=actor_profile_id and role='admin' and status='active') then raise exception 'Permission denied'; end if;
+  update public.cargo_invoices set payment_status='PAID',payment_method=nullif(left(btrim(coalesce(requested_method,'')),100),''),payment_reference=nullif(left(btrim(coalesce(requested_reference,'')),200),''),payment_note=nullif(left(btrim(coalesce(requested_note,'')),1000),''),payment_proof_path=nullif(left(btrim(coalesce(requested_proof_path,'')),500),''),paid_at=now(),confirmed_at=now(),updated_at=now() where id=requested_invoice_id;
+end;
+$$;
+
+create or replace function public.enforce_cargo_invoice_payment_before_handover() returns trigger
+language plpgsql set search_path = '' as $$
+begin
+  if new.current_status in ('ready_for_customer','handed_over','delivered') and not exists(select 1 from public.cargo_invoices where cargo_job_id=new.id) then
+    raise exception 'Cargo invoice must be generated before downstream progression';
+  end if;
+  if new.current_status in ('handed_over','delivered') and exists(select 1 from public.cargo_invoices where cargo_job_id=new.id and total_amount > 0) and not exists(select 1 from public.cargo_invoices where cargo_job_id=new.id and total_amount > 0 and payment_status='PAID') then
+    raise exception 'Cargo invoice payment must be confirmed before handover';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists cargo_invoice_payment_gate on public.cargo_shipping_jobs;
+create trigger cargo_invoice_payment_gate before update of current_status on public.cargo_shipping_jobs for each row execute function public.enforce_cargo_invoice_payment_before_handover();
+
+revoke all on function public.create_cargo_customer_request(uuid,jsonb) from public,anon,authenticated;
+revoke all on function public.set_cargo_active_rate(uuid,text,numeric) from public,anon,authenticated;
+revoke all on function public.generate_cargo_invoice(uuid,uuid,numeric,uuid) from public,anon,authenticated;
+revoke all on function public.set_cargo_invoice_visibility(uuid,uuid,boolean) from public,anon,authenticated;
+revoke all on function public.confirm_cargo_invoice_payment(uuid,uuid,text,text,text,text) from public,anon,authenticated;
+grant execute on function public.create_cargo_customer_request(uuid,jsonb) to authenticated;
+grant execute on function public.set_cargo_active_rate(uuid,text,numeric) to service_role;
+grant execute on function public.generate_cargo_invoice(uuid,uuid,numeric,uuid) to service_role;
+grant execute on function public.set_cargo_invoice_visibility(uuid,uuid,boolean) to service_role;
+grant execute on function public.confirm_cargo_invoice_payment(uuid,uuid,text,text,text,text) to service_role;
+
+commit;
+
+begin;
+
+-- Employee self-service extends the existing Receivables account. It does not
+-- create another loan master or any Accounting, Cash Book, Payroll, or Sales row.
+create table if not exists public.receivable_employee_loan_consents (
+  id uuid primary key default gen_random_uuid(),
+  employee_profile_id uuid not null references public.profiles(id) on delete restrict,
+  employee_record_id uuid not null references public.hr_employee_records(id) on delete restrict,
+  consent_version text not null,
+  consent_items jsonb not null check(jsonb_typeof(consent_items)='array'),
+  accepted_at timestamptz not null default now(),
+  used_at timestamptz,
+  used_by_account_id uuid references public.receivable_accounts(id) on delete restrict
+);
+
+create index if not exists receivable_employee_loan_consents_owner_idx
+  on public.receivable_employee_loan_consents(employee_record_id,accepted_at desc);
+
+create table if not exists public.receivable_employee_loan_details (
+  receivable_account_id uuid primary key references public.receivable_accounts(id) on delete restrict,
+  employee_profile_id uuid not null references public.profiles(id) on delete restrict,
+  consent_id uuid not null unique references public.receivable_employee_loan_consents(id) on delete restrict,
+  purpose text check(purpose is null or char_length(trim(purpose)) between 1 and 500),
+  requested_repayment_period text not null check(char_length(trim(requested_repayment_period)) between 2 and 120),
+  proposed_months integer not null check(proposed_months between 0 and 120),
+  proposed_days integer not null default 0 check(proposed_days>=0),
+  installment_frequency text not null default 'monthly' check(installment_frequency in ('monthly','weekly','daily')),
+  proposed_monthly_installment numeric(18,4) not null check(proposed_monthly_installment>0 and proposed_monthly_installment=trunc(proposed_monthly_installment)),
+  preferred_start_date date not null,
+  detailed_explanation text not null check(char_length(trim(detailed_explanation)) between 10 and 4000),
+  employee_note text,
+  witnesses jsonb not null default '[]'::jsonb check(jsonb_typeof(witnesses)='array'),
+  workflow_stage text not null default 'submitted' check(workflow_stage in (
+    'submitted','under_review','agreement_ready','agreement_sent','signed_submitted',
+    'final_review','final_approved','disbursed','rejected','cancelled'
+  )),
+  approved_repayment_period text,
+  approved_installment_count integer check(approved_installment_count is null or approved_installment_count between 1 and 120),
+  approved_monthly_installment numeric(18,4) check(approved_monthly_installment is null or approved_monthly_installment>0),
+  approved_start_date date,
+  approved_purpose text,
+  special_terms text,
+  admin_note text,
+  agreement_reference text unique,
+  agreement_date date,
+  agreement_generated_at timestamptz,
+  agreement_generated_by uuid references public.profiles(id) on delete set null,
+  agreement_sent_at timestamptz,
+  agreement_sent_by uuid references public.profiles(id) on delete set null,
+  selected_sen_representative_user_id uuid references public.profiles(id) on delete set null,
+  selected_sen_representative_name_snapshot text,
+  selected_sen_representative_designation_snapshot text,
+  selected_sen_representative_email_snapshot text,
+  final_approved_at timestamptz,
+  final_approved_by uuid references public.profiles(id) on delete set null,
+  payment_method text,
+  payment_reference text,
+  payment_account_reference text,
+  disbursement_admin_note text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+  ,constraint receivable_employee_loan_details_duration_check check(proposed_months>0 or proposed_days>0)
+  ,constraint receivable_employee_loan_details_representative_snapshot_check check(selected_sen_representative_user_id is null or nullif(trim(selected_sen_representative_name_snapshot),'') is not null)
+);
+
+create index if not exists receivable_employee_loan_details_owner_idx
+  on public.receivable_employee_loan_details(employee_profile_id,created_at desc);
+create index if not exists receivable_employee_loan_details_stage_idx
+  on public.receivable_employee_loan_details(workflow_stage,updated_at desc);
+
+create table if not exists public.receivable_loan_documents (
+  id uuid primary key default gen_random_uuid(),
+  receivable_account_id uuid not null references public.receivable_accounts(id) on delete restrict,
+  employee_profile_id uuid not null references public.profiles(id) on delete restrict,
+  document_type text not null check(document_type in ('signed_agreement','disbursement_proof')),
+  document_status text not null default 'submitted' check(document_status in ('submitted','verified','rejected')),
+  storage_bucket text not null default 'receivables-private' check(storage_bucket='receivables-private'),
+  storage_path text not null unique,
+  original_file_name text not null,
+  mime_type text not null check(mime_type in ('application/pdf','image/jpeg','image/png')),
+  file_size bigint not null check(file_size>0 and file_size<=10485760),
+  uploaded_by uuid not null references public.profiles(id) on delete restrict,
+  uploaded_at timestamptz not null default now(),
+  verified_by uuid references public.profiles(id) on delete set null,
+  verified_at timestamptz
+);
+
+create index if not exists receivable_loan_documents_account_idx
+  on public.receivable_loan_documents(receivable_account_id,document_type,uploaded_at desc);
+
+insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types)
+values('receivables-private','receivables-private',false,10485760,array['application/pdf','image/jpeg','image/png'])
+on conflict(id) do update set
+  public=false,file_size_limit=excluded.file_size_limit,allowed_mime_types=excluded.allowed_mime_types;
+
+alter table public.receivable_employee_loan_consents enable row level security;
+alter table public.receivable_employee_loan_details enable row level security;
+alter table public.receivable_loan_documents enable row level security;
+revoke all on public.receivable_employee_loan_consents,public.receivable_employee_loan_details,
+  public.receivable_loan_documents from public,anon,authenticated;
+grant all on public.receivable_employee_loan_consents,public.receivable_employee_loan_details,
+  public.receivable_loan_documents to service_role;
+
+create or replace function public.create_employee_loan_application(
+  actor_profile_id uuid, requested_consent_id uuid, requested_operation_id uuid,
+  requested_amount numeric, requested_purpose text, requested_months integer, requested_days integer,
+  requested_installment_frequency text, requested_installment numeric, requested_start_date date,
+  requested_explanation text, requested_employee_note text, requested_witnesses jsonb
+) returns uuid language plpgsql volatile security definer set search_path='' as $$
+declare actor public.profiles%rowtype;
+declare employee public.hr_employee_records%rowtype;
+declare consent public.receivable_employee_loan_consents%rowtype;
+declare account_id uuid;
+declare operation_hash text;
+begin
+  select * into actor from public.profiles where id=actor_profile_id and role='employee' and status='active' and archived_at is null;
+  if actor.id is null then raise exception 'An active employee login is required'; end if;
+  select * into employee from public.hr_employee_records
+    where profile_id=actor.id and archived_at is null and employment_status in ('active','probation','on_leave');
+  if employee.id is null then raise exception 'An active employee record is required'; end if;
+  select * into consent from public.receivable_employee_loan_consents
+    where id=requested_consent_id and employee_profile_id=actor.id and employee_record_id=employee.id
+      and consent_version='employee-loan-terms-bn-v3'
+      and consent_items @> '["term_01","term_02","term_03","term_04","term_05","term_06","term_07","term_08","term_09","term_10","term_11","term_12","term_13","term_14","final_guidance","final_repayment","final_authoritative_terms","final_salary_deduction","final_accuracy","final_no_guarantee","final_witness"]'::jsonb
+      and used_at is null for update;
+  if consent.id is null then raise exception 'Accepted loan guidance is required'; end if;
+  if requested_operation_id is null then raise exception 'Operation ID is required'; end if;
+  if coalesce(requested_amount,0)<=0 or requested_amount<>trunc(requested_amount)
+    or requested_months is null or requested_months not between 0 and 120
+    or requested_days is null or requested_days<0 or (requested_months=0 and requested_days=0)
+    or requested_installment_frequency is null
+    or requested_installment_frequency not in ('monthly','weekly','daily')
+    or coalesce(requested_installment,0)<=0 or requested_installment<>trunc(requested_installment) then
+    raise exception 'Loan amount and repayment proposal are invalid';
+  end if;
+  if nullif(trim(coalesce(requested_purpose,'')),'') is not null and char_length(trim(requested_purpose))>500 then
+    raise exception 'Loan purpose exceeds the allowed length';
+  end if;
+  if requested_witnesses is null or jsonb_typeof(requested_witnesses)<>'array' or jsonb_array_length(requested_witnesses)<2
+    or jsonb_array_length(requested_witnesses)>5
+    or exists(
+      select 1 from jsonb_array_elements(requested_witnesses) witness
+      where jsonb_typeof(witness)<>'object'
+        or nullif(trim(witness->>'name'),'') is null or char_length(trim(witness->>'name'))>160
+        or nullif(trim(witness->>'address'),'') is null or char_length(trim(witness->>'address'))>500
+        or nullif(trim(witness->>'phone'),'') is null or char_length(trim(witness->>'phone'))>50
+    ) then raise exception 'At least two and no more than five valid witnesses are required'; end if;
+  if requested_start_date is null then raise exception 'Preferred repayment start date is required'; end if;
+  operation_hash:=md5(jsonb_build_object('employee',employee.id,'amount',requested_amount,
+    'purpose',nullif(trim(coalesce(requested_purpose,'')),''),'months',requested_months,'days',requested_days,
+    'frequency',requested_installment_frequency,'installment',requested_installment,'witnesses',requested_witnesses,
+    'start',requested_start_date,'consent',consent.id)::text);
+  select id into account_id from public.receivable_accounts where operation_id=requested_operation_id;
+  if account_id is not null then return account_id; end if;
+  account_id:=gen_random_uuid();
+  insert into public.receivable_accounts(
+    id,receivable_number,category,borrower_type,employee_record_id,borrower_display_name_snapshot,
+    currency,requested_amount,original_amount,default_repayment_method,installment_count,
+    installment_amount,first_due_date,status,notes,is_opening_balance,operation_id,operation_hash,created_by,updated_by
+  ) values(
+    account_id,public.next_receivable_number(),'employee_loan','employee',employee.id,
+    coalesce(nullif(trim(actor.full_name),''),employee.employee_number),'BDT',requested_amount,requested_amount,
+    null,null,null,requested_start_date,'requested',
+    nullif(left(trim(coalesce(requested_purpose,'')),500),''),false,requested_operation_id,operation_hash,actor.id,actor.id
+  );
+  insert into public.receivable_employee_loan_details(
+    receivable_account_id,employee_profile_id,consent_id,purpose,requested_repayment_period,
+    proposed_months,proposed_days,installment_frequency,proposed_monthly_installment,
+    preferred_start_date,detailed_explanation,employee_note,witnesses
+  ) values(account_id,actor.id,consent.id,nullif(left(trim(coalesce(requested_purpose,'')),500),''),
+    concat(requested_months,' month(s), ',requested_days,' day(s)'),requested_months,requested_days,
+    requested_installment_frequency,requested_installment,requested_start_date,left(trim(requested_explanation),4000),
+    nullif(left(trim(requested_employee_note),2000),''),requested_witnesses);
+  update public.receivable_employee_loan_consents set used_at=now(),used_by_account_id=account_id where id=consent.id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,new_values,metadata)
+  values(actor.id,actor.role,'receivable.employee_loan_submitted','receivables','receivable_account',account_id::text,
+    'Employee loan application submitted without a financial balance movement.',
+    jsonb_build_object('status','requested','employee_record_id',employee.id),
+    jsonb_build_object('consent_id',consent.id,'consent_version',consent.consent_version,'operation_id',requested_operation_id));
+  return account_id;
+end $$;
+
+create or replace function public.finalize_employee_loan_terms(
+  actor_profile_id uuid, requested_account_id uuid, requested_approved_amount numeric,
+  requested_period text, requested_installment_count integer, requested_installment_amount numeric,
+  requested_start_date date, requested_purpose text, requested_special_terms text,
+  requested_admin_note text, requested_agreement_date date, requested_agreement_reference text,
+  requested_representative_profile_id uuid
+) returns uuid language plpgsql volatile security definer set search_path='' as $$
+declare account public.receivable_accounts%rowtype;
+declare representative public.profiles%rowtype;
+declare representative_employee public.hr_employee_records%rowtype;
+declare representative_designation text;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'receivables.approve');
+  select * into account from public.receivable_accounts where id=requested_account_id for update;
+  if account.id is null or account.category<>'employee_loan' then raise exception 'Employee loan application not found'; end if;
+  if account.status not in ('requested','under_review') then raise exception 'Only a pending employee loan can be preliminarily approved'; end if;
+  if not exists(select 1 from public.receivable_employee_loan_details where receivable_account_id=account.id) then
+    raise exception 'Employee loan application details are required';
+  end if;
+  if coalesce(requested_approved_amount,0)<=0 or requested_installment_count not between 1 and 120
+    or coalesce(requested_installment_amount,0)<=0 or requested_start_date is null then raise exception 'Approved terms are invalid'; end if;
+  select * into representative from public.profiles
+    where id=requested_representative_profile_id and role='admin' and status='active' and archived_at is null;
+  if representative.id is null then raise exception 'Choose an active administrator as the SEN representative'; end if;
+  select * into representative_employee from public.hr_employee_records
+    where profile_id=representative.id and archived_at is null limit 1;
+  select coalesce(representative_employee.job_title, designation.name, representative.job_title) into representative_designation
+    from public.hr_designations designation where designation.id=representative_employee.designation_id;
+  perform public.rebuild_receivable_installments(account.id,round(requested_approved_amount,4),requested_installment_count,
+    round(requested_installment_amount,4),requested_start_date,actor_profile_id);
+  update public.receivable_accounts set approved_amount=round(requested_approved_amount,4),
+    installment_count=requested_installment_count,installment_amount=round(requested_installment_amount,4),
+    first_due_date=requested_start_date,final_due_date=(select max(due_date) from public.receivable_installments where receivable_account_id=account.id),
+    approved_by=actor_profile_id,approved_at=now(),status='approved',updated_by=actor_profile_id where id=account.id;
+  update public.receivable_employee_loan_details set workflow_stage='agreement_ready',
+    approved_repayment_period=left(trim(requested_period),120),approved_installment_count=requested_installment_count,
+    approved_monthly_installment=round(requested_installment_amount,4),approved_start_date=requested_start_date,
+    approved_purpose=left(trim(requested_purpose),500),special_terms=left(trim(requested_special_terms),4000),
+    admin_note=nullif(left(trim(requested_admin_note),2000),''),agreement_reference=left(trim(requested_agreement_reference),100),
+    selected_sen_representative_user_id=representative.id,
+    selected_sen_representative_name_snapshot=left(trim(coalesce(representative.full_name,representative.email)),200),
+    selected_sen_representative_designation_snapshot=nullif(left(trim(coalesce(representative_designation,'')),160),''),
+    selected_sen_representative_email_snapshot=nullif(left(trim(coalesce(representative.email,'')),200),''),
+    agreement_date=requested_agreement_date,agreement_generated_at=now(),agreement_generated_by=actor_profile_id,updated_at=now()
+    where receivable_account_id=account.id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,new_values)
+  values(actor_profile_id,(select role from public.profiles where id=actor_profile_id),'receivable.employee_loan_preliminary_approved',
+    'receivables','receivable_account',account.id::text,'Employee loan terms finalized and agreement generated.',
+    jsonb_build_object('status','approved','workflow_stage','agreement_ready','approved_amount',round(requested_approved_amount,4)));
+  return account.id;
+end $$;
+
+create or replace function public.send_employee_loan_agreement(actor_profile_id uuid,requested_account_id uuid)
+returns uuid language plpgsql volatile security definer set search_path='' as $$
+begin
+  perform public.assert_actor_permission(actor_profile_id,'receivables.approve');
+  update public.receivable_employee_loan_details set workflow_stage='agreement_sent',agreement_sent_at=now(),
+    agreement_sent_by=actor_profile_id,updated_at=now()
+  where receivable_account_id=requested_account_id and workflow_stage='agreement_ready' and agreement_generated_at is not null;
+  if not found then raise exception 'A generated agreement is required before sending'; end if;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,new_values)
+  values(actor_profile_id,(select role from public.profiles where id=actor_profile_id),'receivable.employee_loan_agreement_sent',
+    'receivables','receivable_account',requested_account_id::text,'Employee loan agreement sent to employee.',jsonb_build_object('workflow_stage','agreement_sent'));
+  return requested_account_id;
+end $$;
+
+create or replace function public.record_employee_loan_document(
+  actor_profile_id uuid, requested_account_id uuid, requested_document_type text,
+  requested_storage_path text, requested_original_name text, requested_mime_type text, requested_file_size bigint
+) returns uuid language plpgsql volatile security definer set search_path='' as $$
+declare account public.receivable_accounts%rowtype;
+declare detail public.receivable_employee_loan_details%rowtype;
+declare document_id uuid:=gen_random_uuid();
+declare employee_owned boolean;
+declare admin_allowed boolean;
+begin
+  select * into account from public.receivable_accounts where id=requested_account_id for update;
+  select * into detail from public.receivable_employee_loan_details where receivable_account_id=requested_account_id for update;
+  if account.id is null or detail.receivable_account_id is null then raise exception 'Employee loan application not found'; end if;
+  employee_owned:=detail.employee_profile_id=actor_profile_id;
+  admin_allowed:=exists(select 1 from public.effective_permissions_for_profile(actor_profile_id) where permission_key in ('receivables.approve','receivables.disburse'));
+  if requested_document_type='signed_agreement' then
+    if not employee_owned or detail.agreement_sent_at is null or account.status<>'approved' then raise exception 'Only the owning employee may upload a sent signed agreement'; end if;
+  elsif requested_document_type='disbursement_proof' then
+    if not admin_allowed then raise exception 'Receivables disbursement permission is required'; end if;
+  else raise exception 'Unsupported loan document type'; end if;
+  if requested_mime_type not in ('application/pdf','image/jpeg','image/png') or requested_file_size<=0 or requested_file_size>10485760 then
+    raise exception 'Invalid private loan document';
+  end if;
+  insert into public.receivable_loan_documents(id,receivable_account_id,employee_profile_id,document_type,
+    storage_path,original_file_name,mime_type,file_size,uploaded_by)
+  values(document_id,account.id,detail.employee_profile_id,requested_document_type,left(requested_storage_path,500),
+    left(requested_original_name,200),requested_mime_type,requested_file_size,actor_profile_id);
+  if requested_document_type='signed_agreement' then
+    update public.receivable_employee_loan_details set workflow_stage='signed_submitted',updated_at=now() where receivable_account_id=account.id;
+  end if;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,new_values)
+  values(actor_profile_id,(select role from public.profiles where id=actor_profile_id),'receivable.employee_loan_document_uploaded',
+    'receivables','receivable_loan_document',document_id::text,'Private employee loan document uploaded.',
+    jsonb_build_object('account_id',account.id,'document_type',requested_document_type));
+  return document_id;
+end $$;
+
+create or replace function public.final_approve_employee_loan(actor_profile_id uuid,requested_account_id uuid)
+returns uuid language plpgsql volatile security definer set search_path='' as $$
+declare detail public.receivable_employee_loan_details%rowtype;
+declare account public.receivable_accounts%rowtype;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'receivables.approve');
+  select * into detail from public.receivable_employee_loan_details where receivable_account_id=requested_account_id for update;
+  select * into account from public.receivable_accounts where id=requested_account_id for update;
+  if account.id is null or account.status<>'approved' or detail.receivable_account_id is null or detail.agreement_generated_at is null or detail.agreement_sent_at is null then
+    raise exception 'Generated and sent agreement is required before final approval';
+  end if;
+  if not exists(select 1 from public.receivable_loan_documents where receivable_account_id=requested_account_id and document_type='signed_agreement' and document_status in ('submitted','verified')) then
+    raise exception 'Signed agreement is required before final approval';
+  end if;
+  update public.receivable_loan_documents set document_status='verified',verified_by=actor_profile_id,verified_at=now()
+    where receivable_account_id=requested_account_id and document_type='signed_agreement' and document_status='submitted';
+  update public.receivable_employee_loan_details set workflow_stage='final_approved',final_approved_at=now(),
+    final_approved_by=actor_profile_id,updated_at=now() where receivable_account_id=requested_account_id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,new_values)
+  values(actor_profile_id,(select role from public.profiles where id=actor_profile_id),'receivable.employee_loan_final_approved',
+    'receivables','receivable_account',requested_account_id::text,'Signed employee loan agreement verified; loan final-approved for disbursement.',
+    jsonb_build_object('workflow_stage','final_approved'));
+  return requested_account_id;
+end $$;
+
+create or replace function public.protect_employee_loan_activation()
+returns trigger language plpgsql set search_path='' as $$
+begin
+  if new.status in ('disbursed','active') and old.status not in ('disbursed','active')
+    and exists(select 1 from public.receivable_employee_loan_details where receivable_account_id=new.id) then
+    if current_setting('app.employee_loan_disbursement_account',true) is distinct from new.id::text
+      or not exists(select 1 from public.receivable_employee_loan_details detail
+      where detail.receivable_account_id=new.id and detail.final_approved_at is not null
+      and detail.agreement_sent_at is not null and detail.workflow_stage='final_approved')
+      or not exists(select 1 from public.receivable_loan_documents document
+        where document.receivable_account_id=new.id and document.document_type='signed_agreement' and document.document_status='verified') then
+      raise exception 'Signed agreement is required before loan activation';
+    end if;
+  end if;
+  return new;
+end $$;
+
+do $$ begin
+  if not exists (select 1 from pg_trigger where tgrelid='public.receivable_accounts'::regclass and tgname='receivable_employee_loan_activation_gate') then
+    execute 'create trigger receivable_employee_loan_activation_gate before update of status on public.receivable_accounts for each row execute function public.protect_employee_loan_activation()';
+  end if;
+end $$;
+
+create or replace function public.confirm_employee_loan_disbursement(
+  actor_profile_id uuid,requested_account_id uuid,requested_operation_id uuid,requested_amount numeric,
+  requested_effective_date date,requested_payment_method text,requested_payment_reference text,
+  requested_account_reference text,requested_admin_note text,requested_proof_path text,
+  requested_proof_name text,requested_proof_mime text,requested_proof_size bigint
+) returns uuid language plpgsql volatile security definer set search_path='' as $$
+declare transaction_id uuid;
+declare detail public.receivable_employee_loan_details%rowtype;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'receivables.disburse');
+  select * into detail from public.receivable_employee_loan_details where receivable_account_id=requested_account_id for update;
+  if detail.receivable_account_id is null or detail.workflow_stage<>'final_approved' or detail.final_approved_at is null then
+    raise exception 'Final-approved signed agreement is required before disbursement';
+  end if;
+  if char_length(coalesce(trim(requested_payment_reference),''))<2 then raise exception 'Payment reference is required'; end if;
+  perform set_config('app.employee_loan_disbursement_account',requested_account_id::text,true);
+  transaction_id:=public.confirm_receivable_disbursement(actor_profile_id,requested_account_id,requested_operation_id,
+    requested_amount,requested_effective_date,requested_payment_method,requested_admin_note);
+  update public.receivable_employee_loan_details set workflow_stage='disbursed',payment_method=requested_payment_method,
+    payment_reference=left(trim(requested_payment_reference),200),payment_account_reference=nullif(left(trim(requested_account_reference),200),''),
+    disbursement_admin_note=nullif(left(trim(requested_admin_note),2000),''),updated_at=now()
+    where receivable_account_id=requested_account_id;
+  if requested_proof_path is not null then
+    insert into public.receivable_loan_documents(receivable_account_id,employee_profile_id,document_type,document_status,
+      storage_path,original_file_name,mime_type,file_size,uploaded_by,verified_by,verified_at)
+    values(requested_account_id,detail.employee_profile_id,'disbursement_proof','verified',requested_proof_path,
+      left(requested_proof_name,200),requested_proof_mime,requested_proof_size,actor_profile_id,actor_profile_id,now());
+  end if;
+  return transaction_id;
+end $$;
+
+revoke all on function public.create_employee_loan_application(uuid,uuid,uuid,numeric,text,integer,integer,text,numeric,date,text,text,jsonb),
+  public.finalize_employee_loan_terms(uuid,uuid,numeric,text,integer,numeric,date,text,text,text,date,text,uuid),
+  public.send_employee_loan_agreement(uuid,uuid),
+  public.record_employee_loan_document(uuid,uuid,text,text,text,text,bigint),
+  public.final_approve_employee_loan(uuid,uuid),public.protect_employee_loan_activation(),
+  public.confirm_employee_loan_disbursement(uuid,uuid,uuid,numeric,date,text,text,text,text,text,text,text,bigint)
+  from public,anon,authenticated;
+grant execute on function public.create_employee_loan_application(uuid,uuid,uuid,numeric,text,integer,integer,text,numeric,date,text,text,jsonb),
+  public.finalize_employee_loan_terms(uuid,uuid,numeric,text,integer,numeric,date,text,text,text,date,text,uuid),
+  public.send_employee_loan_agreement(uuid,uuid),
+  public.record_employee_loan_document(uuid,uuid,text,text,text,text,bigint),
+  public.final_approve_employee_loan(uuid,uuid),
+  public.confirm_employee_loan_disbursement(uuid,uuid,uuid,numeric,date,text,text,text,text,text,text,text,bigint)
+  to service_role;
+
+commit;
+
+begin;
+
+alter table public.hr_employee_profiles
+  add column if not exists father_name text,
+  add column if not exists mother_name text;
+
+commit;
+
+create schema if not exists murshida_manzil;
+
+create table murshida_manzil.owners (
+  id uuid primary key default gen_random_uuid(),
+  name text not null check (char_length(btrim(name)) between 1 and 200),
+  ownership_percentage numeric(7,2) not null check (ownership_percentage > 0 and ownership_percentage <= 100),
+  is_active boolean not null default true,
+  created_by uuid,
+  updated_by uuid,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table murshida_manzil.tenants (
+  id uuid primary key default gen_random_uuid(),
+  name text not null check (char_length(btrim(name)) between 1 and 200),
+  unit_description text,
+  monthly_rent numeric(18,2) not null check (monthly_rent > 0),
+  initial_advance_balance numeric(18,2) not null default 0 check (initial_advance_balance >= 0),
+  is_active boolean not null default true,
+  created_by uuid,
+  updated_by uuid,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table murshida_manzil.rent_transactions (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references murshida_manzil.tenants(id) on delete restrict,
+  rent_year smallint not null check (rent_year between 2000 and 2200),
+  rent_month smallint not null check (rent_month between 1 and 12),
+  monthly_rent numeric(18,2) not null check (monthly_rent > 0),
+  actual_money_received numeric(18,2) not null default 0 check (actual_money_received >= 0),
+  advance_adjusted numeric(18,2) not null default 0 check (advance_adjusted >= 0),
+  total_rent_settled numeric(18,2) not null check (total_rent_settled > 0),
+  advance_balance_before numeric(18,2) not null check (advance_balance_before >= 0),
+  advance_balance_after numeric(18,2) not null check (advance_balance_after >= 0),
+  payment_date date not null,
+  payment_method text not null check (payment_method in ('cash','bank','mfs','cheque','other')),
+  notes text,
+  reference_number text,
+  money_receipt_number text not null unique,
+  rent_receipt_number text not null unique,
+  created_by uuid,
+  updated_by uuid,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (total_rent_settled = actual_money_received + advance_adjusted),
+  check (advance_adjusted <= advance_balance_before),
+  check (advance_balance_after = advance_balance_before - advance_adjusted)
+);
+
+create table murshida_manzil.rent_advance_adjustments (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references murshida_manzil.tenants(id) on delete restrict,
+  rent_transaction_id uuid not null references murshida_manzil.rent_transactions(id) on delete restrict,
+  amount numeric(18,2) not null check (amount > 0),
+  adjustment_date date not null,
+  created_by uuid,
+  created_at timestamptz not null default now()
+);
+
+create table murshida_manzil.expenses (
+  id uuid primary key default gen_random_uuid(),
+  expense_date date not null,
+  description text not null check (char_length(btrim(description)) between 1 and 300),
+  amount numeric(18,2) not null check (amount > 0),
+  category text,
+  paid_to text,
+  payment_method text not null check (payment_method in ('cash','bank','mfs','cheque','other')),
+  notes text,
+  voucher_number text,
+  created_by uuid,
+  updated_by uuid,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table murshida_manzil.owner_allocations (
+  id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null references murshida_manzil.owners(id) on delete restrict,
+  source_type text not null check (source_type in ('rent_income','expense')),
+  source_id uuid not null,
+  ownership_percentage_snapshot numeric(7,2) not null check (ownership_percentage_snapshot > 0 and ownership_percentage_snapshot <= 100),
+  allocated_amount numeric(18,2) not null check (allocated_amount >= 0),
+  created_at timestamptz not null default now(),
+  unique (owner_id, source_type, source_id)
+);
+
+create index rent_transactions_date_idx on murshida_manzil.rent_transactions(payment_date desc);
+create index expenses_date_idx on murshida_manzil.expenses(expense_date desc);
+create index owner_allocations_source_idx on murshida_manzil.owner_allocations(source_type, source_id);
+
+revoke all on schema murshida_manzil from public, anon, authenticated;
+grant usage on schema murshida_manzil to service_role;
+grant all privileges on all tables in schema murshida_manzil to service_role;
+grant all privileges on all sequences in schema murshida_manzil to service_role;
+alter default privileges in schema murshida_manzil grant all on tables to service_role;
+alter default privileges in schema murshida_manzil grant all on sequences to service_role;
+
+create table murshida_manzil.units (
+  id uuid primary key default gen_random_uuid(),
+  unit_code text not null check (char_length(btrim(unit_code)) between 1 and 120),
+  is_active boolean not null default true,
+  created_by uuid,
+  updated_by uuid,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create unique index units_unit_code_lower_idx
+  on murshida_manzil.units (lower(btrim(unit_code)));
+
+alter table murshida_manzil.tenants add column unit_id uuid references murshida_manzil.units(id) on delete restrict;
+
+create index tenants_unit_id_idx on murshida_manzil.tenants(unit_id);
+
+revoke all on table murshida_manzil.units from public, anon, authenticated;
+grant all privileges on table murshida_manzil.units to service_role;
+
+alter table murshida_manzil.rent_transactions
+  add column unit_id uuid references murshida_manzil.units(id) on delete restrict,
+  add column unit_code_snapshot text;
+
+create index rent_transactions_unit_id_idx
+  on murshida_manzil.rent_transactions(unit_id);
+
+create table murshida_manzil.advance_payments (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references murshida_manzil.tenants(id) on delete restrict,
+  unit_id uuid references murshida_manzil.units(id) on delete restrict,
+  unit_code_snapshot text not null check (char_length(btrim(unit_code_snapshot)) between 1 and 120),
+  amount numeric(18,2) not null check (amount > 0),
+  payment_date date not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index advance_payments_tenant_date_idx
+  on murshida_manzil.advance_payments(tenant_id, payment_date desc);
+create index advance_payments_unit_id_idx
+  on murshida_manzil.advance_payments(unit_id);
+
+revoke all on table murshida_manzil.advance_payments from public, anon, authenticated;
+grant all privileges on table murshida_manzil.advance_payments to service_role;
+
+alter table murshida_manzil.rent_transactions
+  add column unit_description_snapshot text;
+
+alter table murshida_manzil.advance_payments
+  add column unit_description_snapshot text;
+
+alter table murshida_manzil.owners
+  add column phone_number text;
+
+alter table murshida_manzil.tenants
+  add column if not exists phone_number text;
+
+alter table murshida_manzil.tenants
+  add column default_monthly_advance_adjustment numeric(18,2) not null default 0
+  check (default_monthly_advance_adjustment >= 0);
+
+alter table murshida_manzil.advance_payments
+  add column default_monthly_advance_adjustment numeric(18,2) not null default 0
+  check (default_monthly_advance_adjustment >= 0);
+
+-- Legacy expenses are intentionally non-distributable: their historical
+-- ownership snapshot cannot be proven and must never be inferred retroactively.
+alter table murshida_manzil.expenses
+  add column if not exists owner_allocation_mode text not null default 'DO_NOT_DISTRIBUTE'
+  check (owner_allocation_mode in ('DISTRIBUTE_TO_OWNERS', 'DO_NOT_DISTRIBUTE'));
+
+create or replace function murshida_manzil.record_expense_with_allocations(
+  requested_expense jsonb,
+  requested_owner_allocation_mode text
+) returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  expense_id uuid;
+  owner_row record;
+  owner_count integer := 0;
+  owner_index integer := 0;
+  total_basis_points bigint := 0;
+  amount_cents bigint;
+  allocated_cents bigint := 0;
+  remainder_cents bigint;
+  share_cents bigint;
+begin
+  if requested_owner_allocation_mode not in ('DISTRIBUTE_TO_OWNERS', 'DO_NOT_DISTRIBUTE') then
+    raise exception 'Invalid owner expense allocation mode.';
+  end if;
+  if nullif(pg_catalog.btrim(requested_expense->>'expense_date'), '') is null
+     or nullif(pg_catalog.btrim(requested_expense->>'description'), '') is null
+     or coalesce((requested_expense->>'amount')::numeric, 0) <= 0 then
+    raise exception 'Expense date, description, and positive amount are required.';
+  end if;
+
+  insert into murshida_manzil.expenses
+    (expense_date, description, amount, category, paid_to, payment_method, notes, voucher_number, owner_allocation_mode)
+  values
+    ((requested_expense->>'expense_date')::date,
+     pg_catalog.btrim(requested_expense->>'description'),
+     (requested_expense->>'amount')::numeric,
+     nullif(pg_catalog.btrim(requested_expense->>'category'), ''),
+     nullif(pg_catalog.btrim(requested_expense->>'paid_to'), ''),
+     nullif(pg_catalog.btrim(requested_expense->>'payment_method'), ''),
+     nullif(pg_catalog.btrim(requested_expense->>'notes'), ''),
+     nullif(pg_catalog.btrim(requested_expense->>'voucher_number'), ''),
+     requested_owner_allocation_mode)
+  returning id into expense_id;
+
+  if requested_owner_allocation_mode = 'DO_NOT_DISTRIBUTE' then
+    return expense_id;
+  end if;
+
+  select count(*), coalesce(sum(pg_catalog.round(ownership_percentage * 100)), 0)
+    into owner_count, total_basis_points
+    from murshida_manzil.owners
+   where is_active = true;
+  if owner_count = 0 or total_basis_points <> 10000 then
+    raise exception 'Active ownership percentages must total exactly 100%% before recording a distributable expense.';
+  end if;
+
+  amount_cents := pg_catalog.round((requested_expense->>'amount')::numeric * 100);
+  for owner_row in
+    select id, ownership_percentage, row_number() over (order by created_at, id) as position
+      from murshida_manzil.owners
+     where is_active = true
+     order by created_at, id
+  loop
+    share_cents := pg_catalog.floor(amount_cents * pg_catalog.round(owner_row.ownership_percentage * 100) / 10000);
+    allocated_cents := allocated_cents + share_cents;
+  end loop;
+  remainder_cents := amount_cents - allocated_cents;
+
+  for owner_row in
+    select id, ownership_percentage, row_number() over (order by created_at, id) as position
+      from murshida_manzil.owners
+     where is_active = true
+     order by created_at, id
+  loop
+    owner_index := owner_index + 1;
+    share_cents := pg_catalog.floor(amount_cents * pg_catalog.round(owner_row.ownership_percentage * 100) / 10000)
+      + case when owner_index <= remainder_cents then 1 else 0 end;
+    insert into murshida_manzil.owner_allocations
+      (owner_id, source_type, source_id, ownership_percentage_snapshot, allocated_amount)
+    values
+      (owner_row.id, 'expense', expense_id, owner_row.ownership_percentage, share_cents / 100.0);
+  end loop;
+
+  if (select coalesce(sum(allocated_amount), 0) from murshida_manzil.owner_allocations where source_type = 'expense' and source_id = expense_id)
+      <> (requested_expense->>'amount')::numeric then
+    raise exception 'Expense owner allocations do not reconcile to the expense amount.';
+  end if;
+  return expense_id;
+end;
+$$;
+
+revoke all on function murshida_manzil.record_expense_with_allocations(jsonb, text) from public, anon, authenticated;
+grant execute on function murshida_manzil.record_expense_with_allocations(jsonb, text) to service_role;
+
+-- RMB-only customer defaults and immutable per-job service snapshots.
+
+begin;
+
+create table public.rmb_customer_preferences (
+  customer_id uuid primary key references public.profiles(id),
+  service_percentage numeric(7,4) not null check (
+    service_percentage > 0
+    and service_percentage <= 100
+    and service_percentage <> 'NaN'::numeric
+  ),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  updated_by uuid not null references public.profiles(id)
+);
+
+alter table public.rmb_customer_preferences enable row level security;
+revoke all on public.rmb_customer_preferences from public, anon, authenticated;
+grant select, insert, update, delete on public.rmb_customer_preferences to service_role;
+
+alter table public.rmb_payment_jobs
+  add column extra_service_applied boolean not null default false,
+  add column service_percentage numeric(7,4),
+  add column service_amount numeric,
+  add column adjusted_rmb_amount numeric,
+  add constraint rmb_payment_jobs_service_percentage_check check (
+    (not extra_service_applied and service_percentage is null)
+    or (
+      extra_service_applied
+      and service_percentage > 0
+      and service_percentage <= 100
+      and service_percentage <> 'NaN'::numeric
+    )
+  );
+
+-- PostgreSQL 17 cannot replace a generated expression in place. Dropping only
+-- the expression retains the column and every existing stored payable value.
+alter table public.rmb_payment_jobs
+  alter column calculated_bdt_payable drop expression if exists;
+
+create or replace function public.set_rmb_payment_financial_snapshot()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  saved_percentage numeric;
+begin
+  -- Customer requests are identified by their applied active-rate snapshot.
+  -- The browser never supplies or receives this percentage.
+  if tg_op = 'INSERT' and new.applied_rate_id is not null then
+    select preference.service_percentage
+      into saved_percentage
+    from public.rmb_customer_preferences as preference
+    where preference.customer_id = new.customer_id;
+
+    new.extra_service_applied := saved_percentage is not null;
+    new.service_percentage := saved_percentage;
+  end if;
+
+  new.extra_service_applied := coalesce(new.extra_service_applied, false);
+  if new.extra_service_applied then
+    if new.service_percentage is null
+      or new.service_percentage <= 0
+      or new.service_percentage > 100
+      or new.service_percentage = 'NaN'::numeric
+      or new.service_percentage <> round(new.service_percentage, 4)
+    then
+      raise exception 'Service percentage must be greater than 0, no more than 100, and use up to 4 decimal places';
+    end if;
+    new.service_amount := new.foreign_amount * new.service_percentage / 100;
+    new.adjusted_rmb_amount := new.foreign_amount + new.service_amount;
+  else
+    new.service_percentage := null;
+    new.service_amount := 0;
+    new.adjusted_rmb_amount := new.foreign_amount;
+  end if;
+
+  new.calculated_bdt_payable := round(new.adjusted_rmb_amount * new.agreed_bdt_rate, 2);
+  return new;
+end;
+$$;
+
+create trigger rmb_payment_jobs_set_financial_snapshot
+before insert or update of foreign_amount, agreed_bdt_rate, extra_service_applied,
+  service_percentage, service_amount, adjusted_rmb_amount, calculated_bdt_payable
+on public.rmb_payment_jobs
+for each row execute function public.set_rmb_payment_financial_snapshot();
+
+create or replace function public.prevent_rmb_customer_snapshot_mutation()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if old.applied_rate_id is not null and (
+    new.customer_id is distinct from old.customer_id or
+    new.foreign_currency is distinct from old.foreign_currency or
+    new.foreign_amount is distinct from old.foreign_amount or
+    new.agreed_bdt_rate is distinct from old.agreed_bdt_rate or
+    new.applied_rate_id is distinct from old.applied_rate_id or
+    new.extra_service_applied is distinct from old.extra_service_applied or
+    new.service_percentage is distinct from old.service_percentage or
+    new.service_amount is distinct from old.service_amount or
+    new.adjusted_rmb_amount is distinct from old.adjusted_rmb_amount or
+    new.calculated_bdt_payable is distinct from old.calculated_bdt_payable
+  ) then
+    raise exception 'RMB customer request financial snapshot is immutable';
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function public.create_rmb_payment_job_v2(
+  actor_profile_id uuid,
+  requested_job_id uuid,
+  requested_customer_id uuid,
+  requested_foreign_currency text,
+  requested_foreign_amount numeric,
+  requested_agreed_bdt_rate numeric,
+  requested_extra_service_applied boolean,
+  requested_service_percentage numeric,
+  requested_customer_payment_date date,
+  requested_customer_payment_method_id uuid,
+  requested_customer_payment_reference text,
+  requested_customer_payment_note text,
+  requested_payee_organization text,
+  requested_payee_name text,
+  requested_payee_address text,
+  requested_payee_phone text,
+  requested_payee_account_details text,
+  requested_china_payment_method_id uuid,
+  requested_china_destination_type text,
+  requested_china_bank_name text,
+  requested_china_account_name text,
+  requested_china_account_number text,
+  requested_china_bank_branch text,
+  requested_china_bank_code text,
+  requested_china_wallet_id text,
+  requested_china_destination_qr_path text,
+  requested_china_cash_recipient_name text,
+  requested_china_cash_recipient_contact text,
+  requested_china_cash_instruction_note text,
+  requested_note text
+) returns uuid
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  created_job_id uuid;
+begin
+  if coalesce(requested_extra_service_applied, false) and (
+    requested_service_percentage is null
+    or requested_service_percentage <= 0
+    or requested_service_percentage > 100
+    or requested_service_percentage = 'NaN'::numeric
+    or requested_service_percentage <> round(requested_service_percentage, 4)
+  ) then
+    raise exception 'Service percentage must be greater than 0, no more than 100, and use up to 4 decimal places';
+  end if;
+
+  created_job_id := public.create_rmb_payment_job_v2(
+    actor_profile_id,
+    requested_job_id,
+    requested_customer_id,
+    requested_foreign_currency,
+    requested_foreign_amount,
+    requested_agreed_bdt_rate,
+    requested_customer_payment_date,
+    requested_customer_payment_method_id,
+    requested_customer_payment_reference,
+    requested_customer_payment_note,
+    requested_payee_organization,
+    requested_payee_name,
+    requested_payee_address,
+    requested_payee_phone,
+    requested_payee_account_details,
+    requested_china_payment_method_id,
+    requested_china_destination_type,
+    requested_china_bank_name,
+    requested_china_account_name,
+    requested_china_account_number,
+    requested_china_bank_branch,
+    requested_china_bank_code,
+    requested_china_wallet_id,
+    requested_china_destination_qr_path,
+    requested_china_cash_recipient_name,
+    requested_china_cash_recipient_contact,
+    requested_china_cash_instruction_note,
+    requested_note
+  );
+
+  update public.rmb_payment_jobs
+  set extra_service_applied = coalesce(requested_extra_service_applied, false),
+      service_percentage = case
+        when coalesce(requested_extra_service_applied, false) then requested_service_percentage
+        else null
+      end
+  where id = created_job_id;
+
+  return created_job_id;
+end;
+$$;
+
+revoke all on function public.create_rmb_payment_job_v2(
+  uuid, uuid, uuid, text, numeric, numeric, boolean, numeric, date, uuid, text,
+  text, text, text, text, text, text, uuid, text, text, text, text, text, text,
+  text, text, text, text, text, text
+) from public, anon, authenticated;
+grant execute on function public.create_rmb_payment_job_v2(
+  uuid, uuid, uuid, text, numeric, numeric, boolean, numeric, date, uuid, text,
+  text, text, text, text, text, text, uuid, text, text, text, text, text, text,
+  text, text, text, text, text, text
+) to service_role;
+
+commit;
+
+-- Personal Quick Cash Books with data-preserving legacy history.
+-- Existing global history is classified deterministically and never guessed.
+
+begin;
+
+lock table public.cashbook_entries, public.cashbook_days in access exclusive mode;
+
+do $$
+begin
+  if to_regclass('public.cashbook_entries') is null
+    or to_regclass('public.cashbook_days') is null
+    or to_regclass('public.profiles') is null
+  then
+    raise exception 'Required cashbook tables or profiles table are missing';
+  end if;
+  if not exists(select 1 from information_schema.columns where table_schema='public' and table_name='cashbook_days' and column_name='business_date')
+    or not exists(select 1 from information_schema.columns where table_schema='public' and table_name='cashbook_entries' and column_name='business_date')
+    or not exists(select 1 from information_schema.columns where table_schema='public' and table_name='cashbook_entries' and column_name='created_by')
+  then
+    raise exception 'Expected legacy cashbook identity columns are missing';
+  end if;
+  if exists(
+    select 1 from information_schema.columns
+    where table_schema='public' and table_name in ('cashbook_days','cashbook_entries')
+      and column_name in ('cashbook_day_id','cashbook_scope','cashbook_owner_id')
+  ) then
+    raise exception 'Personal cashbook columns already exist; refusing a partial or repeated conversion';
+  end if;
+  if not exists(select 1 from pg_constraint where conrelid='public.cashbook_days'::regclass and conname='cashbook_days_pkey')
+    or not exists(select 1 from pg_constraint where conrelid='public.cashbook_entries'::regclass and conname='cashbook_entries_business_date_fkey')
+  then
+    raise exception 'Expected legacy cashbook constraints are missing';
+  end if;
+  if exists(
+    select 1 from public.cashbook_entries entry
+    left join public.cashbook_days day on day.business_date=entry.business_date
+    where day.business_date is null
+  ) then
+    raise exception 'Legacy cashbook entries contain an orphan business date';
+  end if;
+end $$;
+
+alter table public.cashbook_days
+  add column cashbook_day_id uuid,
+  add column cashbook_scope text,
+  add column cashbook_owner_id uuid;
+alter table public.cashbook_entries
+  add column cashbook_day_id uuid,
+  add column cashbook_scope text,
+  add column cashbook_owner_id uuid;
+
+update public.cashbook_days
+set cashbook_day_id=gen_random_uuid(),cashbook_scope='LEGACY_GLOBAL',cashbook_owner_id=null;
+
+with day_stats as (
+  select day.business_date,
+    count(entry.id) as entry_count,
+    count(distinct entry.created_by) as distinct_creator_count,
+    count(entry.id) filter(where entry.created_by is null or profile.id is null) as invalid_creator_count
+  from public.cashbook_days day
+  left join public.cashbook_entries entry on entry.business_date=day.business_date
+  left join public.profiles profile on profile.id=entry.created_by
+  group by day.business_date
+), valid_creator_groups as (
+  select entry.business_date,entry.created_by
+  from public.cashbook_entries entry
+  join public.profiles profile on profile.id=entry.created_by
+  where entry.created_by is not null
+  group by entry.business_date,entry.created_by
+), proven_owners as (
+  select stats.business_date,creator.created_by as cashbook_owner_id
+  from day_stats stats
+  join valid_creator_groups creator on creator.business_date=stats.business_date
+  where stats.entry_count>0 and stats.invalid_creator_count=0 and stats.distinct_creator_count=1
+)
+update public.cashbook_days day
+set cashbook_scope='LEGACY_ATTRIBUTED',cashbook_owner_id=proven.cashbook_owner_id
+from proven_owners proven
+where proven.business_date=day.business_date;
+
+update public.cashbook_entries entry
+set cashbook_day_id=day.cashbook_day_id,
+    cashbook_scope=day.cashbook_scope,
+    cashbook_owner_id=day.cashbook_owner_id
+from public.cashbook_days day
+where day.business_date=entry.business_date;
+
+do $$
+begin
+  if exists(select 1 from public.cashbook_days where cashbook_day_id is null or cashbook_scope is null)
+    or exists(select 1 from public.cashbook_entries where cashbook_day_id is null or cashbook_scope is null)
+  then
+    raise exception 'Cashbook legacy classification or day linkage is incomplete';
+  end if;
+  if exists(
+    select 1 from public.cashbook_days
+    where (cashbook_scope='LEGACY_GLOBAL' and cashbook_owner_id is not null)
+       or (cashbook_scope='LEGACY_ATTRIBUTED' and cashbook_owner_id is null)
+       or cashbook_scope not in ('LEGACY_GLOBAL','LEGACY_ATTRIBUTED')
+  ) then
+    raise exception 'Cashbook legacy ownership classification is invalid';
+  end if;
+  if exists(
+    select 1 from public.cashbook_entries entry
+    join public.cashbook_days day on day.cashbook_day_id=entry.cashbook_day_id
+    where entry.business_date is distinct from day.business_date
+       or entry.cashbook_scope is distinct from day.cashbook_scope
+       or entry.cashbook_owner_id is distinct from day.cashbook_owner_id
+  ) then
+    raise exception 'Cashbook entry/day legacy relationship is invalid';
+  end if;
+end $$;
+
+alter table public.cashbook_entries drop constraint cashbook_entries_business_date_fkey;
+alter table public.cashbook_days drop constraint cashbook_days_pkey;
+
+alter table public.cashbook_days
+  alter column cashbook_day_id set default gen_random_uuid(),
+  alter column cashbook_day_id set not null,
+  alter column cashbook_scope set not null,
+  add constraint cashbook_days_pkey primary key(cashbook_day_id),
+  add constraint cashbook_days_scope_check check(
+    (cashbook_scope='LEGACY_GLOBAL' and cashbook_owner_id is null)
+    or (cashbook_scope in ('LEGACY_ATTRIBUTED','PERSONAL') and cashbook_owner_id is not null)
+  ),
+  add constraint cashbook_days_owner_fkey foreign key(cashbook_owner_id)
+    references public.profiles(id) on delete restrict;
+alter table public.cashbook_entries
+  alter column cashbook_day_id set not null,
+  alter column cashbook_scope set not null,
+  add constraint cashbook_entries_scope_check check(
+    (cashbook_scope='LEGACY_GLOBAL' and cashbook_owner_id is null)
+    or (cashbook_scope in ('LEGACY_ATTRIBUTED','PERSONAL') and cashbook_owner_id is not null)
+  ),
+  add constraint cashbook_entries_owner_fkey foreign key(cashbook_owner_id)
+    references public.profiles(id) on delete restrict,
+  add constraint cashbook_entries_day_fkey foreign key(cashbook_day_id)
+    references public.cashbook_days(cashbook_day_id) on delete restrict;
+
+drop index if exists public.cashbook_entries_business_date_idx;
+create unique index cashbook_days_legacy_business_date_idx
+  on public.cashbook_days(business_date)
+  where cashbook_scope in ('LEGACY_GLOBAL','LEGACY_ATTRIBUTED');
+create unique index cashbook_days_personal_owner_business_date_idx
+  on public.cashbook_days(cashbook_owner_id,business_date)
+  where cashbook_scope='PERSONAL';
+create index cashbook_entries_day_idx on public.cashbook_entries(cashbook_day_id,transaction_at desc);
+create index cashbook_entries_personal_owner_business_date_idx
+  on public.cashbook_entries(cashbook_owner_id,business_date desc,transaction_at desc)
+  where cashbook_scope='PERSONAL';
+create index cashbook_days_business_date_scope_idx
+  on public.cashbook_days(business_date desc,cashbook_scope,cashbook_owner_id);
+
+create function public.assert_cashbook_entry_day_consistency()
+returns trigger language plpgsql security definer set search_path=public as $$
+declare linked_day public.cashbook_days%rowtype;
+begin
+  select * into linked_day from public.cashbook_days where cashbook_day_id=new.cashbook_day_id;
+  if linked_day.cashbook_day_id is null then raise exception 'Cashbook day does not exist'; end if;
+  if new.business_date is distinct from linked_day.business_date
+    or new.cashbook_scope is distinct from linked_day.cashbook_scope
+    or new.cashbook_owner_id is distinct from linked_day.cashbook_owner_id
+  then raise exception 'Cashbook entry must match its linked day identity'; end if;
+  return new;
+end $$;
+create trigger cashbook_entries_day_consistency
+before insert or update of cashbook_day_id,cashbook_scope,cashbook_owner_id,business_date
+on public.cashbook_entries for each row execute function public.assert_cashbook_entry_day_consistency();
+
+drop policy if exists "cashbook days read" on public.cashbook_days;
+create policy "cashbook days read" on public.cashbook_days for select to authenticated using(
+  (cashbook_scope in ('PERSONAL','LEGACY_ATTRIBUTED') and cashbook_owner_id=auth.uid()
+    and (public.current_user_has_permission('accounting.view')
+      or public.current_user_has_permission('accounting.manage_cashbook')))
+  or public.current_user_has_permission('accounting.audit_cashbook')
+);
+drop policy if exists "cashbook entries read" on public.cashbook_entries;
+create policy "cashbook entries read" on public.cashbook_entries for select to authenticated using(
+  (cashbook_scope in ('PERSONAL','LEGACY_ATTRIBUTED') and cashbook_owner_id=auth.uid()
+    and (public.current_user_has_permission('accounting.view')
+      or public.current_user_has_permission('accounting.manage_cashbook')))
+  or public.current_user_has_permission('accounting.audit_cashbook')
+);
+
+drop function public.cashbook_opening_balance_for(date);
+create function public.cashbook_opening_balance_for(requested_cashbook_owner_id uuid,requested_business_date date)
+returns numeric language sql stable security definer set search_path=public as $$
+  select (select case when business_date=requested_business_date then opening_balance else closing_balance end
+    from public.cashbook_days
+    where cashbook_scope='PERSONAL' and cashbook_owner_id=requested_cashbook_owner_id
+      and business_date<=requested_business_date
+      and (business_date=requested_business_date or is_closed=true)
+    order by business_date desc limit 1)::numeric(18,2)
+$$;
+
+drop function public.lock_cashbook_timeline();
+create function public.lock_cashbook_timeline(requested_cashbook_owner_id uuid)
+returns void language plpgsql security definer set search_path=public as $$
+begin
+  if requested_cashbook_owner_id is null then raise exception 'Cashbook owner is required'; end if;
+  perform pg_advisory_xact_lock(hashtextextended('sen.cashbook.timeline:'||requested_cashbook_owner_id::text,20260731));
+end $$;
+
+drop function public.assert_cashbook_predecessor_closed(date);
+create function public.assert_cashbook_predecessor_closed(requested_cashbook_owner_id uuid,requested_business_date date)
+returns void language plpgsql security definer set search_path=public as $$
+declare predecessor public.cashbook_days%rowtype;
+begin
+  select * into predecessor from public.cashbook_days
+  where cashbook_scope='PERSONAL' and cashbook_owner_id=requested_cashbook_owner_id
+    and business_date<requested_business_date
+  order by business_date desc limit 1;
+  if predecessor.cashbook_day_id is not null and not predecessor.is_closed then
+    raise exception 'Close the previous personal cashbook day before continuing';
+  end if;
+end $$;
+
+create or replace function public.set_cashbook_opening_balance(actor_profile_id uuid,requested_business_date date,requested_opening_balance numeric)
+returns void language plpgsql security definer set search_path=public as $$
+declare day_row public.cashbook_days%rowtype; actor_role public.account_role;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'accounting.create_entry');
+  if requested_business_date is null then raise exception 'Business date is required'; end if;
+  if requested_opening_balance is null or requested_opening_balance<0 then raise exception 'Opening cash must be zero or greater'; end if;
+  perform public.lock_cashbook_timeline(actor_profile_id);
+  perform public.assert_cashbook_predecessor_closed(actor_profile_id,requested_business_date);
+  insert into public.cashbook_days(cashbook_day_id,cashbook_scope,cashbook_owner_id,business_date,opening_balance,updated_by)
+  values(gen_random_uuid(),'PERSONAL',actor_profile_id,requested_business_date,round(requested_opening_balance,2),actor_profile_id)
+  on conflict(cashbook_owner_id,business_date) where cashbook_scope='PERSONAL' do nothing;
+  select * into day_row from public.cashbook_days
+  where cashbook_scope='PERSONAL' and cashbook_owner_id=actor_profile_id and business_date=requested_business_date for update;
+  if day_row.is_closed then raise exception 'This personal cashbook day is closed'; end if;
+  update public.cashbook_days set opening_balance=round(requested_opening_balance,2),updated_by=actor_profile_id,updated_at=now()
+  where cashbook_day_id=day_row.cashbook_day_id;
+  select role into actor_role from public.profiles where id=actor_profile_id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,new_values)
+  values(actor_profile_id,actor_role,'accounting.cashbook_opening_balance_set','accounting','cashbook_day',day_row.cashbook_day_id::text,
+    'Personal cashbook opening balance saved.',jsonb_build_object('cashbook_day_id',day_row.cashbook_day_id,'cashbook_owner_id',actor_profile_id,'business_date',requested_business_date,'opening_balance',round(requested_opening_balance,2)));
+end $$;
+
+create or replace function public.create_cashbook_entry(actor_profile_id uuid,requested_description_id uuid,requested_amount numeric,requested_payment_method text,requested_occurred_at timestamptz,requested_business_date date)
+returns uuid language plpgsql security definer set search_path=public as $$
+declare
+  cashbook_id uuid:=gen_random_uuid(); journal_id uuid:=gen_random_uuid();
+  description_row public.cashbook_descriptions%rowtype; day_row public.cashbook_days%rowtype;
+  inherited_opening numeric(18,2); payment_account_id uuid; counter_account_id uuid;
+  normalized_method text:=lower(trim(coalesce(requested_payment_method,'')));
+  entry_time timestamptz:=requested_occurred_at; entry_date date; actor_role public.account_role;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'accounting.create_entry');
+  if requested_amount is null or requested_amount<=0 then raise exception 'Amount must be greater than zero'; end if;
+  if normalized_method not in ('cash','bank','mfs') then raise exception 'Payment method must be Cash, Bank, or MFS'; end if;
+  if requested_occurred_at is null or requested_business_date is null then raise exception 'Transaction date and business date are required'; end if;
+  entry_date:=(entry_time at time zone 'Asia/Dhaka')::date;
+  if entry_date<>requested_business_date then raise exception 'Transaction date must match the selected cashbook date'; end if;
+  perform public.lock_cashbook_timeline(actor_profile_id);
+  perform public.assert_cashbook_predecessor_closed(actor_profile_id,entry_date);
+  select * into day_row from public.cashbook_days where cashbook_scope='PERSONAL' and cashbook_owner_id=actor_profile_id and business_date=entry_date for update;
+  if day_row.cashbook_day_id is null then
+    inherited_opening:=public.cashbook_opening_balance_for(actor_profile_id,entry_date);
+    if inherited_opening is null then raise exception 'Initialize the first personal cashbook opening balance before creating entries'; end if;
+    insert into public.cashbook_days(cashbook_day_id,cashbook_scope,cashbook_owner_id,business_date,opening_balance,updated_by)
+    values(gen_random_uuid(),'PERSONAL',actor_profile_id,entry_date,inherited_opening,actor_profile_id) returning * into day_row;
+  end if;
+  if day_row.is_closed then raise exception 'This personal cashbook day is closed'; end if;
+  select * into description_row from public.cashbook_descriptions where id=requested_description_id and is_active=true;
+  if description_row.id is null then raise exception 'Select an active cashbook description'; end if;
+  select id into payment_account_id from public.accounting_accounts
+  where code=case normalized_method when 'cash' then '1010' when 'bank' then '1020' else '1030' end and currency='BDT' and is_active=true;
+  select id into counter_account_id from public.accounting_accounts
+  where code=case description_row.transaction_type when 'income' then '4000' else '6000' end and currency='BDT' and is_active=true;
+  if payment_account_id is null or counter_account_id is null then raise exception 'Required accounting account is unavailable'; end if;
+  insert into public.journal_entries(id,entry_number,entry_date,description,reference_type,reference_id,status,currency,created_by,posted_by,posted_at)
+  values(journal_id,public.next_journal_entry_number(),entry_date,description_row.name,'manual',cashbook_id,'posted','BDT',actor_profile_id,actor_profile_id,now());
+  if description_row.transaction_type='income' then
+    insert into public.journal_lines(journal_entry_id,account_id,description,debit,credit) values
+      (journal_id,payment_account_id,description_row.name,requested_amount,0),(journal_id,counter_account_id,description_row.name,0,requested_amount);
+  else
+    insert into public.journal_lines(journal_entry_id,account_id,description,debit,credit) values
+      (journal_id,counter_account_id,description_row.name,requested_amount,0),(journal_id,payment_account_id,description_row.name,0,requested_amount);
+  end if;
+  insert into public.cashbook_entries(id,cashbook_day_id,cashbook_scope,cashbook_owner_id,description_id,transaction_type,amount,payment_method,transaction_at,business_date,journal_entry_id,created_by)
+  values(cashbook_id,day_row.cashbook_day_id,'PERSONAL',actor_profile_id,description_row.id,description_row.transaction_type,round(requested_amount,2),normalized_method,entry_time,entry_date,journal_id,actor_profile_id);
+  select role into actor_role from public.profiles where id=actor_profile_id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,new_values)
+  values(actor_profile_id,actor_role,'accounting.cashbook_entry_created','accounting','cashbook_entry',cashbook_id::text,'Personal cashbook entry created and posted.',
+    jsonb_build_object('cashbook_day_id',day_row.cashbook_day_id,'cashbook_owner_id',actor_profile_id,'transaction_type',description_row.transaction_type,'amount',round(requested_amount,2),'payment_method',normalized_method,'journal_entry_id',journal_id));
+  return cashbook_id;
+end $$;
+
+create or replace function public.close_cashbook_day(actor_profile_id uuid,requested_business_date date)
+returns numeric language plpgsql security definer set search_path=public as $$
+declare day_row public.cashbook_days%rowtype; inherited_opening numeric(18,2); income_total numeric(18,2); expense_total numeric(18,2); final_balance numeric(18,2); actor_role public.account_role;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'accounting.create_entry');
+  if requested_business_date is null then raise exception 'Business date is required'; end if;
+  perform public.lock_cashbook_timeline(actor_profile_id);
+  perform public.assert_cashbook_predecessor_closed(actor_profile_id,requested_business_date);
+  select * into day_row from public.cashbook_days where cashbook_scope='PERSONAL' and cashbook_owner_id=actor_profile_id and business_date=requested_business_date for update;
+  if day_row.cashbook_day_id is null then
+    inherited_opening:=public.cashbook_opening_balance_for(actor_profile_id,requested_business_date);
+    if inherited_opening is null then raise exception 'Initialize the first personal cashbook opening balance before closing the day'; end if;
+    insert into public.cashbook_days(cashbook_day_id,cashbook_scope,cashbook_owner_id,business_date,opening_balance,updated_by)
+    values(gen_random_uuid(),'PERSONAL',actor_profile_id,requested_business_date,inherited_opening,actor_profile_id) returning * into day_row;
+  end if;
+  if day_row.is_closed then raise exception 'This personal cashbook day is already closed'; end if;
+  select coalesce(sum(amount) filter(where transaction_type='income'),0),coalesce(sum(amount) filter(where transaction_type='expense'),0)
+  into income_total,expense_total from public.cashbook_entries
+  where cashbook_day_id=day_row.cashbook_day_id and cashbook_scope='PERSONAL' and cashbook_owner_id=actor_profile_id;
+  final_balance:=day_row.opening_balance+income_total-expense_total;
+  update public.cashbook_days set is_closed=true,closing_balance=final_balance,closed_at=now(),closed_by=actor_profile_id,
+    audit_status='PENDING_AUDIT',reviewed_at=null,reviewed_by=null,review_comment=null,correction_reason=null,
+    correction_requested_at=null,correction_requested_by=null,updated_by=actor_profile_id,updated_at=now()
+  where cashbook_day_id=day_row.cashbook_day_id;
+  select role into actor_role from public.profiles where id=actor_profile_id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,new_values)
+  values(actor_profile_id,actor_role,'accounting.cashbook_day_closed','accounting','cashbook_day',day_row.cashbook_day_id::text,'Personal cashbook day closed.',
+    jsonb_build_object('cashbook_day_id',day_row.cashbook_day_id,'cashbook_owner_id',actor_profile_id,'business_date',requested_business_date,'opening_balance',day_row.opening_balance,'income',income_total,'expense',expense_total,'closing_balance',final_balance));
+  return final_balance;
+end $$;
+
+create or replace function public.record_sale_payment(actor_profile_id uuid,requested_order_id uuid,requested_amount numeric,requested_date date,requested_method text,requested_reference text,requested_note text,requested_operation_id uuid,requested_receipt_channel text)
+returns uuid language plpgsql security definer set search_path='' as $$
+declare
+  payment_id uuid:=extensions.gen_random_uuid(); journal_id uuid:=extensions.gen_random_uuid(); cashbook_id uuid:=extensions.gen_random_uuid();
+  sale public.sales_orders%rowtype; existing_payment public.sale_payments%rowtype; sales_description public.cashbook_descriptions%rowtype; day_row public.cashbook_days%rowtype;
+  actor_role public.account_role; normalized_method text:=lower(trim(coalesce(requested_method,''))); normalized_channel text:=lower(trim(coalesce(requested_receipt_channel,'')));
+  normalized_reference text:=nullif(left(trim(coalesce(requested_reference,'')),200),''); normalized_note text:=nullif(left(trim(coalesce(requested_note,'')),1000),'');
+  normalized_amount numeric(18,2):=round(requested_amount,2); effective_date date:=coalesce(requested_date,current_date); inherited_opening numeric(18,2);
+  payment_account_id uuid; revenue_account_id uuid; invoice_number text; customer_name text; entry_reference text; entry_time timestamptz;
+begin
+  perform public.assert_actor_permission(actor_profile_id,'sales.record_payment');
+  if requested_operation_id is null then raise exception 'A valid payment operation ID is required'; end if;
+  if requested_amount is null or requested_amount<=0 or normalized_amount<=0 then raise exception 'Payment amount must be positive'; end if;
+  if normalized_method='credit_sale' then raise exception 'Credit Sale is not a received payment. Record the actual payment method when money is received.';
+  elsif normalized_method in ('cash','cash_on_delivery') then normalized_channel:='cash';
+  elsif normalized_method='mobile_banking' then normalized_channel:='mfs';
+  elsif normalized_method in ('bank_transfer','cheque','card') then normalized_channel:='bank';
+  elsif normalized_method in ('advance_payment','other') then if normalized_channel not in ('cash','bank','mfs') then raise exception 'Select the actual Cash, Bank, or MFS receiving channel'; end if;
+  else raise exception 'Invalid received payment method'; end if;
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(requested_operation_id::text,0));
+  select * into existing_payment from public.sale_payments where operation_id=requested_operation_id;
+  if existing_payment.id is not null then
+    if existing_payment.received_by is distinct from actor_profile_id or existing_payment.order_id is distinct from requested_order_id
+      or round(existing_payment.amount,2) is distinct from normalized_amount or existing_payment.payment_date is distinct from effective_date
+      or existing_payment.method is distinct from normalized_method or existing_payment.receipt_channel is distinct from normalized_channel
+      or existing_payment.reference_number is distinct from normalized_reference or existing_payment.internal_note is distinct from normalized_note
+    then raise exception 'This payment operation ID was already used with different details'; end if;
+    if not exists(select 1 from public.cashbook_entries where sale_payment_id=existing_payment.id and cashbook_scope='PERSONAL' and cashbook_owner_id=actor_profile_id)
+    then raise exception 'This payment operation is missing its linked personal Accounting transaction'; end if;
+    return existing_payment.id;
+  end if;
+  select * into sale from public.sales_orders where id=requested_order_id for update;
+  if sale.id is null or sale.status='cancelled' then raise exception 'Sale is not eligible for payment'; end if;
+  perform public.lock_cashbook_timeline(actor_profile_id);
+  perform public.assert_cashbook_predecessor_closed(actor_profile_id,effective_date);
+  select * into day_row from public.cashbook_days where cashbook_scope='PERSONAL' and cashbook_owner_id=actor_profile_id and business_date=effective_date for update;
+  if day_row.cashbook_day_id is null then
+    inherited_opening:=public.cashbook_opening_balance_for(actor_profile_id,effective_date);
+    if inherited_opening is null then raise exception 'Initialize the first personal cashbook opening balance before recording Sales payments'; end if;
+    insert into public.cashbook_days(cashbook_day_id,cashbook_scope,cashbook_owner_id,business_date,opening_balance,updated_by)
+    values(extensions.gen_random_uuid(),'PERSONAL',actor_profile_id,effective_date,inherited_opening,actor_profile_id) returning * into day_row;
+  end if;
+  if day_row.is_closed then raise exception 'This personal cashbook date is already closed. Use the authorized accounting correction process.'; end if;
+  select * into sales_description from public.cashbook_descriptions where lower(trim(name))='sales' and transaction_type='income' and is_active=true order by created_at limit 1;
+  if sales_description.id is null then raise exception 'The active Sales income description is unavailable in Accounting'; end if;
+  select id into payment_account_id from public.accounting_accounts where code=case normalized_channel when 'cash' then '1010' when 'bank' then '1020' else '1030' end and currency='BDT' and is_active=true;
+  select id into revenue_account_id from public.accounting_accounts where code='4000' and currency='BDT' and is_active=true;
+  if payment_account_id is null or revenue_account_id is null then raise exception 'Required Sales payment accounting account is unavailable'; end if;
+  insert into public.sale_payments(id,order_id,amount,payment_date,method,reference_number,internal_note,received_by,operation_id,receipt_channel)
+  values(payment_id,sale.id,normalized_amount,effective_date,normalized_method,normalized_reference,normalized_note,actor_profile_id,requested_operation_id,normalized_channel);
+  perform public.refresh_sale_payment_totals(sale.id);
+  select document_number into invoice_number from public.sale_documents where order_id=sale.id and document_type='invoice' and status='generated' order by revision_number desc,created_at desc limit 1;
+  select coalesce(nullif(trim(profile.full_name),''),nullif(trim(profile.company_name),''),nullif(trim(profile.email),''),'Customer') into customer_name from public.profiles profile where profile.id=sale.customer_profile_id;
+  entry_reference:=concat_ws(' — ','Sales Payment',sale.order_number,invoice_number,customer_name,case when normalized_reference is null then null else 'Ref: '||normalized_reference end);
+  if effective_date=(pg_catalog.clock_timestamp() at time zone 'Asia/Dhaka')::date then entry_time:=pg_catalog.clock_timestamp();
+  else entry_time:=(effective_date::timestamp+time '12:00') at time zone 'Asia/Dhaka'; end if;
+  insert into public.journal_entries(id,entry_number,entry_date,description,reference_type,reference_id,status,currency,created_by,posted_by,posted_at)
+  values(journal_id,public.next_journal_entry_number(),effective_date,left(entry_reference,500),'payment',payment_id,'posted','BDT',actor_profile_id,actor_profile_id,pg_catalog.clock_timestamp());
+  insert into public.journal_lines(journal_entry_id,account_id,description,debit,credit) values
+    (journal_id,payment_account_id,left(entry_reference,500),normalized_amount,0),(journal_id,revenue_account_id,left(entry_reference,500),0,normalized_amount);
+  insert into public.cashbook_entries(id,cashbook_day_id,cashbook_scope,cashbook_owner_id,description_id,transaction_type,amount,payment_method,transaction_at,business_date,journal_entry_id,created_by,remark,sale_payment_id,source_payment_method)
+  values(cashbook_id,day_row.cashbook_day_id,'PERSONAL',actor_profile_id,sales_description.id,'income',normalized_amount,normalized_channel,entry_time,effective_date,journal_id,actor_profile_id,left(entry_reference,240),payment_id,normalized_method);
+  select role into actor_role from public.profiles where id=actor_profile_id;
+  insert into public.audit_logs(actor_id,actor_role,target_profile_id,action,module,entity_type,entity_id,description,new_values)
+  values(actor_profile_id,actor_role,sale.customer_profile_id,'sales.payment_accounting_posted','sales','sale_payment',payment_id::text,'Sales payment recorded and posted to a personal cashbook.',
+    jsonb_build_object('operation_id',requested_operation_id,'sales_order_id',sale.id,'cashbook_entry_id',cashbook_id,'cashbook_day_id',day_row.cashbook_day_id,'cashbook_owner_id',actor_profile_id,'journal_entry_id',journal_id,'amount',normalized_amount,'payment_date',effective_date,'payment_method',normalized_method,'receipt_channel',normalized_channel));
+  return payment_id;
+end $$;
+
+drop function public.approve_cashbook_audit(uuid,date,text);
+create function public.approve_cashbook_audit(actor_profile_id uuid,requested_cashbook_day_id uuid,requested_comment text default null)
+returns void language plpgsql security definer set search_path=public as $$
+declare day_row public.cashbook_days%rowtype; actor_role public.account_role; normalized_comment text:=nullif(trim(coalesce(requested_comment,'')),'');
+begin
+  perform public.assert_actor_permission(actor_profile_id,'accounting.audit_cashbook');
+  if requested_cashbook_day_id is null then raise exception 'Cashbook day is required'; end if;
+  if char_length(coalesce(normalized_comment,''))>1000 then raise exception 'Review comment cannot exceed 1000 characters'; end if;
+  select * into day_row from public.cashbook_days where cashbook_day_id=requested_cashbook_day_id for update;
+  if day_row.cashbook_day_id is null or not day_row.is_closed then raise exception 'Only closed cashbook days can be audited'; end if;
+  if day_row.audit_status is distinct from 'PENDING_AUDIT' then raise exception 'Only cashbook days pending audit can be approved'; end if;
+  update public.cashbook_days set audit_status='APPROVED',reviewed_at=now(),reviewed_by=actor_profile_id,review_comment=normalized_comment,
+    correction_reason=null,correction_requested_at=null,correction_requested_by=null,updated_by=actor_profile_id,updated_at=now()
+  where cashbook_day_id=requested_cashbook_day_id and is_closed=true and audit_status='PENDING_AUDIT';
+  if not found then raise exception 'Only cashbook days pending audit can be approved'; end if;
+  select role into actor_role from public.profiles where id=actor_profile_id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,old_values,new_values)
+  values(actor_profile_id,actor_role,'accounting.cashbook_audit_approved','accounting','cashbook_day',requested_cashbook_day_id::text,'Cashbook day audit approved.',
+    jsonb_build_object('audit_status',day_row.audit_status),jsonb_build_object('cashbook_day_id',requested_cashbook_day_id,'cashbook_scope',day_row.cashbook_scope,'cashbook_owner_id',day_row.cashbook_owner_id,'business_date',day_row.business_date,'audit_status','APPROVED','review_comment',normalized_comment));
+end $$;
+
+drop function public.request_cashbook_correction(uuid,date,text);
+create function public.request_cashbook_correction(actor_profile_id uuid,requested_cashbook_day_id uuid,requested_reason text)
+returns void language plpgsql security definer set search_path=public as $$
+declare day_row public.cashbook_days%rowtype; actor_role public.account_role; normalized_reason text:=nullif(trim(coalesce(requested_reason,'')),'');
+begin
+  perform public.assert_actor_permission(actor_profile_id,'accounting.audit_cashbook');
+  if requested_cashbook_day_id is null then raise exception 'Cashbook day is required'; end if;
+  if normalized_reason is null or char_length(normalized_reason)=0 then raise exception 'A correction reason is required'; end if;
+  if char_length(normalized_reason)>1000 then raise exception 'Correction reason cannot exceed 1000 characters'; end if;
+  select * into day_row from public.cashbook_days where cashbook_day_id=requested_cashbook_day_id for update;
+  if day_row.cashbook_day_id is null or not day_row.is_closed then raise exception 'Only closed cashbook days can be returned for correction'; end if;
+  if day_row.audit_status is distinct from 'PENDING_AUDIT' then raise exception 'Only cashbook days pending audit can require correction'; end if;
+  update public.cashbook_days set audit_status='CORRECTION_REQUIRED',correction_reason=normalized_reason,correction_requested_at=now(),
+    correction_requested_by=actor_profile_id,reviewed_at=now(),reviewed_by=actor_profile_id,review_comment=normalized_reason,updated_by=actor_profile_id,updated_at=now()
+  where cashbook_day_id=requested_cashbook_day_id and is_closed=true and audit_status='PENDING_AUDIT';
+  if not found then raise exception 'Only cashbook days pending audit can require correction'; end if;
+  select role into actor_role from public.profiles where id=actor_profile_id;
+  insert into public.audit_logs(actor_id,actor_role,action,module,entity_type,entity_id,description,old_values,new_values)
+  values(actor_profile_id,actor_role,'accounting.cashbook_correction_requested','accounting','cashbook_day',requested_cashbook_day_id::text,'Cashbook correction requested.',
+    jsonb_build_object('audit_status',day_row.audit_status),jsonb_build_object('cashbook_day_id',requested_cashbook_day_id,'cashbook_scope',day_row.cashbook_scope,'cashbook_owner_id',day_row.cashbook_owner_id,'business_date',day_row.business_date,'audit_status','CORRECTION_REQUIRED','correction_reason',normalized_reason));
+end $$;
+
+do $$
+begin
+  if exists(select 1 from public.cashbook_days where
+    (cashbook_scope='LEGACY_GLOBAL' and cashbook_owner_id is not null)
+    or (cashbook_scope in ('LEGACY_ATTRIBUTED','PERSONAL') and cashbook_owner_id is null)
+    or cashbook_scope not in ('LEGACY_GLOBAL','LEGACY_ATTRIBUTED','PERSONAL'))
+  then raise exception 'Cashbook day scope/owner validation failed'; end if;
+  if exists(select 1 from public.cashbook_entries entry left join public.cashbook_days day on day.cashbook_day_id=entry.cashbook_day_id
+    where day.cashbook_day_id is null or entry.business_date is distinct from day.business_date
+      or entry.cashbook_scope is distinct from day.cashbook_scope or entry.cashbook_owner_id is distinct from day.cashbook_owner_id)
+  then raise exception 'Cashbook entry/day validation failed'; end if;
+  if exists(select 1 from public.cashbook_days day left join public.profiles profile on profile.id=day.cashbook_owner_id
+    where day.cashbook_owner_id is not null and profile.id is null)
+  then raise exception 'Cashbook owner validation failed'; end if;
+end $$;
+
+revoke all on function public.assert_cashbook_entry_day_consistency() from public,anon,authenticated;
+revoke all on function public.cashbook_opening_balance_for(uuid,date) from public,anon,authenticated;
+revoke all on function public.lock_cashbook_timeline(uuid) from public,anon,authenticated;
+revoke all on function public.assert_cashbook_predecessor_closed(uuid,date) from public,anon,authenticated;
+revoke all on function public.set_cashbook_opening_balance(uuid,date,numeric) from public,anon,authenticated;
+revoke all on function public.create_cashbook_entry(uuid,uuid,numeric,text,timestamptz,date) from public,anon,authenticated;
+revoke all on function public.create_cashbook_entry(uuid,uuid,numeric,text,timestamptz,date,text) from public,anon,authenticated;
+revoke all on function public.close_cashbook_day(uuid,date) from public,anon,authenticated;
+revoke all on function public.record_sale_payment(uuid,uuid,numeric,date,text,text,text,uuid,text) from public,anon,authenticated;
+revoke all on function public.approve_cashbook_audit(uuid,uuid,text) from public,anon,authenticated;
+revoke all on function public.request_cashbook_correction(uuid,uuid,text) from public,anon,authenticated;
+grant execute on function public.set_cashbook_opening_balance(uuid,date,numeric) to service_role;
+grant execute on function public.create_cashbook_entry(uuid,uuid,numeric,text,timestamptz,date) to service_role;
+grant execute on function public.create_cashbook_entry(uuid,uuid,numeric,text,timestamptz,date,text) to service_role;
+grant execute on function public.close_cashbook_day(uuid,date) to service_role;
+grant execute on function public.record_sale_payment(uuid,uuid,numeric,date,text,text,text,uuid,text) to service_role;
+grant execute on function public.approve_cashbook_audit(uuid,uuid,text) to service_role;
+grant execute on function public.request_cashbook_correction(uuid,uuid,text) to service_role;
+
+notify pgrst, 'reload schema';
+
+commit;
 
 -- Native application service access. Browser users never receive this role.
 grant usage on schema public to service_role;

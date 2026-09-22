@@ -1,0 +1,11 @@
+/sen-offline-release/
+/sen-offline-release.zip
+/vendor/
+/.local-sen-data/
+/.native-test-data/
+/ready-for-hosting/
+/ready-for-hosting.zip
+/.codex-logs/
+/.worktrees/
+/.next/
+/.env*

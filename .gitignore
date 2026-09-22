@@ -20,6 +20,13 @@
 # production
 /build
 
+# generated offline bundles, disposable databases, and local verification output
+/.offline-test/
+/work/
+
+# platform runtime binaries are supplied when assembling the offline installer
+/vendor/
+
 # misc
 .DS_Store
 *.pem

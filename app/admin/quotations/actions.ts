@@ -4,36 +4,28 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { requirePermission } from "@/lib/auth/permissions";
-import { normalizeBasicCustomerInput } from "@/lib/customers/basic";
 import {
-  createBasicCustomerRecord,
-  type CreatedBasicCustomer,
-} from "@/lib/customers/create-basic";
+  basicCustomerInputFromForm,
+  type BasicCustomerActionState,
+} from "@/lib/customers/basic";
+import { createBasicCustomerRecord } from "@/lib/customers/create-basic";
+import { customerCreationDecision } from "@/lib/customers/duplicate-decision";
+import { findPossibleCustomers } from "@/lib/customers/duplicates-server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
-import { mustRestrictQuotationToCreator } from "@/lib/quotations/access-policy";
+import { resolveQuotationViewScope } from "@/lib/quotations/access-policy";
 import { parseQuotationItems } from "@/lib/quotations/create";
+import {
+  buildDraftQuotationUpdatePayload,
+  categorizeDraftEditItems,
+  draftEditErrorDestination,
+  runDraftQuotationUpdate,
+} from "@/lib/quotations/draft-editing";
 import { defaultQuotationExpiration } from "@/lib/quotations/validity";
+import { isQuotationImmutable } from "@/lib/quotations/workflow";
+import { parseMoney } from "@/lib/validation/numbers";
 
-const statuses = new Set([
-  "submitted",
-  "reviewing",
-  "additional_info_required",
-  "quoted",
-  "approved",
-  "rejected",
-  "accepted",
-  "declined",
-  "closed",
-  "expired",
-  "converted_to_invoice",
-]);
-
-export type QuotationCustomerActionState = {
-  status: "idle" | "success" | "error";
-  message: string;
-  customer: CreatedBasicCustomer | null;
-};
+export type QuotationCustomerActionState = BasicCustomerActionState;
 
 export async function createQuotationCustomerAction(
   _previousState: QuotationCustomerActionState,
@@ -41,13 +33,24 @@ export async function createQuotationCustomerAction(
 ): Promise<QuotationCustomerActionState> {
   const { profile } = await requirePermission("quotations.create");
   try {
-    const input = normalizeBasicCustomerInput({
-      fullName: form.get("full_name"),
-      companyName: form.get("company_name"),
-      email: form.get("email"),
-      phone: form.get("phone"),
-      addressLine1: form.get("address_line_1"),
+    const input = basicCustomerInputFromForm(form);
+    const duplicates = await findPossibleCustomers({
+      email: input.email,
+      phone: input.phone,
+      companyName: input.companyName ?? "",
     });
+    const decision = customerCreationDecision(
+      duplicates,
+      form.get("duplicate_override") === "true",
+    );
+    if (!decision.allowCreation) {
+      return {
+        status: "duplicate",
+        message: decision.message,
+        customer: null,
+        duplicates,
+      };
+    }
     const customer = await createBasicCustomerRecord(input);
     await writeAuditLog({
       actorId: profile.id,
@@ -63,6 +66,7 @@ export async function createQuotationCustomerAction(
       status: "success",
       message: `Customer ${customer.full_name} added and selected.`,
       customer,
+      duplicates: [],
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : "";
@@ -72,6 +76,7 @@ export async function createQuotationCustomerAction(
         ? "A customer with this email already exists. Search for the existing customer below."
         : detail || "Unable to add customer.",
       customer: null,
+      duplicates: [],
     };
   }
 }
@@ -164,7 +169,7 @@ export async function createQuotationAction(form: FormData) {
   const { data: quotation, error } = await db.from("quotation_requests").insert({
     reference,
     profile_id: customer.id,
-    status: "quoted",
+    status: "draft",
     subject: String(
       form.get("subject") ||
         `Quotation for ${productMap.get(requestedItems[0].productId)?.name ?? "products"}`,
@@ -237,50 +242,256 @@ export async function createQuotationAction(form: FormData) {
   redirect(`${destination}?success=${encodeURIComponent(`Quotation ${reference} created.`)}`);
 }
 
-export async function updateQuotationAction(
+const draftEditPath = (id: string) => `/admin/quotations/${id}/edit`;
+
+function failDraftEdit(
+  id: string,
+  message: string,
+  reason: "validation" | "stale" | "transition" = "validation",
+): never {
+  redirect(
+    `${draftEditErrorDestination(id, reason)}?error=${encodeURIComponent(message)}`,
+  );
+}
+
+function cleanDraftEditText(
+  value: FormDataEntryValue | null,
+  maximum = 5000,
+) {
+  return String(value ?? "").trim().slice(0, maximum) || null;
+}
+
+function cleanDraftEditDate(value: FormDataEntryValue | null, label: string) {
+  const date = String(value ?? "").trim();
+  if (!date) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error(`${label} must be a valid date.`);
+  }
+  const normalized = new Date(`${date}T00:00:00.000Z`)
+    .toISOString()
+    .slice(0, 10);
+  if (normalized !== date) throw new Error(`${label} must be a valid date.`);
+  return date;
+}
+
+export async function updateDraftQuotationAction(
   quotationId: string,
   form: FormData,
 ) {
   const { profile, permissions } = await requirePermission("quotations.edit");
-  const status = String(form.get("status") ?? "");
-  if (!statuses.has(status)) {
-    redirect("/admin/quotations?error=Invalid%20quotation%20status.");
+  const scope = resolveQuotationViewScope(profile.role, permissions);
+  if (!scope) {
+    failDraftEdit(quotationId, "Quotation access denied.");
+  }
+
+  const expectedUpdatedAt = String(form.get("updated_at") ?? "").trim();
+  if (!expectedUpdatedAt || Number.isNaN(Date.parse(expectedUpdatedAt))) {
+    failDraftEdit(quotationId, "Quotation changed before it could be saved.");
+  }
+
+  let requestedItems;
+  let discountAmount: number;
+  let taxAmount: number;
+  let requiredBy: string | null;
+  let expirationDate: string | null;
+  try {
+    requestedItems = parseQuotationItems(
+      JSON.parse(String(form.get("items") ?? "[]")) as unknown,
+    );
+    discountAmount =
+      parseMoney(form.get("discount_amount"), "Quotation discount", {
+        minimum: 0,
+      }) ?? 0;
+    taxAmount =
+      parseMoney(form.get("tax_amount"), "Quotation tax", { minimum: 0 }) ??
+      0;
+    requiredBy = cleanDraftEditDate(form.get("required_by"), "Required by");
+    expirationDate = cleanDraftEditDate(
+      form.get("expiration_date"),
+      "Expiration date",
+    );
+  } catch (error) {
+    failDraftEdit(
+      quotationId,
+      error instanceof Error ? error.message : "Quotation values are invalid.",
+    );
   }
 
   const db = createSupabaseAdminClient();
   let quotationQuery = db
     .from("quotation_requests")
-    .select("id")
+    .select(
+      "id,reference,profile_id,status,created_by,quotation_request_items(product_id,variation_id)",
+    )
     .eq("id", quotationId);
-  if (mustRestrictQuotationToCreator(profile.role, permissions)) {
+  if (scope === "own") {
+    quotationQuery = quotationQuery.eq("created_by", profile.id);
+  }
+  const { data: quotation, error: quotationError } =
+    await quotationQuery.maybeSingle();
+  if (quotationError || !quotation) {
+    failDraftEdit(quotationId, "Quotation not found.");
+  }
+  if (quotation.status !== "draft") {
+    failDraftEdit(
+      quotationId,
+      "This quotation is no longer a Draft and cannot be edited.",
+      "transition",
+    );
+  }
+
+  const existingLineKeys = new Set(
+    (quotation.quotation_request_items ?? []).map(
+      (item: { product_id: string; variation_id: string | null }) =>
+        `${item.product_id}:${item.variation_id ?? ""}`,
+    ),
+  );
+  const requestedLineKeys = new Set(
+    requestedItems.map(
+      (item) => `${item.productId}:${item.variationId ?? ""}`,
+    ),
+  );
+  const { newItems: addedItems } = categorizeDraftEditItems(
+    existingLineKeys,
+    requestedItems,
+  );
+  const addedProductIds = [...new Set(addedItems.map((item) => item.productId))];
+  if (addedProductIds.length) {
+    const { data: activeProducts, error: productError } = await db
+      .from("products")
+      .select("id")
+      .in("id", addedProductIds)
+      .eq("status", "active");
+    if (productError || (activeProducts?.length ?? 0) !== addedProductIds.length) {
+      failDraftEdit(quotationId, "Choose valid active products.");
+    }
+  }
+
+  const variationIds = [
+    ...new Set(
+      requestedItems
+        .map((item) => item.variationId)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  ];
+  if (variationIds.length) {
+    const { data: variations, error: variationError } = await db
+      .from("product_variations")
+      .select("id,product_id,status")
+      .in("id", variationIds);
+    const variationMap = new Map(
+      (variations ?? []).map((variation) => [variation.id, variation]),
+    );
+    if (
+      variationError ||
+      variationMap.size !== variationIds.length ||
+      requestedItems.some(
+        (item) =>
+          item.variationId &&
+          variationMap.get(item.variationId)?.product_id !== item.productId,
+      ) ||
+      addedItems.some(
+        (item) =>
+          item.variationId && variationMap.get(item.variationId)?.status !== "active",
+      )
+    ) {
+      failDraftEdit(
+        quotationId,
+        "Choose valid active product variations for newly added products.",
+      );
+    }
+  }
+  if (requestedLineKeys.size !== requestedItems.length) {
+    failDraftEdit(quotationId, "Each product or variation can only be added once.");
+  }
+
+  const updatePayload = {
+    actor_profile_id: profile.id,
+    requested_quotation_id: quotationId,
+    ...buildDraftQuotationUpdatePayload({
+      expectedUpdatedAt,
+      subject: cleanDraftEditText(form.get("subject"), 200) ?? "",
+      companyName: cleanDraftEditText(form.get("company_name"), 180) ?? "",
+      customerTaxIdentificationNumber:
+        cleanDraftEditText(
+          form.get("customer_tax_identification_number"),
+          100,
+        ) ?? "",
+      requiredBy: requiredBy ?? "",
+      expirationDate: expirationDate ?? "",
+      termsAndConditions: cleanDraftEditText(form.get("terms_and_conditions")) ?? "",
+      paymentTerms: cleanDraftEditText(form.get("payment_terms"), 2000) ?? "",
+      deliveryInformation:
+        cleanDraftEditText(form.get("delivery_information"), 2000) ?? "",
+      customerNotes: cleanDraftEditText(form.get("message")) ?? "",
+      internalNotes: cleanDraftEditText(form.get("internal_notes")) ?? "",
+      discountAmount,
+      taxAmount,
+      items: requestedItems,
+    }),
+  };
+  const saved = await runDraftQuotationUpdate(
+    {
+      mutate: async (name, payload) => {
+        const { data, error } = await db.rpc(name, payload);
+        return !error && Boolean(data);
+      },
+      audit: () =>
+        writeAuditLog({
+          actorId: profile.id,
+          actorRole: profile.role,
+          targetProfileId: quotation.profile_id,
+          action: "quotation.draft_updated",
+          module: "quotations",
+          entityType: "quotation_request",
+          entityId: quotationId,
+          description: "Draft quotation content updated.",
+          newValues: { item_count: requestedItems.length },
+        }),
+      revalidate: () => {
+        revalidatePath("/admin/quotations");
+        revalidatePath(`/admin/quotations/${quotationId}/manage`);
+        revalidatePath(`/admin/quotations/${quotationId}/edit`);
+        revalidatePath(`/admin/quotations/${quotationId}`);
+        revalidatePath("/account/quotations");
+      },
+    },
+    updatePayload,
+  );
+  if (!saved) {
+    failDraftEdit(
+      quotationId,
+      "Quotation could not be saved because it changed or is no longer a Draft.",
+      "stale",
+    );
+  }
+  redirect(`${draftEditPath(quotationId)}?success=Draft%20quotation%20saved.`);
+}
+
+export async function updateQuotationAction(
+  quotationId: string,
+  _form: FormData,
+) {
+  void _form;
+  const { profile, permissions } = await requirePermission("quotations.edit");
+  const scope = resolveQuotationViewScope(profile.role, permissions);
+  if (!scope) {
+    redirect("/admin/quotations?error=Quotation%20access%20denied.");
+  }
+  const db = createSupabaseAdminClient();
+  let quotationQuery = db
+    .from("quotation_requests")
+    .select("id,status")
+    .eq("id", quotationId);
+  if (scope === "own") {
     quotationQuery = quotationQuery.eq("created_by", profile.id);
   }
   const { data: quotation } = await quotationQuery.maybeSingle();
   if (!quotation) {
     redirect("/admin/quotations?error=Quotation%20not%20found.");
   }
-  const { error } = await db
-    .from("quotation_requests")
-    .update({
-      status,
-      assigned_to: profile.id,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", quotationId);
-  if (error) {
-    redirect("/admin/quotations?error=Unable%20to%20update%20quotation.");
+  if (isQuotationImmutable(quotation.status)) {
+    redirect("/admin/quotations?error=An%20immutable%20quotation%20cannot%20be%20updated.");
   }
-
-  await writeAuditLog({
-    actorId: profile.id,
-    actorRole: profile.role,
-    action: "quotation.status_updated",
-    module: "quotations",
-    entityType: "quotation_request",
-    entityId: quotationId,
-    description: `Quotation status changed to ${status}.`,
-    newValues: { status },
-  });
-  revalidatePath("/admin/quotations");
-  redirect("/admin/quotations?success=Quotation%20updated.");
+  redirect("/admin/quotations?error=Use%20a%20dedicated%20quotation%20workflow%20action.");
 }

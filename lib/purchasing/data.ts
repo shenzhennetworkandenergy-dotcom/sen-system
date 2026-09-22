@@ -78,27 +78,51 @@ export async function getPurchaseDashboard(params: PurchaseListParams) {
 
 export async function getPurchaseOrder(id: string) {
   const db = createSupabaseAdminClient();
-  const [orderResult, itemsResult, eventsResult, receiptsResult, inboundShipmentResult, carriersResult] = await Promise.all([
+  const [orderResult, itemsResult, eventsResult, receiptsResult, inboundShipmentResult, carriersResult, allCarriersResult] = await Promise.all([
     db.from("purchase_orders").select("*,suppliers(*),warehouses:destination_warehouse_id(id,code,name,address,country_code,country_name)").eq("id", id).maybeSingle(),
     db.from("purchase_order_items").select("*,products(id,name,sku,serial_tracking_required),product_variations(id,sku,combination_key)").eq("purchase_order_id", id).order("created_at"),
     db.from("purchase_order_status_events").select("id,previous_status,new_status,note,created_at,profiles:actor_profile_id(full_name,email)").eq("purchase_order_id", id).order("created_at", { ascending: false }),
     db.from("purchase_receipts").select("id,receipt_number,receipt_date,supplier_delivery_reference,supplier_invoice_reference,status,created_at,profiles:received_by(full_name,email),purchase_receipt_items(id,purchase_order_item_id,quantity_received,serial_generation_batch_id)").eq("purchase_order_id", id).order("created_at", { ascending: false }),
     db.from("purchase_inbound_shipments").select("*").eq("purchase_order_id", id).maybeSingle(),
-    db.from("purchase_carriers").select("id,name").eq("is_active", true).order("name"),
+    db.from("purchase_carriers").select("id,name").eq("status", "active").order("name"),
+    db.from("purchase_carriers").select("id,name,phone_number,address,description,status").order("name"),
   ]);
-  const error = orderResult.error ?? itemsResult.error ?? eventsResult.error ?? receiptsResult.error ?? inboundShipmentResult.error ?? carriersResult.error;
+  const error = orderResult.error ?? itemsResult.error ?? eventsResult.error ?? receiptsResult.error ?? inboundShipmentResult.error ?? carriersResult.error ?? allCarriersResult.error;
   if (error) {
     console.error("Purchase order query failed", { code: error.code, message: error.message, orderId: id });
     throw new Error("Unable to load purchase order.");
   }
   if (!orderResult.data) return null;
+
+  const purchaseItemIds = (itemsResult.data ?? []).map((item) => item.id);
+  const serialsResult = purchaseItemIds.length
+    ? await db
+        .from("serial_numbers")
+        .select(
+          "id,sen_serial,status,condition,warehouse_id,generation_batch_id,purchase_order_item_id,generated_at,received_at",
+        )
+        .in("purchase_order_item_id", purchaseItemIds)
+        .order("generated_at", { ascending: true })
+    : { data: [], error: null };
+
+  if (serialsResult.error) {
+    console.error("Purchase order SEN serial query failed", {
+      code: serialsResult.error.code,
+      message: serialsResult.error.message,
+      orderId: id,
+    });
+    throw new Error("Unable to load purchase-order SEN serials.");
+  }
+
   return {
     order: orderResult.data,
     items: itemsResult.data ?? [],
+    serials: serialsResult.data ?? [],
     events: eventsResult.data ?? [],
     receipts: receiptsResult.data ?? [],
     inboundShipment: inboundShipmentResult.data,
     carriers: carriersResult.data ?? [],
+    allCarriers: allCarriersResult.data ?? [],
   };
 }
 

@@ -34,6 +34,7 @@ export async function createBasicCustomerRecord(
       full_name: input.fullName,
       company_name: input.companyName,
       phone: input.phone,
+      country: input.country,
       role: "customer",
       status: "active",
     },
@@ -57,6 +58,7 @@ export async function createBasicCustomerRecord(
       full_name: input.fullName,
       company_name: input.companyName,
       phone: input.phone,
+      country: input.country,
       role: "customer",
       status: "active",
     })
@@ -75,9 +77,10 @@ export async function createBasicCustomerRecord(
     profile_id: customerId,
     recipient_name: input.fullName,
     phone: input.phone,
+    alternate_phone: input.alternatePhone,
     address_line_1: input.addressLine1,
-    city: "Not specified",
-    country_code: "BD",
+    city: input.city,
+    country_code: input.countryCode,
     is_default_shipping: true,
   });
 

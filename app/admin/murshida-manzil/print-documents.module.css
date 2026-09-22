@@ -1,0 +1,344 @@
+.documentScreen {
+  min-height: 100vh;
+  padding: 24px;
+  background: linear-gradient(145deg, #e7f5ff, #f8fcff 52%, #d8efff);
+  color: #0a355d;
+}
+
+.document {
+  position: relative;
+  width: min(100%, 297mm);
+  min-height: 190mm;
+  margin: 0 auto;
+  overflow: hidden;
+  border: 3px solid #168ed1;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 24px 65px rgb(8 75 125 / 18%);
+  print-color-adjust: exact;
+  -webkit-print-color-adjust: exact;
+}
+
+.letterhead {
+  position: relative;
+  display: grid;
+  grid-template-columns: 120px 210px minmax(260px, 1fr) 150px;
+  align-items: center;
+  gap: 18px;
+  min-height: 155px;
+  padding: 18px 28px 22px;
+  overflow: hidden;
+  border-bottom: 2px solid #8fd6f5;
+  background: linear-gradient(120deg, #fafdff 10%, #e3f6ff 55%, #d2efff);
+}
+
+.letterhead::before,
+.letterhead::after {
+  position: absolute;
+  content: "";
+  pointer-events: none;
+}
+
+.letterhead::before {
+  inset: 0 0 auto auto;
+  width: 30%;
+  height: 75%;
+  border-radius: 0 0 0 100%;
+  background: linear-gradient(145deg, #087fc3, #074b89);
+  opacity: 0.96;
+}
+
+.letterhead::after {
+  right: 8%;
+  bottom: -46px;
+  width: 38%;
+  height: 90px;
+  border-radius: 50%;
+  background: rgb(87 194 241 / 24%);
+}
+
+.seal,
+.architecture,
+.brand,
+.generated {
+  position: relative;
+  z-index: 1;
+}
+
+.seal {
+  width: 112px;
+  height: 112px;
+  object-fit: contain;
+  mix-blend-mode: multiply;
+}
+
+.architecture {
+  width: 100%;
+  height: 120px;
+  object-fit: contain;
+  mix-blend-mode: multiply;
+}
+
+.brand {
+  text-align: center;
+}
+
+.brand h1 {
+  margin: 0;
+  color: #07578e;
+  font-size: clamp(30px, 4vw, 56px);
+  font-weight: 900;
+  letter-spacing: -0.04em;
+  line-height: 0.95;
+}
+
+.brand h2 {
+  display: inline-block;
+  margin: 10px 0 5px;
+  padding: 7px 28px;
+  border-radius: 999px;
+  color: #fff;
+  background: linear-gradient(90deg, #087fc3, #0a699f);
+  font-size: clamp(17px, 2vw, 26px);
+  font-weight: 800;
+}
+
+.brand p {
+  margin: 0;
+  color: #074d81;
+  font-size: 15px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+}
+
+.generated {
+  align-self: end;
+  padding: 10px 12px;
+  border: 1px solid #8ecceb;
+  border-radius: 10px;
+  background: rgb(255 255 255 / 78%);
+  color: #164c72;
+  font-size: 12px;
+  text-align: center;
+}
+
+.generated strong { display: block; margin-top: 3px; color: #073f6b; font-size: 14px; }
+.content { padding: 22px 30px 86px; }
+
+.voucherMeta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.metaCard,
+.detailCard,
+.infoCard,
+.summaryCard {
+  border: 1px solid #a7d8f1;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #fff, #eef9ff);
+}
+
+.metaCard { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; padding: 12px 16px; }
+.metaCard span, .detailCard dt, .infoCard span, .summaryCard span { color: #52758e; font-size: 12px; font-weight: 700; }
+.metaCard strong { color: #064f84; font-size: 18px; overflow-wrap: anywhere; }
+
+.voucherDetails {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.detailCard { min-height: 76px; padding: 12px 14px; }
+.detailCardWide { grid-column: span 2; }
+.detailCardFull { grid-column: 1 / -1; }
+.detailCard dd { margin: 6px 0 0; color: #0a355d; font-size: 15px; font-weight: 700; overflow-wrap: anywhere; }
+
+.amountTable {
+  width: 100%;
+  margin-top: 20px;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.amountTable th { padding: 10px 14px; color: #fff; background: linear-gradient(90deg, #056aa8, #0798c8); text-align: left; }
+.amountTable th:last-child, .amountTable td:last-child { text-align: right; }
+.amountTable td { padding: 14px; border: 1px solid #abd7ed; }
+.amountTable tfoot td { color: #053e6c; background: #e4f5fd; font-size: 20px; font-weight: 900; }
+
+.sectionTitle {
+  margin: 0 0 10px;
+  padding: 8px 14px;
+  border-left: 5px solid #0787c7;
+  border-radius: 8px;
+  color: #074b7d;
+  background: linear-gradient(90deg, #d9f1ff, #f8fcff);
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.reportControls {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.5fr) repeat(3, minmax(130px, 1fr)) auto auto auto;
+  align-items: end;
+  gap: 10px;
+  margin-bottom: 18px;
+  padding: 15px;
+  border: 1px solid #a6d9f2;
+  border-radius: 12px;
+  background: #ebf8ff;
+}
+
+.controlLabel { display: grid; gap: 5px; color: #164f77; font-size: 12px; font-weight: 800; }
+.controlLabel input, .controlLabel select { min-width: 0; height: 42px; padding: 0 11px; border: 1px solid #89c5e6; border-radius: 8px; background: #fff; color: #0a355d; }
+.primaryButton, .secondaryButton { display: inline-flex; min-height: 42px; align-items: center; justify-content: center; padding: 0 16px; border-radius: 8px; font-size: 13px; font-weight: 900; white-space: nowrap; }
+.primaryButton { border: 1px solid #07578e; color: #fff; background: linear-gradient(135deg, #087fc3, #07548f); }
+.secondaryButton { border: 1px solid #318ec2; color: #07578e; background: #fff; }
+.printAction { position: relative; z-index: 2; }
+.document > .printAction { position: absolute; top: 22px; right: 26px; }
+.printAction button { min-height: 42px; border-radius: 8px; background: #073f6b; }
+
+.ownerInfo { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.infoCard { min-height: 92px; padding: 13px; }
+.infoCard strong { display: block; margin-top: 8px; color: #073f6b; font-size: 17px; overflow-wrap: anywhere; }
+.statusPill { display: inline-flex !important; width: fit-content; padding: 4px 14px; border-radius: 999px; color: #fff !important; background: #0a9668; }
+
+.summaryGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 16px; }
+.summaryCard { padding: 16px 20px; }
+.summaryCard strong { display: block; margin-top: 5px; color: #07578e; font-size: 28px; }
+.summaryCard p { margin: 4px 0 0; color: #54748b; font-size: 12px; }
+.summaryHighlight { border-color: #75cdb0; background: linear-gradient(135deg, #e7fbf4, #f8fffc); }
+.summaryHighlight strong { color: #08795a; }
+
+.monthlySection { margin-top: 18px; }
+.monthBlock { margin-top: 12px; border: 1px solid #9ed3ed; border-radius: 10px; overflow: hidden; break-inside: avoid; }
+.monthBlock summary { padding: 11px 14px; cursor: pointer; color: #073f6b; background: #e0f3ff; font-weight: 900; }
+.tableWrap { overflow-x: auto; }
+.reportTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+.reportTable th { padding: 9px 8px; color: #07517f; background: #eef9ff; text-align: left; white-space: nowrap; }
+.reportTable td { padding: 10px 8px; border-top: 1px solid #b8dcef; color: #183f5b; vertical-align: top; }
+.reportTable th:nth-last-child(-n+3), .reportTable td:nth-last-child(-n+3) { text-align: right; }
+.monthlyTotal { margin: 0; padding: 10px 14px; border-top: 1px solid #9ed3ed; color: #073f6b; background: #f4fbff; font-weight: 900; text-align: right; }
+
+.grandTotal {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-top: 18px;
+  padding: 16px 20px;
+  border: 1px solid #79bee1;
+  border-radius: 12px;
+  color: #073f6b;
+  background: linear-gradient(90deg, #eef9ff, #d7effd);
+  font-size: 18px;
+  font-weight: 900;
+  break-inside: avoid;
+}
+
+.grandTotal strong { min-width: 280px; padding: 10px 22px; border-radius: 8px; color: #fff; background: linear-gradient(135deg, #087fc3, #07548f); font-size: 28px; text-align: center; }
+.emptyState { padding: 28px; border: 1px solid #acd8ef; border-radius: 10px; color: #52758e; background: #f7fcff; text-align: center; }
+
+.signatures {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 44px;
+  margin-top: 46px;
+  padding: 16px 95px 6px 0;
+  break-inside: avoid;
+}
+
+.signature { padding-top: 7px; border-top: 1px solid #0a355d; color: #0a355d; font-size: 12px; font-weight: 800; text-align: center; }
+.signature small { display: block; color: #5b7587; font-weight: 600; }
+.signatureSeal { position: absolute; right: 0; bottom: -6px; width: 82px; height: 82px; object-fit: contain; mix-blend-mode: multiply; }
+
+.footer {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  min-height: 48px;
+  padding: 20px 32px 8px;
+  overflow: hidden;
+  color: #fff;
+  background: linear-gradient(175deg, #70d2f4 0 25%, #0785c7 26% 55%, #064c88 56%);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+}
+
+@media (max-width: 980px) {
+  .documentScreen { padding: 10px; overflow-x: auto; }
+  .letterhead { grid-template-columns: 86px 130px minmax(240px, 1fr); }
+  .generated { grid-column: 1 / -1; justify-self: end; }
+  .seal { width: 80px; height: 80px; }
+  .architecture { height: 90px; }
+  .reportControls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ownerInfo { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .voucherDetails { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 640px) {
+  .letterhead { grid-template-columns: 72px 1fr; padding: 14px; }
+  .architecture { display: none; }
+  .brand { text-align: left; }
+  .generated { display: none; }
+  .content { padding: 16px 14px 80px; }
+  .reportControls, .ownerInfo, .summaryGrid, .voucherMeta, .voucherDetails { grid-template-columns: 1fr; }
+  .detailCardWide { grid-column: auto; }
+  .grandTotal { align-items: stretch; flex-direction: column; }
+  .grandTotal strong { min-width: 0; }
+  .signatures { grid-template-columns: 1fr; gap: 36px; padding-right: 0; }
+  .signatureSeal { display: none; }
+}
+
+@media print {
+  @page { size: A4 landscape; margin: 8mm; }
+  :global(body):has(.documentScreen) { background: #fff !important; }
+  :global(body):has(.documentScreen) :global(nav),
+  :global(body):has(.documentScreen) :global(aside) { display: none !important; }
+  .documentScreen { min-height: 0; padding: 0; background: #fff; }
+  .document { width: 100%; min-height: 0; height: auto; margin: 0; overflow: visible; border-width: 1.5px; border-radius: 0; box-shadow: none; }
+  .content { padding: 8px 14px 5px; }
+  .letterhead { min-height: 90px; padding: 8px 14px 10px; grid-template-columns: 70px 110px minmax(220px, 1fr) 100px; }
+  .seal { width: 70px; height: 70px; }
+  .architecture { height: 72px; }
+  .brand h1 { font-size: 30px; }
+  .brand h2 { margin-top: 4px; padding: 4px 16px; font-size: 16px; }
+  .brand p { font-size: 10px; }
+  .sectionTitle { margin-bottom: 6px; padding: 5px 10px; font-size: 14px; }
+  .voucherMeta { gap: 6px; margin-bottom: 8px; }
+  .metaCard { padding: 7px 10px; }
+  .metaCard strong { font-size: 14px; }
+  .voucherDetails { gap: 6px; }
+  .detailCard { min-height: 0; padding: 7px 9px; }
+  .detailCard dd { margin-top: 3px; font-size: 12px; }
+  .amountTable { margin-top: 10px; font-size: 11px; }
+  .amountTable th, .amountTable td { padding: 7px 9px; }
+  .ownerInfo { gap: 6px; }
+  .infoCard { min-height: 0; padding: 7px 9px; }
+  .infoCard strong { margin-top: 3px; font-size: 13px; }
+  .summaryGrid { gap: 7px; margin-top: 8px; }
+  .summaryCard { padding: 8px 12px; }
+  .summaryCard strong { font-size: 20px; }
+  .monthlySection { margin-top: 8px; }
+  .monthBlock { margin-top: 6px; }
+  .monthBlock summary { padding: 6px 10px; }
+  .reportControls, .printAction, .printAction button { display: none !important; }
+  .ownerInfo { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .voucherDetails { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .monthBlock, .summaryCard, .infoCard, .voucherMeta, .voucherDetails { break-inside: avoid; }
+  .tableWrap { overflow: visible; }
+  .reportTable { font-size: 10px; }
+  .reportTable th, .reportTable td { padding: 4px 6px; }
+  .monthlyTotal { padding: 6px 10px; }
+  .grandTotal { margin-top: 8px; padding: 8px 12px; font-size: 14px; break-inside: auto; }
+  .grandTotal strong { min-width: 180px; padding: 6px 14px; font-size: 20px; }
+  .signatures { margin-top: 14px; padding: 4px 70px 2px 0; gap: 22px; break-inside: auto; }
+  .signature { padding-top: 4px; font-size: 10px; }
+  .signatureSeal { width: 58px; height: 58px; }
+  .footer { position: static; min-height: 0; padding: 6px 14px 4px; font-size: 10px; }
+}

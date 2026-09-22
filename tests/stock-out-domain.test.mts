@@ -46,19 +46,35 @@ test("rejects invoice revisions below the quantity already physically released",
   assert.equal(stockOut.isRevisionQuantityValid(8, 6), true);
 });
 
-test("validates a release against request, packing, reservation, and physical stock", () => {
+test("validates a release against authoritative remaining, reservation, and physical stock", () => {
   assert.ok(stockOut, "Stock Out domain helpers must exist.");
   if (!stockOut) return;
 
   const validRelease = {
     remaining: 5,
-    packedRemaining: 5,
     reserved: 5,
     onHand: 10,
     quantity: 3,
   };
 
   assert.equal(stockOut.validateReleaseQuantity(validRelease), null);
+  assert.equal(
+    stockOut.validateReleaseQuantity({ ...validRelease, quantity: 1 }),
+    null,
+  );
+  assert.equal(
+    stockOut.validateReleaseQuantity({ ...validRelease, quantity: 5 }),
+    null,
+  );
+  assert.equal(
+    stockOut.validateReleaseQuantity({
+      remaining: 1,
+      reserved: 1,
+      onHand: 1,
+      quantity: 1,
+    }),
+    null,
+  );
   assert.match(
     stockOut.validateReleaseQuantity({ ...validRelease, quantity: 0 }) ?? "",
     /greater than zero/i,
@@ -66,14 +82,6 @@ test("validates a release against request, packing, reservation, and physical st
   assert.match(
     stockOut.validateReleaseQuantity({ ...validRelease, quantity: 6 }) ?? "",
     /remaining/i,
-  );
-  assert.match(
-    stockOut.validateReleaseQuantity({
-      ...validRelease,
-      packedRemaining: 2,
-      quantity: 3,
-    }) ?? "",
-    /packed/i,
   );
   assert.match(
     stockOut.validateReleaseQuantity({

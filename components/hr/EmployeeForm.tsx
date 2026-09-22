@@ -55,6 +55,7 @@ export function EmployeeForm({
         <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           {[
             ["preferred_name","Preferred name"],["date_of_birth","Date of birth"],["nationality","Nationality"],["national_id","National ID"],
+            ["father_name","Father's Name"],["mother_name","Mother's Name"],
             ["passport_number","Passport number"],["personal_email","Personal email"],["personal_phone","Personal phone"],["blood_group","Blood group"],
             ["marital_status","Marital status"],["bank_name","Bank name"],["bank_account_name","Bank account name"],["bank_account_number","Bank account number"],
             ["bank_routing_number","Bank routing number"],["tax_identifier","Tax identifier"],

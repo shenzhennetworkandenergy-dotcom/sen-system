@@ -6,6 +6,10 @@ const migration = await readFile(
   "supabase/migrations/202608220001_employee_stock_out_product_release.sql",
   "utf8",
 );
+const releaseQuantityHotfixMigration = await readFile(
+  "supabase/migrations/202608240001_stock_out_authoritative_release_quantity.sql",
+  "utf8",
+).catch(() => "");
 const actions = await readFile(
   "app/employee/inventory/stock-out/actions.ts",
   "utf8",
@@ -32,8 +36,20 @@ test("Confirm Stock Out is a token-idempotent atomic RPC", () => {
   assert.match(migration, /inventory_reservations[\s\S]{0,220}for\s+update/i);
 });
 
-test("release validates packed, reserved, physical, and exact serial quantities", () => {
-  assert.match(migration, /packed_quantity[\s\S]{0,200}quantity_to_release/i);
+test("release validates authoritative remaining, reserved, physical, and exact serial quantities", () => {
+  assert.match(
+    releaseQuantityHotfixMigration,
+    /pg_get_functiondef\(function_signature::oid\)/i,
+  );
+  assert.doesNotMatch(
+    releaseQuantityHotfixMigration,
+    /raise\s+exception\s+'% has only % packed unit\(s\) eligible for release'/i,
+  );
+  assert.match(
+    releaseQuantityHotfixMigration,
+    /request_item\.remaining_quantity/i,
+  );
+  assert.match(releaseQuantityHotfixMigration, /execute\s+updated_definition/i);
   assert.match(migration, /balance\.reserved\s*<\s*quantity_to_release/i);
   assert.match(migration, /balance\.on_hand\s*<\s*quantity_to_release/i);
   assert.match(migration, /array_length\(selected_serial_ids,1\)[\s\S]{0,180}quantity_to_release/i);
@@ -96,6 +112,20 @@ test("release form uses one operation token, action state, serial search, and re
   assert.match(detail, /<StockOutReleaseForm/);
   assert.match(detail, /key=\{`\$\{detail\.request\.id\}:\$\{detail\.request\.version\}`\}/);
   assert.match(form, /disabled=\{serial\.preselected\}/);
+});
+
+test("release form derives its quantity limit from the Stock Out request remainder, not packing", () => {
+  assert.match(
+    form,
+    /Math\.max\(0,\s*item\.remainingQuantity\)/,
+  );
+  assert.match(form, /max=\{item\.remainingQuantity\}/);
+  assert.doesNotMatch(
+    form,
+    /max=\{Math\.min\(item\.remainingQuantity,\s*item\.packedRemainingQuantity\)\}/,
+  );
+  assert.match(form, /Selected:\s*\{selected\.length\}/);
+  assert.match(form, /count must exactly match this product&apos;s release quantity/i);
 });
 
 test("upstream allocation and cancellation preserve unavailable serial safety", () => {

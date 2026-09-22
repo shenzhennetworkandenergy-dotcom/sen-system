@@ -1,0 +1,64 @@
+.page {
+  --ink: #12352b;
+  --muted: #426158;
+  --paper: #fffdf8;
+  color: var(--ink);
+}
+
+.page :global(input), .page :global(select), .page :global(button) { border-radius: 0.65rem; }
+.page :global(section:not(.copy)) { border-color: #d9e5df; box-shadow: 0 12px 30px rgb(18 53 43 / 0.08); }
+.page :global(h2) { letter-spacing: -0.02em; }
+
+.receiptScreen { min-height: 100vh; padding: 1rem; background: #e8f2ed; color: #12352b; }
+.receiptToolbar { width: min(100%, 11in); margin: 0 auto 0.75rem; display: flex; justify-content: flex-end; }
+.receiptDocument { position: relative; display: flex; width: 11in; height: 4.5in; max-width: 100%; margin: 0 auto; overflow: hidden; background: var(--paper); border: 0.08in solid var(--accent); box-shadow: 0 18px 45px rgb(18 53 43 / 0.18); }
+.receiptDocument::after { content: ""; position: absolute; inset: auto 0 0; height: 0.18in; background: var(--accent); opacity: 0.16; clip-path: polygon(0 70%, 15% 25%, 35% 80%, 55% 30%, 78% 72%, 100% 18%, 100% 100%, 0 100%); pointer-events: none; }
+.rentTheme { --accent: #078a55; --accentDark: #075d42; --wash: #ecfaf2; }
+.advanceTheme { --accent: #ef5c1c; --accentDark: #a53214; --wash: #fff2e9; }
+.copy { position: relative; flex: 1 1 50%; min-width: 0; padding: 0.16in 0.22in 0.12in; background: linear-gradient(135deg, var(--wash), var(--paper) 48%); }
+.copy + .copy { border-left: 2px dashed color-mix(in srgb, var(--accent) 70%, #fff); }
+.copyLabel { display: inline-flex; padding: 0.03in 0.12in; border-radius: 0.18in; color: #fff; background: var(--accentDark); font-size: 0.13in; font-weight: 800; letter-spacing: 0.04em; }
+.brand { display: grid; grid-template-columns: 0.72in 1fr 0.72in; align-items: center; gap: 0.08in; border-bottom: 1px solid color-mix(in srgb, var(--accent) 45%, #fff); padding-bottom: 0.05in; }
+.architecture { width: 0.68in; height: 0.48in; object-fit: cover; object-position: center; mix-blend-mode: multiply; }
+.seal { width: 0.58in; height: 0.58in; object-fit: contain; justify-self: end; mix-blend-mode: multiply; }
+.brandText { text-align: center; line-height: 1; }
+.brandText strong { display: block; color: var(--accentDark); font-size: 0.22in; font-weight: 900; letter-spacing: 0.02em; }
+.brandText small { display: block; margin-top: 0.015in; font-size: 0.11in; font-weight: 700; }
+.brandText span { display: inline-block; margin-top: 0.03in; padding: 0.025in 0.11in; border-radius: 0.14in; color: #fff; background: var(--accentDark); font-size: 0.12in; font-weight: 800; }
+.title { margin: 0.05in 0 0.04in; text-align: center; color: var(--accentDark); font-size: 0.14in; font-weight: 900; letter-spacing: 0.08em; }
+.meta { display: grid; grid-template-columns: 1fr 1fr; gap: 0.02in 0.14in; margin-top: 0.03in; font-size: 0.105in; line-height: 1.25; }
+.meta p { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meta b { color: var(--accentDark); }
+.amounts { display: grid; grid-template-columns: 1fr 1fr; gap: 0.04in 0.12in; margin-top: 0.06in; padding: 0.055in 0.08in; border: 1px solid color-mix(in srgb, var(--accent) 55%, #fff); border-radius: 0.07in; background: rgb(255 255 255 / 0.65); font-size: 0.105in; }
+.amounts p { display: flex; justify-content: space-between; gap: 0.04in; margin: 0; }
+.amounts p:last-child { color: var(--accentDark); font-weight: 900; }
+.amounts span:last-child { white-space: nowrap; }
+.signatures { position: absolute; right: 0.2in; bottom: 0.12in; left: 0.2in; z-index: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 0.32in; font-size: 0.095in; text-align: center; }
+.signatureLine { padding-top: 0.02in; border-top: 1px solid var(--ink); }
+.screenNote { width: min(100%, 11in); margin: 0.5rem auto 0; color: var(--muted); font-size: 0.85rem; text-align: center; }
+.cutLine { position: absolute; inset: 0 auto 0 50%; z-index: 2; border-left: 2px dashed color-mix(in srgb, var(--accent) 70%, #fff); pointer-events: none; }
+.voucherScreen { min-height: 100vh; padding: 1rem; background: #fff7ef; color: #3a2118; }
+.voucherDocument { width: min(100%, 8.5in); margin: 0 auto; padding: 0.45in; border: 0.08in solid #d85b22; border-radius: 0.16in; background: #fffdf8; box-shadow: 0 18px 45px rgb(92 44 18 / 0.16); }
+.voucherHeader { display: flex; align-items: center; justify-content: space-between; gap: 0.25in; border-bottom: 2px solid #d85b22; padding-bottom: 0.18in; }
+.voucherHeader h1 { margin: 0; color: #a53214; font-size: 0.28in; font-weight: 900; }
+.voucherHeader h2 { margin: 0.04in 0 0; font-size: 0.16in; }
+.voucherSeal { width: 0.75in; height: 0.75in; object-fit: contain; mix-blend-mode: multiply; }
+.voucherGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.18in 0.3in; margin-top: 0.28in; }
+.voucherGrid div { border-bottom: 1px solid #edc5ae; padding-bottom: 0.08in; }
+.voucherGrid dt { color: #8d5b47; font-size: 0.1in; }
+.voucherGrid dd { margin: 0.03in 0 0; font-weight: 700; }
+.voucherSignature { margin-top: 0.65in; width: 2.2in; border-top: 1px solid #3a2118; padding-top: 0.06in; text-align: center; font-size: 0.1in; }
+
+@media (max-width: 850px) {
+  .receiptScreen { overflow-x: auto; }
+  .receiptDocument { flex: 0 0 11in; max-width: none; transform-origin: top left; }
+}
+
+@media print {
+  @page { size: 11in 4.5in; margin: 0; }
+  .receiptScreen { min-height: 0; padding: 0; background: #fff; }
+  .receiptToolbar, .screenNote { display: none !important; }
+  .receiptDocument { width: 11in; height: 4.5in; max-width: none; margin: 0; border-width: 0.06in; box-shadow: none; break-inside: avoid; page-break-after: avoid; }
+  .voucherScreen { min-height: 0; padding: 0; background: #fff; }
+  .voucherDocument { width: 8.5in; margin: 0; box-shadow: none; }
+}

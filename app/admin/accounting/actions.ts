@@ -22,6 +22,20 @@ const destination = (kind: "success" | "error", message: string, selectedDate?: 
   return `${path}?${params.toString()}`;
 };
 
+const actionErrorMessage = (error: unknown) => {
+  const message = error instanceof Error
+    ? error.message
+    : error && typeof error === "object" && "message" in error && typeof error.message === "string"
+      ? error.message
+      : "";
+  const normalized = message.trim();
+  if (!normalized) return null;
+  if (/permission denied/i.test(normalized)) return "You do not have permission to add entries to this cashbook.";
+  if (/inactive actor/i.test(normalized)) return "Your account is inactive. Ask an administrator to reactivate it.";
+  if (/schema cache|could not find the function/i.test(normalized)) return "The cashbook service is not ready. Ask an administrator to check the local database setup.";
+  return normalized;
+};
+
 export async function setCashbookOpeningBalanceAction(form: FormData) {
   const { profile } = await requireAnyPermission(cashbookEditPermissions);
   const selectedDate = normalizeCashbookDate(form.get("cashbook_date"));
@@ -35,10 +49,9 @@ export async function setCashbookOpeningBalanceAction(form: FormData) {
     });
     if (error) throw error;
   } catch (error) {
-    console.error("Cashbook opening balance update failed", { message: error instanceof Error ? error.message : "Unknown error" });
-    failure = error instanceof Error && /opening|cash|balance|closed|zero/i.test(error.message)
-      ? error.message
-      : "Unable to save the opening cash balance.";
+    const message = actionErrorMessage(error);
+    console.error("Cashbook opening balance update failed", { message: message ?? "No error details returned" });
+    failure = message ?? "The opening balance was not saved because the server returned no error details. Please contact an administrator.";
   }
   if (failure) redirect(destination("error", failure, selectedDate));
   revalidatePath(path);
@@ -56,10 +69,9 @@ export async function closeCashbookDayAction(form: FormData) {
     });
     if (error) throw error;
   } catch (error) {
-    console.error("Cashbook day close failed", { message: error instanceof Error ? error.message : "Unknown error" });
-    failure = error instanceof Error && /cashbook|closed|date|balance/i.test(error.message)
-      ? error.message
-      : "Unable to close this cashbook day.";
+    const message = actionErrorMessage(error);
+    console.error("Cashbook day close failed", { message: message ?? "No error details returned" });
+    failure = message ?? "The cashbook day was not closed because the server returned no error details. Please contact an administrator.";
   }
   if (failure) redirect(destination("error", failure, selectedDate));
   revalidatePath(path);
@@ -82,10 +94,9 @@ export async function createCashbookDescriptionAction(form: FormData) {
     });
     if (error) throw error;
   } catch (error) {
-    console.error("Cashbook description creation failed", { message: error instanceof Error ? error.message : "Unknown error" });
-    failure = error instanceof Error && /description|খাত|income|expense|already exists|character/i.test(error.message)
-      ? error.message
-      : "Unable to create the cashbook description.";
+    const message = actionErrorMessage(error);
+    console.error("Cashbook description creation failed", { message: message ?? "No error details returned" });
+    failure = message ?? "The cashbook description was not created because the server returned no error details. Please contact an administrator.";
   }
   if (failure) redirect(destination("error", failure, selectedDate));
   revalidatePath(path);
@@ -115,10 +126,9 @@ export async function createCashbookEntryAction(form: FormData) {
     });
     if (error) throw error;
   } catch (error) {
-    console.error("Cashbook entry creation failed", { message: error instanceof Error ? error.message : "Unknown error" });
-    failure = error instanceof Error && /description|খাত|remark|amount|payment|cash|bank|mfs|account|date|time/i.test(error.message)
-      ? error.message
-      : "Unable to save the cashbook entry.";
+    const message = actionErrorMessage(error);
+    console.error("Cashbook entry creation failed", { message: message ?? "No error details returned" });
+    failure = message ?? "The cashbook entry was not saved because the server returned no error details. Please contact an administrator.";
   }
   if (failure) redirect(destination("error", failure, selectedDate));
   revalidatePath(path);

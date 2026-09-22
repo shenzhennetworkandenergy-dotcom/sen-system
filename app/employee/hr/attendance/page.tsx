@@ -1,16 +1,19 @@
 import { connection } from "next/server";
 import { AttendanceClockControls } from "@/components/hr/AttendanceClockControls";
+import { EmployeeAttendanceMonthlyCalendar } from "@/components/hr/EmployeeAttendanceMonthlyCalendar";
 import { EmployeeHrShell } from "@/components/hr/EmployeeHrShell";
 import { routes } from "@/lib/constants/routes";
 import { formatAttendanceVariance, resolveAttendanceWorkDate } from "@/lib/hr/attendance";
 import { getSelfAttendanceAvailability } from "@/lib/hr/self-attendance";
+import { getEmployeeMonthlyAttendance } from "@/lib/hr/attendance-monthly.server";
 import { getEmployeeHrWorkspace } from "@/lib/hr/self-service";
 
 export const dynamic = "force-dynamic";
 
-export default async function EmployeeAttendancePage({ searchParams }: { searchParams: Promise<{ success?: string; error?: string }> }) {
+export default async function EmployeeAttendancePage({ searchParams }: { searchParams: Promise<{ success?: string; error?: string; month?: string }> }) {
   await connection();
-  const [data,params] = await Promise.all([getEmployeeHrWorkspace(),searchParams]);
+  const params = await searchParams;
+  const [data, monthly] = await Promise.all([getEmployeeHrWorkspace(), getEmployeeMonthlyAttendance(params.month)]);
   const instant = new Date().toISOString();
   const openAttendance = data.attendance.find((row) => {
     if (!row.check_in || row.check_out) return false;
@@ -32,6 +35,7 @@ export default async function EmployeeAttendancePage({ searchParams }: { searchP
       recordedTimezone={todayAttendance?.timezone ?? null}
     />
     <div className="mb-4 flex justify-end"><a href={routes.employeeHrAttendanceCorrection} className="rounded-lg bg-[var(--primary)] px-4 py-2 font-semibold text-[var(--primary-foreground)]">Request correction</a></div>
+    <EmployeeAttendanceMonthlyCalendar month={monthly.month} days={monthly.days} summary={monthly.summary} />
     <section className="overflow-x-auto rounded-2xl border bg-[var(--surface)] shadow-sm">
       <table className="w-full min-w-[900px] text-left text-sm">
         <thead className="bg-[var(--muted-surface)]"><tr><th className="p-3">Date</th><th>Status</th><th>Check in</th><th>Arrival</th><th>Check out</th><th>Departure</th><th>Timezone</th><th>Source</th><th>Notes</th></tr></thead>

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { connection } from "next/server";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
+import { QuotationStatusBadge } from "@/components/quotations/QuotationStatusBadge";
 import { requireQuotationView } from "@/lib/quotations/access";
 import { canOpenQuotationDocument } from "@/lib/quotations/access-policy";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -9,6 +10,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 export const dynamic = "force-dynamic";
 
 const statuses = [
+  "draft",
   "submitted",
   "reviewing",
   "quoted",
@@ -18,6 +20,7 @@ const statuses = [
   "approved",
   "rejected",
   "expired",
+  "converted_to_sale",
   "converted_to_invoice",
   "closed",
 ];
@@ -32,6 +35,8 @@ export default async function AdminQuotationsPage({
     await requireQuotationView();
   const canCreate =
     profile.role === "admin" || permissions.has("quotations.create");
+  const canEdit =
+    profile.role === "admin" || permissions.has("quotations.edit");
   const canOpenDocument = canOpenQuotationDocument(
     profile.role,
     permissions,
@@ -122,12 +127,11 @@ export default async function AdminQuotationsPage({
                     {customer?.phone ?? "No phone"}
                   </p>
                 </div>
-                <span className="rounded-full bg-[var(--muted-surface)] px-3 py-1.5 text-sm font-semibold capitalize">
-                  {quotation.status.replaceAll("_", " ")}
-                </span>
+                <QuotationStatusBadge status={quotation.status} />
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 <a href={`/admin/quotations/${quotation.id}/manage`} className="inline-flex rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-semibold text-[var(--primary-foreground)]">Manage quotation</a>
+                {canEdit && quotation.status === "draft" ? <a href={`/admin/quotations/${quotation.id}/edit`} className="inline-flex rounded-lg border px-3 py-2 text-sm font-semibold">Edit draft</a> : null}
                 {canOpenDocument ? <a href={`/admin/quotations/${quotation.id}`} className="inline-flex rounded-lg border px-3 py-2 text-sm font-semibold">Print quotation</a> : null}
               </div>
               <p className="mt-3">{quotation.message || "No additional notes."}</p>

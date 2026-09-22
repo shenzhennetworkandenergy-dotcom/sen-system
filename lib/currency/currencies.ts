@@ -22,17 +22,12 @@ const fallbackCodes = [
   "YER", "ZAR", "ZMW", "ZWL",
 ] as const;
 
-const supportedValuesOf = (
-  Intl as typeof Intl & { supportedValuesOf?: (key: "currency") => string[] }
-).supportedValuesOf;
-
-const codes = supportedValuesOf
-  ? supportedValuesOf("currency")
-  : [...fallbackCodes];
-
 const displayNames = new Intl.DisplayNames(["en"], { type: "currency" });
 
-export const currencyOptions: CurrencyOption[] = [...new Set(codes)]
+// Keep the rendered option set stable between the bundled Node runtime and
+// the user's browser. Their ICU currency lists can differ (for example SLE
+// versus the retired SLL), which otherwise causes React hydration failures.
+export const currencyOptions: CurrencyOption[] = [...fallbackCodes]
   .map((code) => ({ code, name: displayNames.of(code) ?? code }))
   .sort((left, right) => left.code.localeCompare(right.code));
 

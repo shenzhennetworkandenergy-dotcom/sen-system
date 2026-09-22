@@ -29,6 +29,9 @@
     "test:product-media-upload": "node scripts/verify-product-media-upload.mjs",
     "test:sale-product-search": "node scripts/verify-sale-product-search.mjs",
     "test:quotation-document": "node scripts/verify-quotation-document.mjs",
+    "test:native": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/stock-out-migration.test.mts tests/stock-out-native-schema.test.mts tests/quotation-to-sale-native-schema.test.mts tests/receivables-native-schema.test.mts",
+    "test:receivables": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/receivables-*.test.mts",
+    "test:receivables:database": "node scripts/verify-receivables-database.mjs",
     "test:standalone": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/*.mts",
     "test:crm": "node scripts/verify-crm.mjs",
     "test:variable-products": "node scripts/verify-variable-products.mjs",
@@ -52,7 +55,11 @@
     "products:stage-woocommerce": "node scripts/import-woocommerce-products.mjs --stage",
     "products:import-woocommerce": "node scripts/import-woocommerce-products.mjs --import",
     "products:verify-woocommerce": "node scripts/import-woocommerce-products.mjs --verify",
-    "test:stock-out": "node --env-file=.env.local --env-file-if-exists=.env.stock-out.local scripts/verify-stock-out-database.mjs"
+    "native:schema": "node scripts/build-native-schema.mjs",
+    "test:native-offline": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/native-*.test.mts tests/local-auth.test.mts tests/local-storage.test.mts tests/deployment-output-mode.test.mts",
+    "test:business-card-ocr": "node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON tests/business-card-ocr.test.mts tests/business-card-ocr-workflows.test.mts tests/quotation-customer-creation.test.mts",
+    "test:stock-out": "node --env-file=.env.local --env-file-if-exists=.env.stock-out.local scripts/verify-stock-out-database.mjs",
+    "test:quotation-to-sale-database": "node scripts/verify-quotation-to-sale-database.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",
@@ -62,18 +69,21 @@
     "qrcode": "^1.5.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "sanitize-html": "^2.17.0"
+    "sanitize-html": "^2.17.0",
+    "tesseract.js": "7.0.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/bwip-js": "^3.2.3",
     "@types/node": "^20",
+    "@types/pg": "^8.20.3",
     "@types/qrcode": "^1.5.5",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/sanitize-html": "^2.16.0",
     "eslint": "^9.39.2",
     "eslint-config-next": "16.2.12",
+    "pg": "^8.23.0",
     "supabase": "^2.109.1",
     "tailwindcss": "^4",
     "typescript": "^5"

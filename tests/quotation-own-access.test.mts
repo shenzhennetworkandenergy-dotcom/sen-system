@@ -70,7 +70,8 @@ test("server routes and actions apply creator ownership consistently", () => {
   }
   assert.match(actions, /created_by:\s*profile\.id/);
   assert.match(actions, /quotations\.view_own/);
-  assert.match(workflow, /mustRestrictQuotationToCreator/);
+  assert.match(workflow, /resolveQuotationViewScope/);
+  assert.match(workflow, /if \(scope === "own"\)/);
   assert.match(workflow, /\.eq\("created_by",\s*profile\.id\)/);
   assert.match(navigation, /requiredPermission:"quotations\.view_own"/);
 });

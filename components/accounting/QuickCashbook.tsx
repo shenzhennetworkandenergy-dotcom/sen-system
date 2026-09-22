@@ -150,6 +150,12 @@ export function QuickCashbook({
 
       <AuditStatusMessage day={day} />
 
+      {!readOnly && !day.isClosed && entries.length > 0 ? (
+        <p role="status" className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-4 text-center font-bold text-amber-900">
+          Entries are saved in your personal cashbook. Close this day when finished to send it to Admin Cashbook Audit.
+        </p>
+      ) : null}
+
       {canCreate && !readOnly ? (
         <div className="print:hidden">
           {canCreateDescription ? <div className="mt-5 flex justify-end">

@@ -22,7 +22,10 @@ export default async function AccountingPage({ searchParams }: { searchParams: P
   const currentBusinessDateTime = getBusinessDateTimeLocal();
   const selectedDate = normalizeCashbookDate(params.cashbook_date, today);
   const canViewLedger = profile.role === "admin" || permissions.has("accounting.view");
-  const data = await getAccountingDashboard(selectedDate, { includeLedger: canViewLedger });
+  const data = await getAccountingDashboard(selectedDate, {
+    includeLedger: canViewLedger,
+    cashbookOwnerId: profile.id,
+  });
   const canManageCashbook = profile.role === "admin" || permissions.has("accounting.create_entry") || permissions.has("accounting.manage_cashbook");
   const canCreateJournal = profile.role === "admin" || permissions.has("accounting.create_entry");
   const canPost = profile.role === "admin" || permissions.has("accounting.approve_entry");

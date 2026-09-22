@@ -1,5 +1,7 @@
 import { redirect } from "next/navigation";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { backendMode } from "@/lib/backend/config";
+import { getLocalSession } from "@/lib/auth/local-session";
 import { dashboardPathForRole, routes, type AccountRole, type AccountStatus } from "@/lib/constants/routes";
 
 export type Profile = {
@@ -13,6 +15,7 @@ function logSafeAuthDiagnostic(message: string, details?: Record<string, string 
 }
 
 export async function getCurrentProfile() {
+  if (backendMode() === "native") return getLocalSession();
   const supabase = await createSupabaseServerClient();
   const { data: { user }, error: userError } = await supabase.auth.getUser();
 
