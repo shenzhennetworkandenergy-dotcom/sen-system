@@ -2,6 +2,7 @@ import "server-only";
 
 import { cookies } from "next/headers";
 
+import { localDatabaseConfig } from "@/lib/backend/config";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { queryLocal, withLocalTransaction } from "@/lib/postgres/pool";
 import { createSessionToken, hashPassword, hashSessionToken, verifyPassword } from "@/lib/auth/local-credentials";
@@ -39,7 +40,7 @@ export async function createLocalSession(profileId: string) {
   const expiresAt = new Date(Date.now() + sessionDurationMs);
   await queryLocal(`insert into public.local_user_sessions(profile_id,token_hash,expires_at) values($1,$2,$3)`, [profileId, hashSessionToken(token), expiresAt]);
   const store = await cookies();
-  store.set(cookieName, token, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production" && process.env.SEN_PUBLIC_ORIGIN?.startsWith("https://"), path: "/", expires: expiresAt });
+  store.set(cookieName, token, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production" && localDatabaseConfig().publicOrigin.protocol === "https:", path: "/", expires: expiresAt });
 }
 
 export async function getLocalSession() {

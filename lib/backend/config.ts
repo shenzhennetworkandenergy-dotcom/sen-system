@@ -14,6 +14,10 @@ export type LocalDatabaseConfig = {
 
 const localDatabaseHosts = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 
+function isCloudPreview(environment: Environment) {
+  return String(environment.SEN_RUNTIME_SCOPE ?? "offline").trim().toLowerCase() === "cloud-preview";
+}
+
 export function backendMode(environment: Environment = process.env): BackendMode {
   const value = String(environment.SEN_BACKEND ?? "supabase").trim().toLowerCase();
   if (value === "native" || value === "supabase") return value;
@@ -35,7 +39,7 @@ export function localDatabaseConfig(environment: Environment = process.env): Loc
   if (!new Set(["postgres:", "postgresql:"]).has(databaseUrl.protocol)) {
     throw new Error("DATABASE_URL must use PostgreSQL.");
   }
-  if (!localDatabaseHosts.has(databaseUrl.hostname)) {
+  if (!localDatabaseHosts.has(databaseUrl.hostname) && !isCloudPreview(environment)) {
     throw new Error("DATABASE_URL must use a local database host on the Windows server.");
   }
 
@@ -54,7 +58,7 @@ export function localDatabaseConfig(environment: Environment = process.env): Loc
     databaseUrl,
     sessionSecret,
     dataRoot: required(environment, "SEN_DATA_ROOT"),
-    publicOrigin: new URL(required(environment, "SEN_PUBLIC_ORIGIN")),
+    publicOrigin: new URL(String(environment.SEN_PUBLIC_ORIGIN ?? environment.RENDER_EXTERNAL_URL ?? "").trim() || required(environment, "SEN_PUBLIC_ORIGIN")),
     postgrestUrl,
     bindHost: String(environment.SEN_BIND_HOST ?? "0.0.0.0").trim() || "0.0.0.0",
     port,

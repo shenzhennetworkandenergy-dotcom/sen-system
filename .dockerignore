@@ -1,0 +1,8 @@
+.git
+.next
+.offline-test
+node_modules
+work
+vendor
+.env*
+npm-debug.log*

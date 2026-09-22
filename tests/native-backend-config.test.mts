@@ -48,6 +48,22 @@ test("native mode accepts loopback PostgreSQL and normalizes LAN settings", () =
   assert.equal(config.postgrestUrl.origin, "http://127.0.0.1:3002");
 });
 
+test("cloud preview mode accepts an isolated managed PostgreSQL host", () => {
+  const config = localDatabaseConfig({
+    SEN_BACKEND: "native",
+    SEN_RUNTIME_SCOPE: "cloud-preview",
+    DATABASE_URL: "postgresql://sen_preview:secret@preview-db.internal/sen_preview",
+    SESSION_SECRET: "b".repeat(48),
+    SEN_DATA_ROOT: "/tmp/sen-data",
+    RENDER_EXTERNAL_URL: "https://sen-offline-preview.onrender.com",
+    SEN_POSTGREST_URL: "http://127.0.0.1:3002",
+    PORT: "10000",
+  });
+  assert.equal(config.databaseUrl.hostname, "preview-db.internal");
+  assert.equal(config.publicOrigin.origin, "https://sen-offline-preview.onrender.com");
+  assert.equal(config.postgrestUrl.origin, "http://127.0.0.1:3002");
+});
+
 test("Supabase remains an explicit migration-only compatibility mode", () => {
   assert.equal(backendMode({ SEN_BACKEND: "supabase" }), "supabase");
   assert.throws(() => backendMode({ SEN_BACKEND: "unknown" }), /SEN_BACKEND/i);

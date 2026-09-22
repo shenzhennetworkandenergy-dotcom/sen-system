@@ -1,0 +1,42 @@
+services:
+  - type: web
+    name: sen-offline-preview
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: codex/offline-20-tasks-verified
+    dockerfilePath: ./Dockerfile.preview
+    autoDeployTrigger: commit
+    healthCheckPath: /login
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sen-offline-preview-db
+          property: connectionString
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: SEN_BACKEND
+        value: native
+      - key: NEXT_PUBLIC_SEN_BACKEND
+        value: native
+      - key: SEN_RUNTIME_SCOPE
+        value: cloud-preview
+      - key: SEN_DATA_ROOT
+        value: /tmp/sen-data
+      - key: SEN_POSTGREST_URL
+        value: http://127.0.0.1:3002
+      - key: SEN_BIND_HOST
+        value: 0.0.0.0
+      - key: SEN_PREVIEW_ADMIN_EMAIL
+        sync: false
+      - key: SEN_PREVIEW_ADMIN_PASSWORD
+        sync: false
+
+databases:
+  - name: sen-offline-preview-db
+    plan: free
+    region: singapore
+    databaseName: sen_preview
+    user: sen_preview
+    postgresMajorVersion: "17"
+    ipAllowList: []
