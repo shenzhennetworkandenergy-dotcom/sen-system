@@ -8,10 +8,10 @@ import test from "node:test";
 
 const browserCandidates = process.platform === "win32"
   ? [
-      "C:/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe",
       "C:/Program Files/Google/Chrome/Application/chrome.exe",
       "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
       "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
+      "C:/Program Files/BraveSoftware/Brave-Browser/Application/brave.exe",
     ]
   : ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"];
 
@@ -93,8 +93,14 @@ test("five product rows fit on one A4 landscape page at browser default scale", 
   try {
     await writeFile(htmlPath, html, "utf8");
     const result = spawnSync(browserExecutable!, [
-      "--headless",
+      "--headless=new",
       "--disable-gpu",
+      "--disable-gpu-compositing",
+      "--disable-gpu-shader-disk-cache",
+      "--disable-software-rasterizer",
+      "--disable-features=Vulkan,UseSkiaRenderer,SkiaGraphite",
+      `--user-data-dir=${join(fixtureDirectory, "browser-profile")}`,
+      `--disk-cache-dir=${join(fixtureDirectory, "browser-cache")}`,
       "--no-pdf-header-footer",
       `--print-to-pdf=${pdfPath}`,
       new URL(`file:///${htmlPath.replaceAll("\\", "/")}`).href,
