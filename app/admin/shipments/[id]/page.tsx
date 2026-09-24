@@ -1,6 +1,7 @@
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
 import { DashboardShell } from "@/components/dashboard/Shell";
+import { SerialPrintLink } from "@/components/inventory/SerialPrintLink";
 import { ShipmentTrackingCard } from "@/components/orders/ShipmentTrackingCard";
 import { requirePermission } from "@/lib/auth/permissions";
 import { getShipment } from "@/lib/orders/data";
@@ -38,7 +39,7 @@ export default async function ShipmentPage({ params, searchParams }: { params: P
         <div className="mt-4 space-y-3">{items.map((item) => {
           const orderItem = item.sales_order_items as unknown as { product_name_snapshot: string; sku_snapshot: string };
           const assigned = serials.filter((serial) => serial.shipment_item_id === item.id);
-          return <article key={item.id} className="rounded-xl border p-4"><b>{orderItem.product_name_snapshot}</b><p className="text-sm text-[var(--muted-text)]">{orderItem.sku_snapshot} · Quantity {item.quantity}</p>{assigned.map((entry) => { const serial = entry.serial_numbers as unknown as { sen_serial: string; manufacturer_serial: string | null }; return <p key={entry.allocation_id} className="mt-2 rounded bg-[var(--muted-surface)] p-2 text-sm">{serial.sen_serial}{serial.manufacturer_serial ? ` · ${serial.manufacturer_serial}` : ""}</p>; })}</article>;
+          return <article key={item.id} className="rounded-xl border p-4"><b>{orderItem.product_name_snapshot}</b><p className="text-sm text-[var(--muted-text)]">{orderItem.sku_snapshot} · Quantity {item.quantity}</p>{assigned.map((entry) => { const serial = entry.serial_numbers as unknown as { id: string; sen_serial: string; manufacturer_serial: string | null }; return <p key={entry.allocation_id} className="mt-2 flex items-center justify-between gap-2 rounded bg-[var(--muted-surface)] p-2 text-sm"><span>{serial.sen_serial}{serial.manufacturer_serial ? ` · ${serial.manufacturer_serial}` : ""}</span>{can("serials.print") ? <SerialPrintLink serialId={serial.id}>Print</SerialPrintLink> : null}</p>; })}</article>;
         })}</div>
         <dl className="mt-5 grid grid-cols-2 gap-3 text-sm"><div><dt>Estimated departure</dt><dd>{dateTime(shipment.estimated_departure_at)}</dd></div><div><dt>Estimated arrival</dt><dd>{dateTime(shipment.estimated_arrival_at)}</dd></div><div><dt>Actual departure</dt><dd>{dateTime(shipment.actual_departure_at)}</dd></div><div><dt>Actual arrival</dt><dd>{dateTime(shipment.actual_arrival_at)}</dd></div></dl>
       </div>

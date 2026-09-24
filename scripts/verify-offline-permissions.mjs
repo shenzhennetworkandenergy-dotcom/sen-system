@@ -38,6 +38,7 @@ const admin = createClient(supabaseUrl, adminKey, {
 const email = `permission-offline-test-${Date.now()}@example.invalid`;
 const password = `Local-${randomUUID()}-9a`;
 let testProfileId;
+let submoduleTargetId;
 
 async function verifyDevelopmentOrigin() {
   try {
@@ -56,21 +57,21 @@ async function verifyDevelopmentOrigin() {
 }
 
 async function cleanup() {
-  if (!testProfileId) return;
-
-  await admin
-    .from("audit_logs")
-    .delete()
-    .or(`actor_id.eq.${testProfileId},target_profile_id.eq.${testProfileId}`);
-  await admin
-    .from("profile_permission_overrides")
-    .delete()
-    .eq("profile_id", testProfileId);
-  await admin
-    .from("profile_permission_templates")
-    .delete()
-    .eq("profile_id", testProfileId);
-  await admin.auth.admin.deleteUser(testProfileId, false);
+  for (const profileId of [testProfileId, submoduleTargetId].filter(Boolean)) {
+    await admin
+      .from("audit_logs")
+      .delete()
+      .or(`actor_id.eq.${profileId},target_profile_id.eq.${profileId}`);
+    await admin
+      .from("profile_permission_overrides")
+      .delete()
+      .eq("profile_id", profileId);
+    await admin
+      .from("profile_permission_templates")
+      .delete()
+      .eq("profile_id", profileId);
+    await admin.auth.admin.deleteUser(profileId, false);
+  }
 }
 
 try {
@@ -116,12 +117,51 @@ try {
   });
   assert.ifError(accessError);
 
+  const { data: targetCreated, error: targetCreateError } = await admin.auth.admin.createUser({
+    email: `permission-submodule-target-${Date.now()}@example.invalid`,
+    password: `Local-${randomUUID()}-9a`,
+    email_confirm: true,
+    user_metadata: { full_name: "Permission Submodule Target" },
+  });
+  assert.ifError(targetCreateError);
+  assert.ok(targetCreated.user, "Temporary submodule target was not created.");
+  submoduleTargetId = targetCreated.user.id;
+  const { error: targetAccessError } = await admin.rpc("admin_update_profile_access", {
+    actor_profile_id: actor.id,
+    target_profile_id: submoduleTargetId,
+    requested_role: "employee",
+    requested_status: "active",
+    requested_template_id: template.id,
+  });
+  assert.ifError(targetAccessError);
+  const { data: submoduleTarget, error: submoduleTargetError } = await admin
+    .from("profiles")
+    .select("id,role,status,archived_at")
+    .eq("id", submoduleTargetId)
+    .single();
+  assert.ifError(submoduleTargetError);
+  assert.deepEqual(
+    { role: submoduleTarget.role, status: submoduleTarget.status, archived_at: submoduleTarget.archived_at },
+    { role: "employee", status: "active", archived_at: null },
+    "Temporary submodule target must be an active, unarchived employee.",
+  );
+  const { data: routeTarget, error: routeTargetError } = await admin
+    .from("profiles")
+    .select("id,full_name,email,phone,country,company_name,created_at")
+    .eq("id", submoduleTargetId)
+    .eq("role", "employee")
+    .eq("status", "active")
+    .is("archived_at", null)
+    .maybeSingle();
+  assert.ifError(routeTargetError);
+  assert.ok(routeTarget, "The exact employee-detail query must find the submodule target.");
+
   const { error: permissionError } = await admin.rpc("admin_set_profile_permissions", {
     actor_profile_id: actor.id,
     target_profile_id: testProfileId,
     requested_template_id: template.id,
-    allowed_permission_keys: ["products.view"],
-    denied_permission_keys: [],
+    allowed_permission_keys: ["employees.view"],
+    denied_permission_keys: ["dashboard.view", "activity.view_own"],
   });
   assert.ifError(permissionError);
 
@@ -152,11 +192,55 @@ try {
     },
     redirect: "manual",
   });
+
+  const permissionRoutes = [
+    ["activity.view_own", "/employee/activity"],
+    ["employees.view", "/employee/employees"],
+    ["crm.view", "/admin/crm"],
+    ["products.view", "/admin/products"],
+    ["orders.view", "/admin/orders"],
+    ["sales.view", "/admin/sales"],
+    ["sales.view_all", "/admin/sales"],
+    ["sales.view_own", "/admin/sales"],
+    ["quotations.view", "/admin/quotations"],
+    ["quotations.create", "/admin/quotations/new"],
+    ["inventory.view", "/admin/inventory"],
+    ["inventory.receive_new_stock", "/employee/inventory/receive"],
+    ["warehouses.view", "/admin/warehouses"],
+    ["serials.view", "/admin/serials"],
+    ["locations.view", "/admin/work-locations"],
+    ["tracking_statuses.view", "/admin/tracking-statuses"],
+    ["shipments.view", "/admin/shipments"],
+    ["purchasing.view", "/admin/purchasing"],
+    ["suppliers.view", "/admin/suppliers"],
+    ["accounting.view", "/admin/accounting"],
+    ["accounting.manage_cashbook", "/admin/accounting"],
+    ["support.view", "/admin/messages"],
+  ];
+  const protectedRoutes = [...new Set(permissionRoutes.map(([, path]) => path))];
+  const forbiddenViewOnlyControls = {
+    "products.view": ["Add product", "Archive selected", "Full edit"],
+    "orders.view": ["Create order", "Reactivate"],
+    "inventory.view": ["Serial Operations", "Quick Inventory Actions"],
+    "warehouses.view": ["Add warehouse"],
+    "locations.view": ["Create location", "Assign workplace", "Assign warehouse"],
+    "tracking_statuses.view": ["Create custom status"],
+    "purchasing.view": ["New purchase order", "Export CSV"],
+    "suppliers.view": ["Add supplier", "Save supplier"],
+    "support.view": ["Close chat", "Send reply"],
+    "crm.view": ["New lead", "Export CSV"],
+    "sales.view": ["Create Sale", "Record Payment"],
+    "sales.view_all": ["Create Sale", "Record Payment"],
+    "sales.view_own": ["Create Sale", "Record Payment"],
+    "serials.view": ["Generate / receive serials", "Scan or search", "Regenerate eligible", "Print labels", "Export CSV", "Product details"],
+  };
   const [workspaceResponse, allowedResponse, deniedResponse] = await Promise.all([
     request("/employee"),
+    request("/employee/employees"),
     request("/admin/products"),
-    request("/admin/orders"),
   ]);
+  const workspaceHtml = await workspaceResponse.text();
+  const allowedHtml = await allowedResponse.text();
   const deniedHtml = await deniedResponse.text();
   const redirectMarker = deniedHtml.match(/NEXT_REDIRECT.{0,240}/)?.[0] ?? null;
   const directRedirect = [303, 307, 308].includes(deniedResponse.status);
@@ -165,11 +249,26 @@ try {
     redirectMarker?.includes("NEXT_REDIRECT;replace;/employee;307;");
 
   assert.equal(workspaceResponse.status, 200, "Employee workspace should load offline.");
-  assert.equal(allowedResponse.status, 200, "An offline employee should open an explicitly permitted module.");
+  assert.equal(allowedResponse.status, 200, "An employee should open the explicitly permitted Employees module.");
+  assert.equal(
+    workspaceHtml.includes('href="/employee/employees"'),
+    true,
+    "The employee sidebar should show the explicitly permitted Employees module.",
+  );
+  assert.equal(
+    workspaceHtml.includes('href="/admin/products"'),
+    false,
+    "The employee sidebar must hide an unchecked Products module.",
+  );
+  assert.equal(
+    allowedHtml.includes("View the active employee directory allowed by your assigned permissions."),
+    true,
+    "The allowed Employees route should render its protected directory.",
+  );
   assert.ok(
     directRedirect || streamedRedirect,
     `A denied offline module should redirect, received ${deniedResponse.status}; ` +
-      `renderedOrders=${deniedHtml.includes("Create, reserve, allocate, pack and ship customer orders.")}; ` +
+      `renderedProducts=${deniedHtml.includes("Manage SEN simple and variable products, classification, pricing and stock settings.")}; ` +
       `containsEmployeeRedirect=${deniedHtml.includes("/employee")}; ` +
       `redirectMarker=${redirectMarker}.`,
   );
@@ -181,12 +280,133 @@ try {
     );
   }
   assert.equal(
-    deniedHtml.includes("Create, reserve, allocate, pack and ship customer orders."),
+    deniedHtml.includes("Manage SEN simple and variable products, classification, pricing and stock settings."),
     false,
     "A denied offline module must not render protected content.",
   );
 
-  console.log("Offline permission integration verification passed.");
+  for (const [permission, path] of permissionRoutes) {
+    const deniedBaseline = permission === "activity.view_own"
+      ? ["dashboard.view"]
+      : ["dashboard.view", "activity.view_own"];
+    const { error: matrixError } = await admin.rpc("admin_set_profile_permissions", {
+      actor_profile_id: actor.id,
+      target_profile_id: testProfileId,
+      requested_template_id: template.id,
+      allowed_permission_keys: [permission],
+      denied_permission_keys: deniedBaseline,
+    });
+    assert.ifError(matrixError);
+
+    const deniedPaths = protectedRoutes.filter((candidate) => candidate !== path);
+    const [workspace, allowed, ...deniedResponses] = await Promise.all([
+      request("/employee"),
+      request(path),
+      ...deniedPaths.map(request),
+    ]);
+    const [workspaceBody, allowedBody, ...deniedBodies] = await Promise.all([
+      workspace.text(),
+      allowed.text(),
+      ...deniedResponses.map((response) => response.text()),
+    ]);
+    assert.equal(workspace.status, 200, `${permission}: employee workspace should load.`);
+    assert.equal(allowed.status, 200, `${permission}: ${path} should load.`);
+    assert.equal(
+      allowedBody.includes("NEXT_REDIRECT"),
+      false,
+      `${permission}: ${path} must render instead of returning a streamed redirect.`,
+    );
+    assert.equal(
+      workspaceBody.includes(`href="${path}"`),
+      true,
+      `${permission}: assigned module should appear in employee navigation.`,
+    );
+    assert.equal(
+      allowedBody.includes('href="/admin/users"'),
+      false,
+      `${permission}: employee module page must not render the unrestricted admin menu.`,
+    );
+    for (const control of forbiddenViewOnlyControls[permission] ?? []) {
+      assert.equal(
+        allowedBody.includes(control),
+        false,
+        `${permission}: view-only page must hide the ${control} control.`,
+      );
+    }
+    deniedResponses.forEach((denied, index) => {
+      const deniedLocation = denied.headers.get("location");
+      const deniedByResponse = [303, 307, 308].includes(denied.status)
+        ? new URL(deniedLocation, "http://127.0.0.1:3000").pathname === "/employee"
+        : denied.status === 200 && deniedBodies[index].includes("NEXT_REDIRECT;replace;/employee;307;");
+      assert.equal(
+        deniedByResponse,
+        true,
+        `${permission}: unrelated route ${deniedPaths[index]} must remain denied.`,
+      );
+    });
+  }
+
+  const employeeSubmoduleCases = [
+    {
+      permission: "employees.view",
+      route: "/employee/employees",
+      expected: "View the active employee directory allowed by your assigned permissions.",
+    },
+    {
+      permission: "employees.view_detail",
+      route: `/employee/employees/${submoduleTargetId}`,
+      expected: "Contact information",
+    },
+    {
+      permission: "employees.edit_profile",
+      route: `/employee/employees/${submoduleTargetId}`,
+      expected: "Edit employee profile",
+    },
+    {
+      permission: "employees.view_permissions",
+      route: `/employee/employees/${submoduleTargetId}/permissions`,
+      expected: "Permission access",
+      forbidden: "Save employee permissions",
+    },
+    {
+      permission: "employees.manage_permissions",
+      route: `/employee/employees/${submoduleTargetId}/permissions`,
+      expected: "Save employee permissions",
+    },
+    {
+      permission: "employees.view_activity",
+      route: `/employee/employees/${submoduleTargetId}/activity`,
+      expected: "Employee activity",
+    },
+  ];
+  for (const item of employeeSubmoduleCases) {
+    const { error: submodulePermissionError } = await admin.rpc("admin_set_profile_permissions", {
+      actor_profile_id: actor.id,
+      target_profile_id: testProfileId,
+      requested_template_id: template.id,
+      allowed_permission_keys: [item.permission],
+      denied_permission_keys: ["dashboard.view", "activity.view_own"],
+    });
+    assert.ifError(submodulePermissionError);
+    const [workspace, directory, submodule] = await Promise.all([
+      request("/employee"),
+      request("/employee/employees"),
+      request(item.route),
+    ]);
+    const [workspaceBody, directoryBody, submoduleBody] = await Promise.all([
+      workspace.text(),
+      directory.text(),
+      submodule.text(),
+    ]);
+    assert.equal(workspaceBody.includes('href="/employee/employees"'), true, `${item.permission}: Employees navigation must be visible.`);
+    assert.equal(directoryBody.includes("NEXT_REDIRECT"), false, `${item.permission}: Employees directory must provide a route to the granted submodule.`);
+    assert.equal(submodule.status, 200, `${item.permission}: granted submodule returned HTTP ${submodule.status}.`);
+    assert.equal(submoduleBody.includes("NEXT_REDIRECT"), false, `${item.permission}: granted submodule must not redirect.`);
+    assert.equal(submoduleBody.includes(item.expected), true, `${item.permission}: expected ${item.expected}; title=${submoduleBody.match(/<h1[^>]*>([^<]+)/)?.[1] ?? "missing"}; notFound=${submoduleBody.includes("This page could not be found")}.`);
+    if (item.forbidden) assert.equal(submoduleBody.includes(item.forbidden), false, `${item.permission}: must hide ${item.forbidden}.`);
+  }
+
+  console.log(`Offline permission integration verification passed for ${permissionRoutes.length} module routes and ${employeeSubmoduleCases.length} Employees submodules.`);
 } finally {
   await cleanup();
 }

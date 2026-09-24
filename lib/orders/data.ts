@@ -79,7 +79,7 @@ export async function getOrder(orderId: string, customerProfileId?: string) {
   let orderQuery = db.from("sales_orders").select("*,profiles!sales_orders_customer_profile_id_fkey(id,full_name,email,phone,company_name),warehouses(id,code,name)").eq("id", orderId);
   if (customerProfileId) orderQuery = orderQuery.eq("customer_profile_id", customerProfileId);
   const orderResult = await orderQuery.maybeSingle(); fail("Unable to load order.", orderResult.error); if (!orderResult.data) return null;
-  const [items, reservations, allocations, packages, packed, shipments, tracking, documents] = await Promise.all([
+  const [items, reservations, allocations, packages, packed, shipments, tracking, documents, warranties] = await Promise.all([
     db.from("sales_order_items").select("*").eq("order_id", orderId).order("created_at"),
     db.from("inventory_reservations").select("*").eq("order_id", orderId).order("created_at"),
     db.from("order_serial_allocations").select("*,serial_numbers(id,sen_serial,manufacturer_serial,status,condition,warehouse_id,location_id)").eq("order_id", orderId).order("allocated_at"),
@@ -88,9 +88,10 @@ export async function getOrder(orderId: string, customerProfileId?: string) {
     db.from("shipments").select("*").eq("order_id", orderId).order("created_at", { ascending: false }),
     db.from("shipment_tracking_events").select("*,tracking_status_definitions(key,name)").eq("order_id", orderId).order("occurred_at", { ascending: false }),
     db.from("shipment_documents").select("*").eq("order_id", orderId).order("created_at", { ascending: false }),
+    db.from("warranty_coverages").select("*").eq("sales_order_id", orderId).order("created_at", { ascending: false }),
   ]);
-  for (const [name, result] of Object.entries({ items, reservations, allocations, packages, packed, shipments, tracking, documents })) fail(`Unable to load order ${name}.`, result.error);
-  return { order: orderResult.data, items: items.data ?? [], reservations: reservations.data ?? [], allocations: allocations.data ?? [], packages: packages.data ?? [], packed: packed.data ?? [], shipments: shipments.data ?? [], tracking: tracking.data ?? [], documents: documents.data ?? [] };
+  for (const [name, result] of Object.entries({ items, reservations, allocations, packages, packed, shipments, tracking, documents, warranties })) fail(`Unable to load order ${name}.`, result.error);
+  return { order: orderResult.data, items: items.data ?? [], reservations: reservations.data ?? [], allocations: allocations.data ?? [], packages: packages.data ?? [], packed: packed.data ?? [], shipments: shipments.data ?? [], tracking: tracking.data ?? [], documents: documents.data ?? [], warranties: warranties.data ?? [] };
 }
 
 export async function getShipment(shipmentId: string, customerProfileId?: string) {
@@ -100,7 +101,7 @@ export async function getShipment(shipmentId: string, customerProfileId?: string
   const shipment = await query.maybeSingle(); fail("Unable to load shipment.", shipment.error); if (!shipment.data) return null;
   const [items, serials, events, points, statuses, workplaces, documents, availableDocuments] = await Promise.all([
     db.from("shipment_items").select("*,sales_order_items(product_id,product_name_snapshot,sku_snapshot,quantity)").eq("shipment_id", shipmentId),
-    db.from("shipment_serials").select("*,serial_numbers(sen_serial,manufacturer_serial),shipment_items!inner(shipment_id)").eq("shipment_items.shipment_id", shipmentId),
+    db.from("shipment_serials").select("*,serial_numbers(id,sen_serial,manufacturer_serial),shipment_items!inner(shipment_id)").eq("shipment_items.shipment_id", shipmentId),
     db.from("shipment_tracking_events").select("*,tracking_status_definitions(key,name)").eq("shipment_id", shipmentId).order("occurred_at", { ascending: false }),
     db.from("shipment_route_points").select("*").eq("shipment_id", shipmentId).order("version", { ascending: false }).order("point_order"),
     db.from("tracking_status_definitions").select("id,key,name,description,customer_visible_default,sort_order").eq("is_active", true).order("sort_order"),

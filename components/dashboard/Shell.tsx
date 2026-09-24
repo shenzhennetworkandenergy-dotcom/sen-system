@@ -1,13 +1,14 @@
 import Image from "next/image";
 import { routes } from "@/lib/constants/routes";
-import { adminNavigation, visibleEmployeeNavigation } from "@/lib/navigation/dashboard";
+import { visibleAdminNavigation, visibleEmployeeNavigation } from "@/lib/navigation/dashboard";
 import { DashboardNavigation } from "@/components/dashboard/DashboardNavigation";
 import { ProductSearch } from "@/components/catalog/ProductSearch";
 import { getDashboardWorkCounts } from "@/lib/dashboard/work-counts";
 import { getCurrentProfile } from "@/lib/auth/session";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
-import { getEmployeeInventoryWorkCounts } from "@/lib/inventory/employee-inventory-work-counts";
+import { getEffectivePermissions } from "@/lib/auth/permissions";
+import { getEmployeeInventoryWorkCounts as getEmployeeWorkCounts } from "@/lib/inventory/employee-inventory-work-counts";
 
 type DashboardShellProps = {
   title: string;
@@ -18,15 +19,22 @@ type DashboardShellProps = {
 };
 
 export async function DashboardShell({ title, subtitle, children, admin = false, employeePermissions }: DashboardShellProps) {
-  const permissionSet = new Set(employeePermissions ?? []);
-  const navigation = admin ? adminNavigation : visibleEmployeeNavigation(permissionSet);
   const { profile } = await getCurrentProfile();
+  const isAdmin = profile?.role === "admin";
+  const resolvedEmployeePermissions = profile?.role === "employee"
+    ? employeePermissions ?? await getEffectivePermissions(profile.id)
+    : [];
+  const navigation = isAdmin
+    ? visibleAdminNavigation()
+    : profile?.role === "employee"
+      ? visibleEmployeeNavigation(resolvedEmployeePermissions)
+      : [];
   let workCounts: Record<string, number> = {};
   try {
-    workCounts = admin
+    workCounts = isAdmin && admin
       ? await getDashboardWorkCounts()
       : profile?.role === "employee" && profile.status === "active"
-        ? await getEmployeeInventoryWorkCounts(profile.id, permissionSet)
+        ? await getEmployeeWorkCounts(profile.id, resolvedEmployeePermissions)
         : {};
   } catch (error) {
     console.error("Dashboard work counts unavailable", error);

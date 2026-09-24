@@ -18,6 +18,11 @@ const requiredHeaderTokens = [
   "sen-header-actions",
   "sen-menu-box",
   "sen-profile-box",
+  "sen-profile-menu",
+  "sen-profile-menu-panel",
+  "sen-profile-menu-dashboard",
+  "sen-header-search-desktop",
+  "max-w-[92rem]",
   "sen-header-search",
   "z-[80]",
   "Enterprise technology · Energy · Medical · Global sourcing",
@@ -27,6 +32,11 @@ const requiredMobileTokens = [
   "sen-mobile-menu-trigger",
   "sen-mobile-menu-panel",
   "sen-mobile-menu-link",
+  "sen-mobile-menu-search",
+  "is-dashboard",
+  "showRequestQuote",
+  "ProductSearch",
+  "xl:hidden",
 ];
 const requiredSearchTokens = [
   "sen-search-form",
@@ -41,6 +51,11 @@ const requiredCssTokens = [
   ".sen-menu-box:hover",
   ".sen-menu-box:focus-visible",
   ".sen-profile-box",
+  ".sen-profile-menu-panel",
+  ".sen-profile-menu-dashboard",
+  ".sen-mobile-menu-search",
+  "max-height: calc(100dvh",
+  "overflow-y: auto",
   "@media (max-width: 1279px)",
   "@media (prefers-reduced-motion: reduce)",
   "animation: none",
@@ -62,6 +77,22 @@ for (const token of requiredCssTokens) {
 assert.ok(header.includes('aria-label="Public navigation"'));
 assert.ok(search.includes('role="search"'));
 assert.ok(mobile.includes("<summary"));
+assert.ok(
+  header.includes('<details className="sen-profile-menu">'),
+  "Authenticated desktop navigation must use a profile disclosure",
+);
+assert.ok(
+  header.includes('className="sen-menu-box sen-profile-menu-dashboard"'),
+  "The role dashboard must be highlighted inside the profile menu",
+);
+assert.ok(
+  !header.includes('<Container className="pb-3 xl:hidden">'),
+  "Compact search must live inside the three-bar menu, not a permanent second row",
+);
+assert.ok(
+  mobile.includes("showRequestQuote ?"),
+  "Authenticated customers must retain Request a Quote in the compact menu",
+);
 assert.ok(css.includes("prefers-reduced-motion"));
 assert.ok(
   css.match(

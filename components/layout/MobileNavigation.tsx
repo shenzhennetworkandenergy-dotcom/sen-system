@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 
+import { ProductSearch } from "@/components/catalog/ProductSearch";
 import { routes } from "@/lib/constants/routes";
 
 export function MobileNavigation({
@@ -10,15 +11,17 @@ export function MobileNavigation({
   dashboardLabel = "My Account",
   profileHref = routes.profile,
   cartCount = 0,
+  showRequestQuote = false,
 }: {
   isAuthenticated?: boolean;
   dashboardHref?: string;
   dashboardLabel?: string;
   profileHref?: string;
   cartCount?: number;
+  showRequestQuote?: boolean;
 }) {
   return (
-    <details className="sen-mobile-nav relative z-[120] lg:hidden">
+    <details className="sen-mobile-nav relative z-[120] xl:hidden">
       <summary className="sen-mobile-menu-trigger">
         <span className="sen-mobile-menu-icon" aria-hidden="true">
           <span />
@@ -28,6 +31,7 @@ export function MobileNavigation({
         <span>Menu</span>
       </summary>
       <div className="sen-mobile-menu-panel">
+        <ProductSearch compact className="sen-header-search sen-mobile-menu-search" />
         <nav className="grid gap-2" aria-label="Mobile navigation">
           <Link href={routes.home} className="sen-mobile-menu-link">
             Home
@@ -43,15 +47,21 @@ export function MobileNavigation({
           </Link>
         {isAuthenticated ? (
           <>
+            {showRequestQuote ? (
+              <Link href="/request-quote/general" className="sen-mobile-menu-link is-primary">
+                Request a Quote
+              </Link>
+            ) : null}
             <Link
               href={routes.cart}
               className={`sen-mobile-menu-link ${cartCount > 0 ? "has-items" : ""}`}
             >
               Cart {cartCount > 0 ? `(${cartCount})` : ""}
             </Link>
+            <span className="sen-mobile-menu-label">Profile &amp; account</span>
             <Link
               href={dashboardHref ?? routes.account}
-              className="sen-mobile-menu-link"
+              className="sen-mobile-menu-link is-dashboard"
             >
               {dashboardLabel}
             </Link>

@@ -22,7 +22,7 @@ const sections = {
     "region",
     "postal_code",
     "country_code",
-    "country_name",
+    "country",
   ],
   work: [
     "company_name",

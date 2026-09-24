@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
+import { SerialPrintLink } from "@/components/inventory/SerialPrintLink";
 import { MoneyReceiptAction } from "@/components/sales/MoneyReceiptAction";
 import { SaleLineEditor } from "@/components/sales/SaleLineEditor";
 import { SalePaymentMethodFields } from "@/components/sales/SalePaymentMethodFields";
@@ -98,6 +99,7 @@ export default async function SaleDetail({
     (item) => !["released", "cancelled"].includes(item.status),
   );
   const isAdmin = profile.role === "admin";
+  const canPrint = isAdmin || permissions.has("serials.print");
   const canUseMoneyReceipt = isAdmin || permissions.has("sales.money_receipt");
   const canEditLines =
     !["delivered", "cancelled"].includes(order.status) &&
@@ -326,13 +328,14 @@ export default async function SaleDetail({
                       <ul className="mt-2 grid gap-1 md:grid-cols-2">
                         {itemSerials.map((allocation) => {
                           const serial = allocation.serial_numbers as {
+                            id: string;
                             sen_serial: string;
                             manufacturer_serial: string | null;
                           };
                           return (
-                            <li key={allocation.id} className="rounded bg-[var(--muted-surface)] p-2 text-xs">
-                              <b>{serial.sen_serial}</b>
-                              {serial.manufacturer_serial ? ` · ${serial.manufacturer_serial}` : ""} · {label(allocation.status)}
+                            <li key={allocation.id} className="flex items-center justify-between gap-2 rounded bg-[var(--muted-surface)] p-2 text-xs">
+                              <span><b>{serial.sen_serial}</b>{serial.manufacturer_serial ? ` · ${serial.manufacturer_serial}` : ""} · {label(allocation.status)}</span>
+                              {canPrint ? <SerialPrintLink serialId={serial.id}>Print</SerialPrintLink> : null}
                             </li>
                           );
                         })}

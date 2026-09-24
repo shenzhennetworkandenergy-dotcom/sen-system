@@ -6,9 +6,11 @@ import {
   updateProfileSectionAction,
 } from "./actions";
 import { DashboardShell } from "@/components/dashboard/Shell";
+import { EmployeeWorkplaceSummary } from "@/components/hr/EmployeeWorkplaceSummary";
 import { CompressedImageInput } from "@/components/uploads/CompressedImageInput";
 import { getEffectivePermissions } from "@/lib/auth/permissions";
 import { requireProfile } from "@/lib/auth/session";
+import { getEmployeeWorkplaceSummary } from "@/lib/hr/profile-workplace";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -50,12 +52,15 @@ export default async function SharedProfilePage({
   await connection();
   const { profile } = await requireProfile(["customer", "employee", "admin"]);
   const db = createSupabaseAdminClient();
-  const [notice, { data }, permissions] = await Promise.all([
+  const [notice, { data }, permissions, workplaceSummary] = await Promise.all([
     searchParams,
     db.from("profiles").select("*").eq("id", profile.id).single(),
     profile.role === "employee"
       ? getEffectivePermissions(profile.id)
       : Promise.resolve(new Set<string>()),
+    profile.role === "employee"
+      ? getEmployeeWorkplaceSummary(profile.id)
+      : Promise.resolve(null),
   ]);
   const paths = [data.avatar_path, data.cover_path].filter(
     (path): path is string => Boolean(path),
@@ -107,6 +112,8 @@ export default async function SharedProfilePage({
         </div>
       </section>
 
+      {workplaceSummary ? <div className="mt-5"><EmployeeWorkplaceSummary summary={workplaceSummary} /></div> : null}
+
       <div className="mt-5 grid gap-5 xl:grid-cols-2">
         <Section title="About" description="The basic information shown at the top of your profile." action={updateProfileSectionAction.bind(null,"about")}>
           <label className="text-sm font-semibold">Full name<input name="full_name" required defaultValue={data.full_name ?? ""} className={field}/></label>
@@ -126,7 +133,7 @@ export default async function SharedProfilePage({
           <label className="text-sm font-semibold">Region or state<input name="region" defaultValue={data.region ?? ""} className={field}/></label>
           <label className="text-sm font-semibold">Postal code<input name="postal_code" defaultValue={data.postal_code ?? ""} className={field}/></label>
           <label className="text-sm font-semibold">Country code<input name="country_code" maxLength={2} defaultValue={data.country_code ?? "BD"} className={field}/></label>
-          <label className="text-sm font-semibold">Country<input name="country_name" defaultValue={data.country_name ?? "Bangladesh"} className={field}/></label>
+          <label className="text-sm font-semibold">Country<input name="country" defaultValue={data.country ?? data.country_name ?? "Bangladesh"} className={field}/></label>
         </Section>
         <Section title="Work" description="Company and professional information." action={updateProfileSectionAction.bind(null,"work")}>
           <label className="text-sm font-semibold">Company<input name="company_name" defaultValue={data.company_name ?? ""} className={field}/></label>

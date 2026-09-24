@@ -5,6 +5,10 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { replyDelayMs } from "@/lib/chatbot/conversation";
+import {
+  buildConfirmedProductReply,
+  type ConfirmedProductReply,
+} from "@/lib/chatbot/product-reply";
 
 const FloatingHumanSupport = dynamic(
   () => import("@/components/support/FloatingHumanSupport"),
@@ -62,6 +66,7 @@ type AssistantMessage = {
   delivery?: "sending" | "delivered";
   products?: ChatbotProduct[];
   confirmation?: ChatbotProduct;
+  productReply?: ConfirmedProductReply;
 };
 
 type AssistantStep =
@@ -116,7 +121,7 @@ const saveError = `We could not save your request. Please try again.
 function message(
   sender: AssistantMessage["sender"],
   text: string,
-  extras: Pick<AssistantMessage, "products" | "confirmation"> = {},
+  extras: Pick<AssistantMessage, "products" | "confirmation" | "productReply"> = {},
 ): AssistantMessage {
   return {
     id: crypto.randomUUID(),
@@ -140,36 +145,6 @@ function whatsappIsValid(value: string) {
 function normalizeWhatsapp(value: string) {
   const trimmed = value.trim();
   return `${trimmed.startsWith("+") ? "+" : ""}${trimmed.replace(/\D/g, "")}`;
-}
-
-function formattedPrice(product: ChatbotProduct) {
-  if (product.price === null) return null;
-  const formatter = new Intl.NumberFormat("en-BD", { maximumFractionDigits: 2 });
-  const start = formatter.format(product.price);
-  if (product.priceMax !== null && product.priceMax > product.price) {
-    return `${product.currency} ${start}–${formatter.format(product.priceMax)}`;
-  }
-  return `${product.currency} ${start}`;
-}
-
-function confirmedProductMessage(product: ChatbotProduct) {
-  const identity = [
-    product.modelNumber ? `Model / মডেল: ${product.modelNumber}` : null,
-    product.sku ? `SKU: ${product.sku}` : null,
-  ].filter(Boolean).join(" · ");
-  const priceText = formattedPrice(product);
-  const detail = product.shortDescription?.trim().slice(0, 180);
-  const lines = [
-    product.name,
-    identity || null,
-    priceText ? `Price / মূল্য: ${priceText}` : `Price on request / মূল্য জানতে যোগাযোগ করুন`,
-    product.available
-      ? `Available in Bangladesh / বাংলাদেশে পাওয়া যাচ্ছে`
-      : `SEN can arrange this product. / SEN এই পণ্যটি সংগ্রহ করে দিতে পারবে।`,
-    detail || null,
-    whatsappPrompt,
-  ];
-  return lines.filter(Boolean).join("\n");
 }
 
 function ProductAssistant({ closeChat }: { closeChat: () => void }) {
@@ -204,7 +179,7 @@ function ProductAssistant({ closeChat }: { closeChat: () => void }) {
 
   const addAssistant = (
     text: string,
-    extras: Pick<AssistantMessage, "products" | "confirmation"> = {},
+    extras: Pick<AssistantMessage, "products" | "confirmation" | "productReply"> = {},
   ) => setMessages((current) => [...current, message("assistant", text, extras)]);
 
   const addVisitor = (text: string) =>
@@ -343,7 +318,7 @@ SEN পণ্যটি সংগ্রহ করতে পারবে।`);
         markDelivered();
         return;
       }
-      addAssistant(confirmedProductMessage(product));
+      addAssistant("", { productReply: buildConfirmedProductReply(product) });
       if (await createInquiry([product], searchHistory)) setStep("whatsapp");
       markDelivered();
     } finally {
@@ -451,7 +426,14 @@ SEN পণ্যটি সংগ্রহ করতে পারবে।`);
         {messages.map((item) => (
           <div key={item.id} className={`sen-messenger-row ${item.sender === "visitor" ? "is-customer" : "is-sen"}`}>
             <div className="sen-messenger-bubble whitespace-pre-line">
-              {item.text}
+              {item.productReply ? (
+                <div className="sen-chat-product-reply" data-testid="chatbot-confirmed-product">
+                  <strong className="sen-chat-product-reply-name">{item.productReply.name}</strong>
+                  <strong className="sen-chat-product-price">{item.productReply.price}</strong>
+                  <span className="sen-chat-product-availability">{item.productReply.availability}</span>
+                  <span className="sen-chat-product-prompt">{item.productReply.prompt}</span>
+                </div>
+              ) : item.text}
               {item.products?.length ? (
                 <div className="sen-chat-product-list" data-testid="chatbot-product-suggestions">
                   {item.products.map((product) => (

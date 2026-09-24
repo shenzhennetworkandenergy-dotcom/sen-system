@@ -22,17 +22,18 @@ export default async function CrmPage({ searchParams }: { searchParams: Promise<
     ["Companies", data.metrics.companies], ["Contacts", data.metrics.contacts], ["Open leads", data.metrics.open],
     ["Won leads", data.metrics.won], ["Pipeline value", `BDT ${data.metrics.pipeline.toLocaleString("en-BD")}`],
   ];
+  const can = (permission: string) => profile.role === "admin" || permissions.has(permission);
   return <DashboardShell admin={profile.role==="admin"} employeePermissions={profile.role==="employee"?permissions:undefined} title="CRM" subtitle="Manage companies, contacts, sales leads, ownership and follow-up activity.">
     <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">{metrics.map(([name,value])=><article key={name} className="rounded-2xl border bg-[var(--surface)] p-4 shadow-sm"><p className="text-xs text-[var(--muted-text)]">{name}</p><strong className="mt-1 block text-2xl">{value}</strong></article>)}</div>
     <div className="my-3 flex flex-wrap gap-2">
-      <a href="/admin/crm/leads/new" className="rounded-lg bg-[var(--primary)] px-4 py-2 font-bold text-[var(--primary-foreground)]">New lead</a>
+      {can("crm.create") ? <a href="/admin/crm/leads/new" className="rounded-lg bg-[var(--primary)] px-4 py-2 font-bold text-[var(--primary-foreground)]">New lead</a> : null}
       <a href="/admin/crm/companies" className="rounded-lg border bg-[var(--surface)] px-4 py-2 font-bold">Companies</a>
       <a href="/admin/crm/contacts" className="rounded-lg border bg-[var(--surface)] px-4 py-2 font-bold">Contacts</a>
       <a href="/admin/crm/chatbot" className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 font-bold ${unreadInquiries > 0 ? "border-red-300 bg-red-50 text-red-900 shadow-sm" : "bg-[var(--surface)]"}`}>
         <span>Product Assistant inquiries</span>
         {unreadInquiries > 0 ? <span className="rounded-full bg-red-500 px-2 py-0.5 text-xs font-bold text-white" aria-label={`${unreadInquiries} unread inquiries`}>{unreadInquiries}</span> : null}
       </a>
-      <a href="/admin/crm/export" className="rounded-lg border bg-[var(--surface)] px-4 py-2 font-bold">Export CSV</a>
+      {can("crm.export") ? <a href="/admin/crm/export" className="rounded-lg border bg-[var(--surface)] px-4 py-2 font-bold">Export CSV</a> : null}
     </div>
     <form className="grid gap-2 rounded-2xl border bg-[var(--surface)] p-3 md:grid-cols-3">
       <input className="rounded-lg border px-3 py-2" name="q" defaultValue={params.q} placeholder="Lead number or title"/>
