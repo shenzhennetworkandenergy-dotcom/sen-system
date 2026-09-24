@@ -134,31 +134,22 @@ export async function PublicHeader() {
               <Link href={routes.cart} className={`sen-menu-box sen-cart-link ${cartCount > 0 ? "has-items" : ""}`}>
                 Cart {cartCount > 0 ? <span>{cartCount}</span> : null}
               </Link>
-              <details className="sen-profile-menu">
-                <summary className="sen-menu-box sen-profile-box">
-                  <ProfileAvatar
-                    imageUrl={avatarUrl}
-                    emoji={profile?.avatar_emoji}
-                    name={profile?.full_name}
-                    size={28}
-                    className="ring-1 ring-white/30"
-                  />
-                  <span>My Profile</span>
-                  <span className="sen-profile-menu-chevron" aria-hidden="true">⌄</span>
-                </summary>
-                <div className="sen-profile-menu-panel">
-                  <Link href={dash} className="sen-menu-box sen-profile-menu-dashboard">
-                    <span>{label}</span>
-                    <small>Open workspace</small>
-                  </Link>
-                  <Link href={routes.profile} className="sen-profile-menu-link">
-                    My Profile
-                  </Link>
-                  <a href={routes.logout} className="sen-profile-menu-link">
-                    Logout
-                  </a>
-                </div>
-              </details>
+              <Link href={dash} className="sen-menu-box">
+                {label}
+              </Link>
+              <Link href={routes.profile} className="sen-menu-box sen-profile-box">
+                <ProfileAvatar
+                  imageUrl={avatarUrl}
+                  emoji={profile?.avatar_emoji}
+                  name={profile?.full_name}
+                  size={28}
+                  className="ring-1 ring-white/30"
+                />
+                <span>My Profile</span>
+              </Link>
+              <a href={routes.logout} className="sen-menu-box">
+                Logout
+              </a>
             </>
           ) : (
             <>
