@@ -1,15 +1,40 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requirePermission } from "@/lib/auth/permissions";
+import { requireAllPermissions, requirePermission } from "@/lib/auth/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
-import { addressFromForm, jsonArray, optionalString, uuid } from "@/lib/orders/validation";
-import { moneyFromForm, parseMoney, parseWholeNumber } from "@/lib/validation/numbers";
+import {
+  basicCustomerInputFromForm,
+  type BasicCustomerActionState,
+} from "@/lib/customers/basic";
+import { createBasicCustomerRecord } from "@/lib/customers/create-basic";
+import { customerCreationDecision } from "@/lib/customers/duplicate-decision";
+import { findPossibleCustomers } from "@/lib/customers/duplicates-server";
+import { optionalString, uuid } from "@/lib/orders/validation";
+import { resolveQuotationViewScope } from "@/lib/quotations/access-policy";
+import { QUOTATION_SALE_CONVERSION_PERMISSIONS } from "@/lib/quotations/sale-conversion-types";
+import {
+  buildManualSaleRpcArguments,
+  buildQuotationSaleRpcArguments,
+  normalizeConversionSaleResult,
+  parseDraftSaleInput,
+} from "@/lib/sales/create-draft-input";
+import { moneyFromForm, parseWholeNumber } from "@/lib/validation/numbers";
 import { normalizeSaleLineEdit } from "@/lib/sales/line-editing";
+import { buildSalePaymentRpcArguments } from "@/lib/sales/payment-accounting";
+import {
+  normalizeCommercialTermsDraft,
+  normalizeDueDateCorrectionDraft,
+  type PaymentTermsType,
+} from "@/lib/sales/commercial-terms";
+import {
+  canAccessSaleUnderScope,
+  resolveSalesVisibilityScope,
+} from "@/lib/sales/visibility";
 
 const target = (id: string, kind: "success" | "error", message: string) => `/admin/sales/${id}?${kind}=${encodeURIComponent(message)}`;
-const safe = (message: string | undefined, fallback: string) => message && /sale|payment|amount|method|stock|draft|serial|document|permission|eligible/i.test(message) ? message : fallback;
+const safe = (message: string | undefined, fallback: string) => message && /sale|invoice|revision|release|payment|amount|method|stock|draft|serial|document|permission|eligible|accounting|cashbook|closed|received|channel|retry|operation|terms|credit|due date|correction/i.test(message) ? message : fallback;
 
 export async function updateSaleLinesAction(saleId: string, form: FormData) {
   const { profile } = await requirePermission("sales.edit");
@@ -59,59 +84,181 @@ export async function updateSaleLinesAction(saleId: string, form: FormData) {
   redirect(target(saleId, "success", "Sale products and pricing updated. Existing documents were marked superseded."));
 }
 
+export async function updateSaleCommercialTermsAction(saleId: string, form: FormData) {
+  const { profile, permissions } = await requirePermission("sales.edit");
+  const db = createSupabaseAdminClient();
+  const [{ data: sale, error: saleError }, { data: invoice, error: invoiceError }] =
+    await Promise.all([
+      db
+        .from("sales_orders")
+        .select("id,created_by,payment_terms_type,credit_period_days,payment_due_date")
+        .eq("id", saleId)
+        .maybeSingle(),
+      db
+        .from("sale_documents")
+        .select("id")
+        .eq("order_id", saleId)
+        .eq("document_type", "invoice")
+        .neq("status", "voided")
+        .limit(1)
+        .maybeSingle(),
+    ]);
+  if (saleError || invoiceError || !sale) {
+    redirect(target(saleId, "error", "Unable to verify Sale commercial terms."));
+  }
+  const salesScope = resolveSalesVisibilityScope({
+    role: profile.role,
+    status: profile.status,
+    profileId: profile.id,
+    permissions,
+  });
+  if (!canAccessSaleUnderScope(salesScope, sale.created_by)) {
+    redirect(target(saleId, "error", "Sales access denied."));
+  }
+
+  let requested: {
+    paymentTermsType: PaymentTermsType | null;
+    creditPeriodDays: number | null;
+    paymentDueDate: string | null;
+    reason: string | null;
+  };
+  let operationId: string;
+  try {
+    operationId = uuid(form.get("operation_id"), "Commercial terms operation");
+    if (invoice) {
+      const correction = normalizeDueDateCorrectionDraft({
+        paymentDueDate: form.get("payment_due_date"),
+        reason: form.get("reason"),
+      });
+      requested = {
+        paymentTermsType: sale.payment_terms_type as PaymentTermsType | null,
+        creditPeriodDays: sale.credit_period_days,
+        ...correction,
+      };
+    } else {
+      requested = normalizeCommercialTermsDraft({
+        paymentTermsType: form.get("payment_terms_type"),
+        creditPeriodPreset: form.get("credit_period_preset"),
+        customCreditPeriodDays: form.get("custom_credit_period_days"),
+        paymentDueDate: form.get("payment_due_date"),
+        reason: form.get("reason"),
+      });
+    }
+  } catch (error) {
+    redirect(
+      target(
+        saleId,
+        "error",
+        error instanceof Error ? error.message : "Commercial terms are invalid.",
+      ),
+    );
+  }
+
+  const result = await db.rpc("update_sale_commercial_terms", {
+    actor_profile_id: profile.id,
+    requested_order_id: saleId,
+    requested_operation_id: operationId,
+    requested_payment_terms_type: requested.paymentTermsType,
+    requested_credit_period_days: requested.creditPeriodDays,
+    requested_payment_due_date: requested.paymentDueDate,
+    requested_reason: requested.reason,
+  });
+  if (result.error) {
+    redirect(
+      target(
+        saleId,
+        "error",
+        safe(result.error.message, "Unable to update Sale commercial terms."),
+      ),
+    );
+  }
+  revalidatePath(`/admin/sales/${saleId}`);
+  revalidatePath("/admin/receivables");
+  revalidatePath("/admin/receivables/customers");
+  redirect(target(saleId, "success", invoice
+    ? "Payment due date correction saved with audit history."
+    : "Commercial payment terms updated."));
+}
+
 export async function createSaleAction(form: FormData) {
   const { profile, permissions } = await requirePermission("sales.create");
-  const db = createSupabaseAdminClient(), customerId = uuid(form.get("customer_id"), "Customer"), warehouseId = uuid(form.get("warehouse_id"), "Warehouse");
-  const addressId = String(form.get("address_id") ?? "").trim();
-  let items;
+  let input;
   try {
-    items = jsonArray(form, "items").map((item, index) => ({
-      ...item,
-      quantity: parseWholeNumber(item.quantity, `Item ${index + 1} quantity`, { required: true, minimum: 1 }),
-      unit_price: parseMoney(item.unit_price, `Item ${index + 1} unit price`, { required: true }),
-      catalogue_price: parseMoney(item.catalogue_price ?? item.unit_price, `Item ${index + 1} catalogue price`, { required: true }),
-      line_discount: parseMoney(item.line_discount ?? 0, `Item ${index + 1} discount`, { required: true }),
-    }));
+    input = parseDraftSaleInput(form, { mode: "manual" });
   } catch (error) {
     redirect(`/admin/sales/new?error=${encodeURIComponent(error instanceof Error ? error.message : "Sale items are invalid.")}`);
   }
-  if (!items.length) redirect("/admin/sales/new?error=At%20least%20one%20product%20is%20required.");
-  const hasPriceOverride = items.some((item) => Boolean(item.price_overridden));
-  const hasDiscount = items.some((item) => Number(item.line_discount) > 0) || Number(form.get("discount_amount")) > 0;
-  if (profile.role !== "admin" && hasPriceOverride && !permissions.has("sales.change_price")) redirect("/admin/sales/new?error=Price%20override%20permission%20is%20required.");
-  if (profile.role !== "admin" && hasDiscount && !permissions.has("sales.apply_discount")) redirect("/admin/sales/new?error=Discount%20permission%20is%20required.");
-  const address = addressId ? {} : addressFromForm(form);
-  let serviceAmount: number, discountAmount: number, shippingAmount: number, taxAmount: number;
-  try {
-    serviceAmount = moneyFromForm(form, "service_amount", "Installation / service") ?? 0;
-    discountAmount = moneyFromForm(form, "discount_amount", "Order discount") ?? 0;
-    shippingAmount = moneyFromForm(form, "shipping_amount", "Shipping charge") ?? 0;
-    taxAmount = moneyFromForm(form, "tax_amount", "VAT / tax") ?? 0;
-  } catch (error) {
-    redirect(`/admin/sales/new?error=${encodeURIComponent(error instanceof Error ? error.message : "Sale totals are invalid.")}`);
-  }
-  const adjustments = items.filter((item) => item.price_overridden || Number(item.line_discount) > 0).map((item) => ({
-    order_item_id: null, adjustment_type: item.price_overridden ? "manual_unit_price" : "fixed_line_discount",
-    previous_value: Number(item.catalogue_price ?? 0), new_value: item.price_overridden ? Number(item.unit_price) : Number(item.line_discount),
-    reason: String(item.adjustment_reason || "Sales price adjustment").slice(0, 500),
-  }));
-  if (discountAmount > 0) adjustments.push({ order_item_id: null, adjustment_type: "order_discount", previous_value: 0, new_value: discountAmount, reason: String(form.get("discount_reason") || "Order discount").slice(0, 500) });
-  if (serviceAmount > 0) adjustments.push({ order_item_id: null, adjustment_type: "service_charge", previous_value: 0, new_value: serviceAmount, reason: "Installation or service charge" });
-  const billingId = String(form.get("billing_address_id") ?? "").trim();
-  const result = await db.rpc("create_minimal_sale", {
-    actor_profile_id: profile.id, requested_customer_id: customerId, requested_address_id: addressId || null, requested_address: address,
-    requested_billing_address_id: billingId || null, requested_billing_address: addressId ? null : address,
-    requested_warehouse_id: warehouseId, requested_source: String(form.get("sales_source") ?? "direct_office"),
-    requested_expected_delivery_date: String(form.get("expected_delivery_date") ?? "") || null,
-    requested_discount: discountAmount,
-    requested_shipping: shippingAmount, requested_tax: taxAmount,
-    requested_service: serviceAmount, requested_internal_notes: optionalString(form, "internal_notes", 2000),
-    requested_customer_notes: optionalString(form, "customer_notes", 2000), requested_items: items, requested_adjustments: adjustments,
-  });
+  if (profile.role !== "admin" && input.hasPriceOverride && !permissions.has("sales.change_price")) redirect("/admin/sales/new?error=Price%20override%20permission%20is%20required.");
+  if (profile.role !== "admin" && input.hasDiscount && !permissions.has("sales.apply_discount")) redirect("/admin/sales/new?error=Discount%20permission%20is%20required.");
+  const db = createSupabaseAdminClient();
+  const result = await db.rpc(
+    "create_minimal_sale",
+    buildManualSaleRpcArguments(profile.id, input),
+  );
   if (result.error || !result.data) redirect(`/admin/sales/new?error=${encodeURIComponent(safe(result.error?.message, "Unable to create sale."))}`);
   const saleId = String(result.data);
-  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "sale.created", module: "sales", entityType: "sales_order", entityId: saleId, targetProfileId: customerId, description: "Sale created.", newValues: { source: String(form.get("sales_source")), item_count: items.length } });
+  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "sale.created", module: "sales", entityType: "sales_order", entityId: saleId, targetProfileId: input.customerId, description: "Sale created.", newValues: { source: input.source, item_count: input.items.length } });
   revalidatePath("/admin/sales"); redirect(target(saleId, "success", "Draft sale created."));
+}
+
+export async function createSaleFromQuotationAction(form: FormData) {
+  const { profile, permissions } = await requireAllPermissions([
+    ...QUOTATION_SALE_CONVERSION_PERMISSIONS,
+  ]);
+  const scope = resolveQuotationViewScope(profile.role, permissions);
+  if (!scope) {
+    redirect("/admin/sales/new?error=Quotation%20access%20is%20not%20available.");
+  }
+
+  let quotationId: string;
+  try {
+    quotationId = uuid(form.get("quotation_id"), "Quotation");
+  } catch (error) {
+    redirect(`/admin/sales/new?error=${encodeURIComponent(error instanceof Error ? error.message : "Quotation is invalid.")}`);
+  }
+  const formTarget = `/admin/sales/new?quotation=${quotationId}`;
+  let input;
+  try {
+    input = parseDraftSaleInput(form, { mode: "quotation" });
+  } catch (error) {
+    redirect(`${formTarget}&error=${encodeURIComponent(error instanceof Error ? error.message : "Sale details are invalid.")}`);
+  }
+
+  const db = createSupabaseAdminClient();
+  let quotationQuery = db
+    .from("quotation_requests")
+    .select("id,status,expiration_date,converted_order_id")
+    .eq("id", quotationId);
+  if (scope === "own") {
+    quotationQuery = quotationQuery.eq("created_by", profile.id);
+  }
+  const { data: quotation, error: quotationError } = await quotationQuery.maybeSingle();
+  if (quotationError) {
+    console.error("Unable to verify quotation Sale conversion access.");
+    redirect(`${formTarget}&error=${encodeURIComponent("Unable to verify the quotation right now.")}`);
+  }
+  const today = new Date().toISOString().slice(0, 10);
+  const eligible = quotation?.status === "accepted" &&
+    quotation.converted_order_id === null &&
+    (quotation.expiration_date === null || quotation.expiration_date >= today);
+  const retry = quotation?.status === "converted_to_sale" &&
+    typeof quotation.converted_order_id === "string";
+  if (!eligible && !retry) {
+    redirect(`${formTarget}&error=${encodeURIComponent("Quotation is not eligible for Sale conversion.")}`);
+  }
+
+  const result = await db.rpc(
+    "create_sale_from_quotation",
+    buildQuotationSaleRpcArguments(profile.id, quotationId, input),
+  );
+  const sale = normalizeConversionSaleResult(result.data);
+  if (result.error || !sale) {
+    console.error("Unable to create a draft Sale from the quotation.");
+    redirect(`${formTarget}&error=${encodeURIComponent("Unable to convert the quotation to a Sale.")}`);
+  }
+  revalidatePath("/admin/sales");
+  revalidatePath(`/admin/quotations/${quotationId}/manage`);
+  redirect(target(sale.saleId, "success", "Draft sale created from quotation."));
 }
 
 export async function confirmSaleAction(saleId: string) {
@@ -132,34 +279,159 @@ export async function cancelSaleAction(saleId: string, form: FormData) {
 
 export async function recordPaymentAction(saleId: string, form: FormData) {
   const { profile } = await requirePermission("sales.record_payment"), db = createSupabaseAdminClient();
-  let amount: number;
-  try { amount = moneyFromForm(form, "amount", "Payment amount", { required: true, minimum: 0.01 })!; }
+  let rpcArguments: ReturnType<typeof buildSalePaymentRpcArguments>;
+  try {
+    const amount = moneyFromForm(form, "amount", "Payment amount", { required: true, minimum: 0.01 })!;
+    rpcArguments = buildSalePaymentRpcArguments({
+      actorProfileId: profile.id,
+      saleId,
+      amount,
+      paymentDate: String(form.get("payment_date") || new Date().toISOString().slice(0, 10)),
+      method: form.get("method"),
+      receiptChannel: form.get("receipt_channel"),
+      reference: optionalString(form, "reference_number", 200),
+      note: optionalString(form, "internal_note", 1000),
+      operationId: uuid(form.get("operation_id"), "Payment operation"),
+    });
+  }
   catch (error) { redirect(target(saleId, "error", error instanceof Error ? error.message : "Payment amount is invalid.")); }
-  const result = await db.rpc("record_sale_payment", { actor_profile_id: profile.id, requested_order_id: saleId, requested_amount: amount, requested_date: String(form.get("payment_date") || new Date().toISOString().slice(0, 10)), requested_method: String(form.get("method")), requested_reference: optionalString(form, "reference_number", 200), requested_note: optionalString(form, "internal_note", 1000) });
+  const result = await db.rpc("record_sale_payment", rpcArguments);
   if (result.error) redirect(target(saleId, "error", safe(result.error.message, "Unable to record payment.")));
-  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "sale.payment_recorded", module: "sales", entityType: "sales_order", entityId: saleId, description: "Customer payment recorded.", newValues: { amount, method: String(form.get("method")) } });
-  revalidatePath("/admin/sales"); revalidatePath(`/admin/sales/${saleId}`); redirect(target(saleId, "success", "Payment recorded."));
+  revalidatePath("/admin/sales");
+  revalidatePath(`/admin/sales/${saleId}`);
+  revalidatePath("/account/sales");
+  revalidatePath("/admin/accounting");
+  redirect(target(saleId, "success", "Payment recorded and posted to Accounting."));
 }
 
-export async function generateSaleDocumentAction(saleId: string, type: "invoice" | "delivery_challan") {
+export async function generateMoneyReceiptAction(
+  saleId: string,
+  paymentId: string,
+  form: FormData,
+): Promise<never> {
+  void form;
+  const { profile, permissions } = await requirePermission("sales.money_receipt");
+  const db = createSupabaseAdminClient();
+  const sale = await db
+    .from("sales_orders")
+    .select("id,created_by")
+    .eq("id", saleId)
+    .maybeSingle();
+  if (sale.error || !sale.data) {
+    redirect(target(saleId, "error", "Sale was not found."));
+  }
+  const scope = resolveSalesVisibilityScope({
+    role: profile.role,
+    status: profile.status,
+    profileId: profile.id,
+    permissions,
+  });
+  if (!canAccessSaleUnderScope(scope, sale.data.created_by)) {
+    redirect(target(saleId, "error", "You are not allowed to access this sale."));
+  }
+  const payment = await db
+    .from("sale_payments")
+    .select("id,order_id")
+    .eq("id", paymentId)
+    .maybeSingle();
+  if (payment.error || !payment.data || payment.data.order_id !== saleId) {
+    redirect(target(saleId, "error", "Payment was not found for this sale."));
+  }
+  const result = await db.rpc("generate_sale_money_receipt", {
+    actor_profile_id: profile.id,
+    requested_payment_id: paymentId,
+  });
+  if (result.error || !result.data) {
+    redirect(target(saleId, "error", safe(result.error?.message, "Unable to generate Money Receipt.")));
+  }
+  revalidatePath(`/admin/sales/${saleId}`);
+  revalidatePath(`/admin/sales/${saleId}/payments/${paymentId}/receipt`);
+  redirect(`/admin/sales/${saleId}/payments/${paymentId}/receipt`);
+}
+
+export async function generateSaleDocumentAction(saleId: string, type: "invoice" | "delivery_challan", form: FormData) {
   const permission = type === "invoice" ? "sales.create_invoice" : "sales.create_delivery_challan";
   const { profile } = await requirePermission(permission), db = createSupabaseAdminClient();
-  const result = await db.rpc("generate_sale_document", { actor_profile_id: profile.id, requested_order_id: saleId, requested_type: type });
+  let result;
+  if (type === "invoice") {
+    let operationId: string;
+    let requestVersion: number;
+    try {
+      operationId = uuid(form.get("operation_id"), "Invoice finalization operation");
+      requestVersion = parseWholeNumber(
+        form.get("request_version"),
+        "Stock Out request version",
+        { required: true, minimum: 0 },
+      )!;
+    } catch (error) {
+      redirect(target(saleId, "error", error instanceof Error ? error.message : "Invoice operation is invalid."));
+    }
+    result = await db.rpc("finalize_sale_invoice", {
+      actor_profile_id: profile.id,
+      requested_order_id: saleId,
+      requested_operation_id: operationId,
+      requested_request_version: requestVersion,
+    });
+  } else {
+    result = await db.rpc("generate_sale_document", {
+      actor_profile_id: profile.id,
+      requested_order_id: saleId,
+      requested_type: type,
+    });
+  }
   if (result.error || !result.data) redirect(target(saleId, "error", safe(result.error?.message, "Unable to generate document.")));
   await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: `sale.${type}_generated`, module: "sales", entityType: "sales_order", entityId: saleId, description: `${type === "invoice" ? "Invoice" : "Delivery challan"} generated.` });
-  revalidatePath(`/admin/sales/${saleId}`); redirect(`/admin/sales/${saleId}/documents/${result.data}`);
+  revalidatePath("/admin/sales");
+  revalidatePath(`/admin/sales/${saleId}`);
+  if (type === "invoice") {
+    revalidatePath("/employee/inventory/stock-out");
+    revalidatePath("/api/employee/inventory/work-counts");
+  }
+  redirect(`/admin/sales/${saleId}/documents/${result.data}`);
 }
 
-export async function createBasicCustomerAction(form: FormData) {
-  const { profile } = await requirePermission("sales.create"), db = createSupabaseAdminClient();
-  const email = String(form.get("email") ?? "").trim().toLowerCase(), fullName = String(form.get("full_name") ?? "").trim(), phone = optionalString(form, "phone", 50);
-  const addressLine1=String(form.get("address_line_1")??"").trim(), city="Not specified", countryCode="BD";
-  if (!email || !fullName || !phone || !addressLine1) redirect("/admin/sales/new?error=Name%2C%20email%2C%20phone%20and%20address%20are%20required.");
-  const created = await db.auth.admin.createUser({ email, email_confirm: true, user_metadata: { full_name: fullName, phone, role: "customer", status: "active" } });
-  if (created.error || !created.data.user) redirect(`/admin/sales/new?error=${encodeURIComponent(safe(created.error?.message, "Unable to add customer."))}`);
-  await db.from("profiles").update({ full_name: fullName, phone, role: "customer", status: "active" }).eq("id", created.data.user.id);
-  const {error:addressError}=await db.from("customer_addresses").insert({profile_id:created.data.user.id,recipient_name:fullName,phone,address_line_1:addressLine1,city,country_code:countryCode,is_default_shipping:true});
-  if(addressError){await db.auth.admin.deleteUser(created.data.user.id);redirect("/admin/sales/new?error=Unable%20to%20save%20the%20customer%20address.");}
-  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "sale.customer_created", module: "sales", entityType: "profile", entityId: created.data.user.id, targetProfileId: created.data.user.id, description: "Basic customer created from Sales." });
-  revalidatePath("/admin/sales/new"); redirect(`/admin/sales/new?success=${encodeURIComponent(`Customer ${fullName} added. They can use password recovery to set a password.`)}`);
+export async function createBasicCustomerAction(
+  _previousState: BasicCustomerActionState,
+  form: FormData,
+): Promise<BasicCustomerActionState> {
+  const { profile } = await requirePermission("sales.create");
+  try {
+    const input = basicCustomerInputFromForm(form);
+    const duplicates = await findPossibleCustomers({
+      email: input.email,
+      phone: input.phone,
+      companyName: input.companyName ?? "",
+    });
+    const decision = customerCreationDecision(
+      duplicates,
+      form.get("duplicate_override") === "true",
+    );
+    if (!decision.allowCreation) {
+      return {
+        status: "duplicate",
+        message: decision.message,
+        customer: null,
+        duplicates,
+      };
+    }
+    const customer = await createBasicCustomerRecord(input);
+    await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "sale.customer_created", module: "sales", entityType: "profile", entityId: customer.id, targetProfileId: customer.id, description: "Basic customer created from Sales." });
+    revalidatePath("/admin/sales/new");
+    return {
+      status: "success",
+      message: `Customer ${input.fullName} added. They can use password recovery to set a password.`,
+      customer,
+      duplicates: [],
+    };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "";
+    return {
+      status: "error",
+      message: /already|registered|exists/i.test(detail)
+        ? "A customer with this email already exists. Search for the existing customer below."
+        : detail || "Unable to add customer.",
+      customer: null,
+      duplicates: [],
+    };
+  }
 }

@@ -49,4 +49,3 @@ The public catalogue loads every public product image and falls back from the pr
 - Unit tests cover primary-image preference, non-primary fallback, isolation between products, and featured-filter normalization.
 - Integration checks cover admin pagination/filter wiring, homepage dynamic featured loading, and chat sizing contracts.
 - Run the complete standalone suite, inventory verification, lint, TypeScript, production build, local route smoke tests, and visual checks at desktop and mobile sizes before deployment.
-

@@ -14,4 +14,3 @@ The active state uses dark blue text on a pale blue background. This stays clear
 
 - Add a regression test that proves both active elements use the semantic state and that the foreground/background pair meets WCAG AA contrast.
 - Verify the authenticated order page in the deployed app and inspect the computed foreground/background colors.
-

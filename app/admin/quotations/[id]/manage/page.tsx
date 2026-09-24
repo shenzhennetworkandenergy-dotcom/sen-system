@@ -3,7 +3,8 @@ import { connection } from "next/server";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { QuotationOperations } from "@/components/quotations/QuotationOperations";
-import { requirePermission } from "@/lib/auth/permissions";
+import { requireQuotationView } from "@/lib/quotations/access";
+import { resolveLinkedSale } from "@/lib/quotations/traceability";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
@@ -16,29 +17,40 @@ export default async function ManageQuotationPage({
   searchParams: Promise<{
     success?: string;
     error?: string;
-    customerCreation?: string;
   }>;
 }) {
   await connection();
-  const { profile, permissions } = await requirePermission("quotations.view");
+  const { profile, permissions, quotationViewScope } =
+    await requireQuotationView();
   const [{ id }, notice] = await Promise.all([params, searchParams]);
   const db = createSupabaseAdminClient();
   await db.rpc("queue_quotation_expiry_notifications");
-  const { data: quotation, error } = await db
+  let quotationQuery = db
     .from("quotation_requests")
     .select(
-      "id,reference,profile_id,status,subject,company_name,customer_tax_identification_number,required_by,expiration_date,subtotal,discount_amount,tax_amount,total_amount,currency,terms_and_conditions,payment_terms,delivery_information,customer_notes,internal_notes,assigned_to,approved_at,converted_at,converted_order_id,converted_invoice_id,profiles!quotation_requests_profile_id_fkey(id,full_name,email,role)",
+      "id,reference,profile_id,status,subject,company_name,customer_tax_identification_number,required_by,expiration_date,subtotal,discount_amount,tax_amount,total_amount,currency,terms_and_conditions,payment_terms,delivery_information,customer_notes,internal_notes,assigned_to,approved_at,converted_at,converted_order_id,converted_invoice_id,created_by,profiles!quotation_requests_profile_id_fkey(id,full_name,email,role)",
     )
-    .eq("id", id)
-    .maybeSingle();
+    .eq("id", id);
+  if (quotationViewScope === "own") {
+    quotationQuery = quotationQuery.eq("created_by", profile.id);
+  }
+  const { data: quotation, error } = await quotationQuery.maybeSingle();
   if (error || !quotation) notFound();
+  const linkedSale = await resolveLinkedSale(
+    quotation.converted_order_id,
+    (saleId) => db
+      .from("sales_orders")
+      .select("id,order_number")
+      .eq("id", saleId)
+      .maybeSingle(),
+  );
   const customer = quotation.profiles as unknown as {
     id: string;
     full_name: string | null;
     email: string | null;
     role: string;
   };
-  const [{ data: staff }, { data: warehouses }, { data: contacts }, { data: auditRows }] =
+  const [{ data: staff }, { data: auditRows }] =
     await Promise.all([
       db
         .from("profiles")
@@ -46,16 +58,6 @@ export default async function ManageQuotationPage({
         .in("role", ["admin", "employee"])
         .eq("status", "active")
         .order("full_name"),
-      db
-        .from("warehouses")
-        .select("id,code,name")
-        .eq("is_active", true)
-        .order("name"),
-      db
-        .from("crm_contacts")
-        .select("id")
-        .eq("profile_id", quotation.profile_id)
-        .limit(1),
       db
         .from("audit_logs")
         .select("id,action,description,created_at,actor_id")
@@ -90,19 +92,17 @@ export default async function ManageQuotationPage({
         quotation={quotation}
         customer={customer}
         staff={staff ?? []}
-        warehouses={warehouses ?? []}
         audits={audits}
-        customerExists={Boolean(contacts?.length)}
-        customerCreationRequired={notice.customerCreation === "required"}
+        linkedSale={linkedSale}
         capabilities={{
           edit: can("quotations.edit"),
           assign: can("quotations.assign"),
-          requestInformation: can("quotations.edit"),
           approve: can("quotations.approve"),
           reject: can("quotations.reject"),
+          issue: can("quotations.send"),
+          recordCustomerOutcome: can("quotations.record_customer_outcome"),
           print: can("quotations.print"),
-          convert: can("quotations.convert_to_invoice"),
-          createCustomer: can("quotations.create_customer"),
+          convertToSale: can("quotations.convert_to_sale") && can("sales.create"),
           viewHistory: can("quotations.view_history"),
         }}
         success={notice.success}

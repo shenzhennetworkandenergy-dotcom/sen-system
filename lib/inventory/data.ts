@@ -13,14 +13,16 @@ export async function getInventorySummary(profileId: string) {
 
 export async function getInventorySelectors() {
   const db = createSupabaseAdminClient();
-  const [{ data: warehouses }, { data: products }, { data: variations }, { data: reasons }, { data: balances }] = await Promise.all([
+  const [{ data: warehouses }, { data: reasons }, { data: balances }] = await Promise.all([
     db.from("warehouses").select("id,code,name,country_name").eq("is_active", true).order("name"),
-    db.from("products").select("id,name,sku,product_type,serial_tracking_required").neq("status", "archived").order("name").limit(500),
-    db.from("product_variations").select("id,product_id,sku,combination_key").eq("status", "active").order("sku").limit(1000),
     db.from("stock_adjustment_reasons").select("id,key,name,direction").eq("is_active", true).order("sort_order"),
     db.from("inventory_balances").select("id,warehouse_id,product_id,variation_id,on_hand,reserved,available").order("updated_at", { ascending: false }).limit(1000),
   ]);
-  return { warehouses: warehouses ?? [], products: products ?? [], variations: variations ?? [], reasons: reasons ?? [], balances: balances ?? [] };
+  const productIds = [...new Set((balances ?? []).map((item) => item.product_id))];
+  const { data: products } = productIds.length
+    ? await db.from("products").select("id,name,sku,model_number,product_type,serial_tracking_required").in("id", productIds)
+    : { data: [] };
+  return { warehouses: warehouses ?? [], products: products ?? [], variations: [], reasons: reasons ?? [], balances: balances ?? [] };
 }
 
 export const inventoryMetrics = ["active_products", "simple_products", "variable_products", "variations", "on_hand", "available", "reserved", "low_stock", "out_of_stock", "serialized_units"] as const;

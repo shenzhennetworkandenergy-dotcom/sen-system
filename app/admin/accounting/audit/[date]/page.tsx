@@ -2,19 +2,21 @@ import { connection } from "next/server";
 import { notFound } from "next/navigation";
 import { CashbookAuditReview } from "@/components/accounting/CashbookAuditReview";
 import { DashboardShell } from "@/components/dashboard/Shell";
-import { getCashbookAuditDay, parseCashbookAuditDate } from "@/lib/accounting/audit";
+import { getCashbookAuditDay, parseCashbookAuditDate, parseCashbookDayId } from "@/lib/accounting/audit";
 import { requirePermission } from "@/lib/auth/permissions";
 
 export const dynamic = "force-dynamic";
 
-export default async function CashbookAuditDetailPage({ params, searchParams }: { params: Promise<{ date: string }>; searchParams: Promise<{ success?: string; error?: string }> }) {
+export default async function CashbookAuditDetailPage({ params, searchParams }: { params: Promise<{ date: string }>; searchParams: Promise<{ day?: string; success?: string; error?: string }> }) {
   await connection();
   const { profile, permissions } = await requirePermission("accounting.audit_cashbook");
   const { date: rawDate } = await params;
   const date = parseCashbookAuditDate(rawDate);
   if (!date) notFound();
   const notices = await searchParams;
-  const result = await getCashbookAuditDay(date);
+  const cashbookDayId = parseCashbookDayId(notices.day);
+  if (!cashbookDayId) notFound();
+  const result = await getCashbookAuditDay(cashbookDayId, date);
   if (!result) notFound();
 
   return <DashboardShell admin={profile.role === "admin"} employeePermissions={profile.role === "employee" ? permissions : undefined} title="Cashbook Audit Review" subtitle="Read-only finalized statement review.">

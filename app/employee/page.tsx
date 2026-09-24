@@ -3,23 +3,21 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { getPermissionCatalogue, getPermissionMatrix } from "@/lib/auth/permissions";
 import { requireProfile } from "@/lib/auth/session";
 import { routes } from "@/lib/constants/routes";
-import { visibleEmployeeNavigation } from "@/lib/navigation/dashboard";
+import { getAuthorizedPhysicalReturnQueue } from "@/lib/inventory/rma-return-data";
+import { employeeModuleRouteMap } from "@/lib/navigation/dashboard";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export default async function EmployeePage() {
   const { profile } = await requireProfile(["employee"]);
-  const [matrix, modules] = await Promise.all([
+  const [matrix, modules, physicalReturnClaims] = await Promise.all([
     getPermissionMatrix(profile.id),
     getPermissionCatalogue(),
+    getAuthorizedPhysicalReturnQueue(profile.id),
   ]);
   const permittedModules = modules.filter((module) =>
     module.permissions.some((permission) => matrix.effectiveKeys.includes(permission.key)),
   );
-  const visibleRoutes = new Map<string,string>();
-  for(const item of visibleEmployeeNavigation(matrix.effectiveKeys)){
-    const key=item.moduleKey??item.requiredPermission?.split(".",1)[0]??item.key;
-    if(item.route&&!visibleRoutes.has(key))visibleRoutes.set(key,item.route);
-  }
+  const visibleRoutes = employeeModuleRouteMap(matrix.effectiveKeys);
   const canViewActivity = matrix.effectiveKeys.includes("activity.view_own");
   const { data: activity } = canViewActivity
     ? await createSupabaseAdminClient()
@@ -57,22 +55,47 @@ export default async function EmployeePage() {
         <a href={routes.employeeHr} className="mt-4 inline-block rounded-lg bg-blue-700 px-4 py-2 font-semibold text-white">Open My HR</a>
       </section>
 
+      {physicalReturnClaims.length ? (
+        <section className="mt-6 rounded-xl border bg-[var(--surface)] p-6">
+          <h2 className="text-xl font-semibold">Physical customer returns</h2>
+          <p className="mt-1 text-sm text-[var(--muted-text)]">
+            Confirm only products that have physically arrived at one of your authorized warehouses.
+          </p>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {physicalReturnClaims.map((claim) => (
+              <a
+                key={claim.id}
+                href={`/employee/rma/${claim.id}/receive`}
+                className="rounded-lg border p-4 transition hover:border-blue-400 hover:bg-blue-50"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <strong>{claim.rmaNumber}</strong>
+                  <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-900">
+                    {claim.quantityRemaining} to receive
+                  </span>
+                </div>
+                <p className="mt-2 text-sm">{claim.orderNumber}</p>
+                <p className="text-sm text-[var(--muted-text)]">{claim.warehouseName}</p>
+              </a>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <section className="mt-6 rounded-xl border bg-[var(--surface)] p-6">
         <h2 className="text-xl font-semibold">Permitted modules</h2>
         {permittedModules.length ? (
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             {permittedModules.map((module) => {
               const route = visibleRoutes.get(module.key);
-              const grantedPermissions=module.permissions.filter((permission)=>matrix.effectiveKeys.includes(permission.key));
               const content = (
                 <>
                   <h3 className="font-semibold">{module.name}</h3>
                   <p className="mt-1 text-sm text-[var(--muted-text)]">
-                    {route
+                    {module.is_implemented && route
                       ? "Open permitted workspace"
-                      : "Permission granted; this module is not available yet"}
+                      : "Permission reserved for a future module"}
                   </p>
-                  <ul className="mt-3 space-y-1 text-xs text-[var(--muted-text)]">{grantedPermissions.slice(0,4).map((permission)=><li key={permission.id}>✓ {permission.name}</li>)}{grantedPermissions.length>4?<li>+ {grantedPermissions.length-4} more</li>:null}</ul>
                 </>
               );
               return route ? (

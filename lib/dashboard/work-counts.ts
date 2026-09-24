@@ -2,7 +2,7 @@ import "server-only";
 
 import { getUnreadChatbotInquiryCount } from "@/lib/crm/chatbot-inquiries";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { getEmployeePrimaryWarehouseId } from "@/lib/inventory/employee-stock-receiving";
+import { getEmployeePrimaryWarehouseId } from "@/lib/inventory/employee-stock-receiving.server";
 import { remainingPurchaseReceiptUnits } from "@/lib/inventory/purchase-receiving";
 
 export type DashboardWorkCounts = Record<string, number>;

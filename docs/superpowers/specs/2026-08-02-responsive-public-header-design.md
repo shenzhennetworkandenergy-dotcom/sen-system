@@ -32,4 +32,3 @@ Use one restrained desktop row at the `xl` breakpoint and a native disclosure me
 - Extend the public-header source contract before implementation.
 - Run lint, TypeScript, the public-header verifier, the complete standalone test suite, and a production build.
 - Browser-check the desktop row and compact three-bar menu at representative desktop, tablet, and phone widths.
-

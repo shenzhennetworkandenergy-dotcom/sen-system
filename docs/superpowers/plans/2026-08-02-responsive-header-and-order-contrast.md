@@ -45,4 +45,3 @@
 1. Run the public-header verifier, order-progress regression, lint, TypeScript, standalone suite, and production build.
 2. Browser-check desktop and compact header behavior plus authenticated order-progress computed colors.
 3. Commit, push, deploy to Vercel production, and repeat production browser checks.
-

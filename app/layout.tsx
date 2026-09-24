@@ -6,6 +6,10 @@ import { NavigationProgress } from "@/components/ui/NavigationProgress";
 import { JsonLd } from "@/components/seo/JsonLd";
 import "./globals.css";
 
+// The native and cloud-preview backends are available only at runtime.
+// Avoid database access while a standalone container image is being built.
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   metadataBase: new URL("https://sen.com.bd"),
   title: { default: "SEN — Shenzhen Energy & Networks", template: "%s | SEN" },

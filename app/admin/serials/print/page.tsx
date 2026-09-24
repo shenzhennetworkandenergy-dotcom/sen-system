@@ -4,7 +4,8 @@ import { redirect } from "next/navigation";
 import { PrintButton } from "@/components/inventory/PrintButton";
 import { ConfirmSubmitButton } from "@/components/ui/ConfirmSubmitButton";
 import { requireAnyPermission } from "@/lib/auth/permissions";
-import { getEmployeePrimaryWarehouseId } from "@/lib/inventory/employee-stock-receiving";
+import { mustScopeSerialPrintToEmployeePurchaseReceipt } from "@/lib/inventory/employee-stock-receiving";
+import { getEmployeePrimaryWarehouseId } from "@/lib/inventory/employee-stock-receiving.server";
 import { createSerialLabelAssets } from "@/lib/inventory/labels";
 import {
   isUuid,
@@ -47,11 +48,15 @@ export default async function SerialPrintPage({ searchParams }: { searchParams: 
     "serials.print",
     "inventory.receive_new_stock",
   ]);
-  const canPrintAnySerial =
-    profile.role === "admin" || permissions.has("serials.print");
+  const scopedEmployeeReceiptPrint = mustScopeSerialPrintToEmployeePurchaseReceipt({
+    role: profile.role,
+    hasGlobalSerialPrintPermission: permissions.has("serials.print"),
+  });
+  const backHref=scopedEmployeeReceiptPrint?"/employee/inventory/receive":"/admin/serials";
+  const canPrintAnySerial = !scopedEmployeeReceiptPrint;
   const params = await searchParams;
   const selection = parseSerialPrintSelection(params);
-  if (!selection) return <main className="min-h-screen bg-slate-50 p-8 text-slate-950"><div className="mx-auto max-w-3xl rounded-2xl border bg-white p-8 shadow-sm"><h1 className="text-2xl font-bold">No serials selected</h1><p className="mt-2 text-slate-600">Choose one or more SEN serials before generating labels.</p><a href="/admin/serials" className="mt-5 inline-block rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white">Return to Serial Tracking</a></div></main>;
+  if (!selection) return <main className="min-h-screen bg-slate-50 p-8 text-slate-950"><div className="mx-auto max-w-3xl rounded-2xl border bg-white p-8 shadow-sm"><h1 className="text-2xl font-bold">No serials selected</h1><p className="mt-2 text-slate-600">Choose one or more SEN serials before generating labels.</p><a href={backHref} className="mt-5 inline-block rounded-xl bg-slate-900 px-4 py-3 font-semibold text-white">Return to Serial Tracking</a></div></main>;
 
   const db = createSupabaseAdminClient();
   const { data: sizeRows, error: sizeError } = await db.from("serial_label_sizes").select("id,name,width_mm,height_mm").order("width_mm").order("height_mm").order("name");
@@ -62,7 +67,7 @@ export default async function SerialPrintPage({ searchParams }: { searchParams: 
   if (!selectedSize) {
     return <main className="min-h-screen bg-gradient-to-br from-slate-100 via-white to-blue-50 p-5 text-slate-950 sm:p-8">
       <div className="mx-auto max-w-5xl">
-        <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[.2em] text-blue-700">SEN serial labels</p><h1 className="mt-1 text-3xl font-bold">Choose label size</h1><p className="mt-2 text-slate-600">Select a saved size before the SEN label is generated.</p></div><a href="/admin/serials" className="rounded-xl border border-slate-300 bg-white px-4 py-3 font-semibold">Back to serials</a></div>
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[.2em] text-blue-700">SEN serial labels</p><h1 className="mt-1 text-3xl font-bold">Choose label size</h1><p className="mt-2 text-slate-600">Select a saved size before the SEN label is generated.</p></div><a href={backHref} className="rounded-xl border border-slate-300 bg-white px-4 py-3 font-semibold">Back to serials</a></div>
         <Notice params={{ ...params, error: params.error ?? (params.size ? "That label size is unavailable. Choose another size." : undefined) }} />
         {sizes.length ? <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" aria-label="Saved label sizes">{sizes.map((size) => <article key={size.id} className="flex min-h-44 flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex-1"><h2 className="text-lg font-bold">{size.name}</h2><p className="mt-1 text-slate-600">{size.width_mm} × {size.height_mm} mm</p><div className="mt-4 flex h-16 items-center justify-center rounded-lg bg-slate-100"><span className="border-2 border-dashed border-blue-400 bg-white" style={{ width: `${Math.min(Number(size.width_mm), 120)}px`, height: `${Math.min(Number(size.height_mm), 55)}px` }} /></div></div><div className="mt-4 flex items-center gap-2"><a href={`?${serialPrintQuery(selection, size.id)}`} className="flex-1 rounded-xl bg-blue-700 px-4 py-2.5 text-center font-semibold text-white">Use this size</a>{profile.role === "admin" ? <form action={deleteSerialLabelSizeAction}><SelectionFields selection={selection}/><input type="hidden" name="size_id" value={size.id}/><ConfirmSubmitButton confirmation={`Delete label size ${size.name}?`} className="rounded-xl border border-red-300 px-3 py-2.5 font-semibold text-red-700">Delete</ConfirmSubmitButton></form> : null}</div></article>)}</section> : <p className="rounded-2xl border border-amber-300 bg-amber-50 p-5 text-amber-950">No label sizes are available. {profile.role === "admin" ? "Add the first size below." : "Ask an administrator to add a label size."}</p>}
         {profile.role === "admin" ? <section className="mt-6 rounded-2xl border border-blue-200 bg-white p-6 shadow-sm"><h2 className="text-xl font-bold">Add label size</h2><p className="mt-1 text-sm text-slate-600">Save dimensions in millimetres. The size will appear for every authorized label printer.</p><form action={createSerialLabelSizeAction} className="mt-4 grid gap-4 md:grid-cols-[1fr_11rem_11rem_auto]"><SelectionFields selection={selection}/><label className="text-sm font-semibold">Size name<input name="name" required minLength={2} maxLength={80} placeholder="Example: Shelf 70 x 35 mm" className="mt-1 w-full rounded-xl border px-3 py-2.5"/></label><label className="text-sm font-semibold">Width (mm)<input name="width_mm" type="number" min="10" max="300" step="0.01" required className="mt-1 w-full rounded-xl border px-3 py-2.5"/></label><label className="text-sm font-semibold">Height (mm)<input name="height_mm" type="number" min="10" max="300" step="0.01" required className="mt-1 w-full rounded-xl border px-3 py-2.5"/></label><button className="self-end rounded-xl bg-slate-900 px-5 py-3 font-semibold text-white">Add size</button></form></section> : null}

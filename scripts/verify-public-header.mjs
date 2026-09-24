@@ -18,9 +18,6 @@ const requiredHeaderTokens = [
   "sen-header-actions",
   "sen-menu-box",
   "sen-profile-box",
-  "sen-profile-menu",
-  "sen-profile-menu-panel",
-  "sen-profile-menu-dashboard",
   "sen-header-search-desktop",
   "max-w-[92rem]",
   "sen-header-search",
@@ -78,12 +75,20 @@ assert.ok(header.includes('aria-label="Public navigation"'));
 assert.ok(search.includes('role="search"'));
 assert.ok(mobile.includes("<summary"));
 assert.ok(
-  header.includes('<details className="sen-profile-menu">'),
-  "Authenticated desktop navigation must use a profile disclosure",
+  header.includes('<Link href={dash} className="sen-menu-box">'),
+  "Authenticated desktop navigation must expose the role dashboard directly",
 );
 assert.ok(
-  header.includes('className="sen-menu-box sen-profile-menu-dashboard"'),
-  "The role dashboard must be highlighted inside the profile menu",
+  header.includes('<Link href={routes.profile} className="sen-menu-box sen-profile-box">'),
+  "Authenticated desktop navigation must expose My Profile directly",
+);
+assert.ok(
+  header.includes('<a href={routes.logout} className="sen-menu-box">'),
+  "Authenticated desktop navigation must expose Logout directly",
+);
+assert.ok(
+  !header.includes('<details className="sen-profile-menu">'),
+  "Authenticated desktop actions must not be hidden inside a profile disclosure",
 );
 assert.ok(
   !header.includes('<Container className="pb-3 xl:hidden">'),

@@ -58,7 +58,6 @@ begin
   );
   return event_id;
 end $$;
-
 revoke all on function public.capture_serial_event(uuid,uuid,uuid,text,uuid,text)
 from public,anon,authenticated;
 grant execute on function public.capture_serial_event(uuid,uuid,uuid,text,uuid,text)

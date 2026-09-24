@@ -4,7 +4,7 @@ import { connection } from "next/server";
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { PurchaseReceiptForm } from "@/components/purchasing/PurchaseReceiptForm";
 import { requirePermission } from "@/lib/auth/permissions";
-import { getEmployeePrimaryWarehouseId } from "@/lib/inventory/employee-stock-receiving";
+import { getEmployeePrimaryWarehouseId } from "@/lib/inventory/employee-stock-receiving.server";
 import { getPurchaseOrder } from "@/lib/purchasing/data";
 import { receivePurchaseOrderAction } from "../../actions";
 
@@ -30,6 +30,7 @@ export default async function ReceivePurchaseOrderPage({
   const { id } = await params;
   const data = await getPurchaseOrder(id);
   if (!data) notFound();
+
   if (profile.role === "employee") {
     const warehouseId = await getEmployeePrimaryWarehouseId(profile.id);
     if (!warehouseId || warehouseId !== data.order.destination_warehouse_id) {
@@ -38,14 +39,20 @@ export default async function ReceivePurchaseOrderPage({
       );
     }
   }
+
   if (!["received", "partially_received"].includes(data.order.status)) {
-    const back = profile.role === "employee"
-      ? "/employee/inventory/receive"
-      : `/admin/purchasing/${id}`;
-    redirect(`${back}?error=The%20supplier%20shipment%20must%20arrive%20before%20stock%20can%20be%20posted.`);
+    const back =
+      profile.role === "employee"
+        ? "/employee/inventory/receive"
+        : `/admin/purchasing/${id}`;
+    redirect(
+      `${back}?error=The%20supplier%20shipment%20must%20arrive%20before%20stock%20can%20be%20posted.`,
+    );
   }
 
-  const expected = data.serials.filter((serial) => serial.status === "expected");
+  const expected = data.serials.filter(
+    (serial) => serial.status === "expected",
+  );
 
   return (
     <DashboardShell

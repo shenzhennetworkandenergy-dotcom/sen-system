@@ -2,12 +2,15 @@ import Link from "next/link";
 import { connection } from "next/server";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
-import { requirePermission } from "@/lib/auth/permissions";
+import { QuotationStatusBadge } from "@/components/quotations/QuotationStatusBadge";
+import { requireQuotationView } from "@/lib/quotations/access";
+import { canOpenQuotationDocument } from "@/lib/quotations/access-policy";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
 
 const statuses = [
+  "draft",
   "submitted",
   "reviewing",
   "quoted",
@@ -17,6 +20,7 @@ const statuses = [
   "approved",
   "rejected",
   "expired",
+  "converted_to_sale",
   "converted_to_invoice",
   "closed",
 ];
@@ -27,18 +31,28 @@ export default async function AdminQuotationsPage({
   searchParams: Promise<{ status?: string; success?: string; error?: string }>;
 }) {
   await connection();
-  const { profile, permissions } = await requirePermission("quotations.view");
+  const { profile, permissions, quotationViewScope } =
+    await requireQuotationView();
   const canCreate =
     profile.role === "admin" || permissions.has("quotations.create");
+  const canEdit =
+    profile.role === "admin" || permissions.has("quotations.edit");
+  const canOpenDocument = canOpenQuotationDocument(
+    profile.role,
+    permissions,
+  );
   const params = await searchParams;
   const db = createSupabaseAdminClient();
   let query = db
     .from("quotation_requests")
     .select(
-      "id,reference,status,subject,message,company_name,required_by,created_at,profiles!quotation_requests_profile_id_fkey(full_name,email,phone),quotation_request_items(product_name_snapshot,sku_snapshot,quantity,target_price)",
+      "id,reference,status,subject,message,company_name,required_by,created_at,created_by,profiles!quotation_requests_profile_id_fkey(full_name,email,phone),quotation_request_items(product_name_snapshot,sku_snapshot,quantity,target_price)",
     )
     .order("created_at", { ascending: false })
     .limit(100);
+  if (quotationViewScope === "own") {
+    query = query.eq("created_by", profile.id);
+  }
   if (params.status && statuses.includes(params.status)) {
     query = query.eq("status", params.status);
   }
@@ -113,13 +127,12 @@ export default async function AdminQuotationsPage({
                     {customer?.phone ?? "No phone"}
                   </p>
                 </div>
-                <span className="rounded-full bg-[var(--muted-surface)] px-3 py-1.5 text-sm font-semibold capitalize">
-                  {quotation.status.replaceAll("_", " ")}
-                </span>
+                <QuotationStatusBadge status={quotation.status} />
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
                 <a href={`/admin/quotations/${quotation.id}/manage`} className="inline-flex rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-semibold text-[var(--primary-foreground)]">Manage quotation</a>
-                <a href={`/admin/quotations/${quotation.id}`} className="inline-flex rounded-lg border px-3 py-2 text-sm font-semibold">Print quotation</a>
+                {canEdit && quotation.status === "draft" ? <a href={`/admin/quotations/${quotation.id}/edit`} className="inline-flex rounded-lg border px-3 py-2 text-sm font-semibold">Edit draft</a> : null}
+                {canOpenDocument ? <a href={`/admin/quotations/${quotation.id}`} className="inline-flex rounded-lg border px-3 py-2 text-sm font-semibold">Print quotation</a> : null}
               </div>
               <p className="mt-3">{quotation.message || "No additional notes."}</p>
               <div className="mt-4 grid gap-2">

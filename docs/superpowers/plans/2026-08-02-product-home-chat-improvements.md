@@ -188,4 +188,3 @@ git push -u origin codex/product-home-chat-improvements
 - [ ] **Step 4: Deploy and verify production**
 
 Run `npx vercel deploy --prod --yes`, inspect the deployment, repeat production route/database checks, and verify the public homepage and chat against `https://sen-system.vercel.app`.
-

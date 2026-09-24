@@ -8,8 +8,11 @@ create table public.serial_label_sizes (
   updated_at timestamptz not null default now()
 );
 
-create unique index serial_label_sizes_name_unique on public.serial_label_sizes (lower(btrim(name)));
-create unique index serial_label_sizes_dimensions_unique on public.serial_label_sizes (width_mm, height_mm);
+create unique index serial_label_sizes_name_unique
+on public.serial_label_sizes (lower(btrim(name)));
+
+create unique index serial_label_sizes_dimensions_unique
+on public.serial_label_sizes (width_mm, height_mm);
 
 insert into public.serial_label_sizes (name, width_mm, height_mm)
 values

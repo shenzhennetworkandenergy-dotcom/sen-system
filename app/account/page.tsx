@@ -42,9 +42,14 @@ const modules = [
     description: "Chat securely with the SEN team.",
   },
   {
-    label: "Warranty & Returns",
-    href: "/account/rma",
-    description: "View warranty coverage and track your claims.",
+    label: "RMB Requests",
+    href: "/account/rmb-payments",
+    description: "Create and follow your China payment-service requests.",
+  },
+  {
+    label: "Cargo",
+    href: "/account/cargo",
+    description: "Create and track your Cargo requests and invoices.",
   },
 ];
 

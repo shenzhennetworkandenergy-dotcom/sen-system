@@ -10,7 +10,7 @@ import { addressFromForm, jsonArray, optionalString, uuid } from "@/lib/orders/v
 import { moneyFromForm, parseMoney, parseWholeNumber } from "@/lib/validation/numbers";
 
 const orderTarget = (id: string | null, kind: "success" | "error", message: string) => `${id ? `/admin/orders/${id}` : "/admin/orders"}?${kind}=${encodeURIComponent(message)}`;
-const safeMessage = (error: unknown, fallback: string) => error instanceof Error && /required|invalid|quantity|stock|serial|draft|confirmed|eligible|address|customer|price|currency|reservation/i.test(error.message) ? error.message : fallback;
+const safeMessage = (error: unknown, fallback: string) => error instanceof Error && /required|invalid|quantity|stock|serial|draft|confirmed|eligible|address|customer|price|currency|reservation|release|return|rma|physical/i.test(error.message) ? error.message : fallback;
 
 export async function createOrderAction(form: FormData) {
   const { profile } = await requirePermission("orders.create");
