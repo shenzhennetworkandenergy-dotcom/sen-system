@@ -124,3 +124,4 @@ export default async function EmployeePurchaseStockReceiptPage({
     </DashboardShell>
   );
 }
+

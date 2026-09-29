@@ -1,6 +1,7 @@
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { getPermissionMatrix } from "@/lib/auth/permissions";
 import { routes } from "@/lib/constants/routes";
+import { RECRUITMENT_ACCESS_PERMISSION } from "@/lib/hr/recruitment-access-policy";
 import { requireEmployeeHrRecord } from "@/lib/hr/self-service";
 
 export async function EmployeeHrShell({ title, subtitle, success, error, children }: {
@@ -13,6 +14,7 @@ export async function EmployeeHrShell({ title, subtitle, success, error, childre
       <a className="rounded-lg border px-3 py-2 font-semibold" href={routes.employeeHr}>My HR</a>
       <a className="rounded-lg border px-3 py-2 font-semibold" href={routes.employeeHrAttendance}>Attendance</a>
       <a className="rounded-lg border px-3 py-2 font-semibold" href={routes.employeeHrLeaves}>Leave</a>
+      {matrix.effectiveKeys.includes(RECRUITMENT_ACCESS_PERMISSION) ? <a className="rounded-lg border px-3 py-2 font-semibold" href={routes.employeeHrRecruitment}>Recruitment</a> : null}
     </nav>
     {success ? <p className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm font-medium text-emerald-900">{success}</p> : null}
     {error ? <p className="mb-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-medium text-red-900">{error}</p> : null}

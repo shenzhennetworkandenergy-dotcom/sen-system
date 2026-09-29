@@ -4,13 +4,12 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { requirePermission } from "@/lib/auth/permissions";
+import { normalizeBasicCustomerInput } from "@/lib/customers/basic";
 import {
-  basicCustomerInputFromForm,
-  type BasicCustomerActionState,
-} from "@/lib/customers/basic";
-import { createBasicCustomerRecord } from "@/lib/customers/create-basic";
-import { customerCreationDecision } from "@/lib/customers/duplicate-decision";
-import { findPossibleCustomers } from "@/lib/customers/duplicates-server";
+  createBasicCustomerRecord,
+  type CreatedBasicCustomer,
+} from "@/lib/customers/create-basic";
+import { customerPrimaryName } from "@/lib/customers/search";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
 import { resolveQuotationViewScope } from "@/lib/quotations/access-policy";
@@ -25,7 +24,11 @@ import { defaultQuotationExpiration } from "@/lib/quotations/validity";
 import { isQuotationImmutable } from "@/lib/quotations/workflow";
 import { parseMoney } from "@/lib/validation/numbers";
 
-export type QuotationCustomerActionState = BasicCustomerActionState;
+export type QuotationCustomerActionState = {
+  status: "idle" | "success" | "error";
+  message: string;
+  customer: CreatedBasicCustomer | null;
+};
 
 export async function createQuotationCustomerAction(
   _previousState: QuotationCustomerActionState,
@@ -33,24 +36,13 @@ export async function createQuotationCustomerAction(
 ): Promise<QuotationCustomerActionState> {
   const { profile } = await requirePermission("quotations.create");
   try {
-    const input = basicCustomerInputFromForm(form);
-    const duplicates = await findPossibleCustomers({
-      email: input.email,
-      phone: input.phone,
-      companyName: input.companyName ?? "",
+    const input = normalizeBasicCustomerInput({
+      fullName: form.get("full_name"),
+      companyName: form.get("company_name"),
+      email: form.get("email"),
+      phone: form.get("phone"),
+      addressLine1: form.get("address_line_1"),
     });
-    const decision = customerCreationDecision(
-      duplicates,
-      form.get("duplicate_override") === "true",
-    );
-    if (!decision.allowCreation) {
-      return {
-        status: "duplicate",
-        message: decision.message,
-        customer: null,
-        duplicates,
-      };
-    }
     const customer = await createBasicCustomerRecord(input);
     await writeAuditLog({
       actorId: profile.id,
@@ -64,19 +56,17 @@ export async function createQuotationCustomerAction(
     });
     return {
       status: "success",
-      message: `Customer ${customer.full_name} added and selected.`,
+      message: `Customer ${customerPrimaryName(customer)} added and selected.`,
       customer,
-      duplicates: [],
     };
   } catch (error) {
     const detail = error instanceof Error ? error.message : "";
     return {
       status: "error",
       message: /already|registered|exists/i.test(detail)
-        ? "A customer with this email already exists. Search for the existing customer below."
+        ? "A customer with this email or phone already exists. Search for the existing customer below."
         : detail || "Unable to add customer.",
       customer: null,
-      duplicates: [],
     };
   }
 }

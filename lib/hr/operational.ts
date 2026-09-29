@@ -153,7 +153,7 @@ export async function getHrAttendance(date = new Date().toISOString().slice(0,10
 export async function getHrLeave() {
   const db = createSupabaseAdminClient();
   const [requests, balances, types] = await Promise.all([
-    db.from("hr_leave_requests").select("*,hr_leave_types(name),hr_employee_records(employee_number,profile_id,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email))").order("created_at",{ ascending:false }).limit(500),
+    db.from("hr_leave_requests").select("*,hr_leave_types(name),hr_employee_records(employee_number,profile_id,job_title,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email),hr_departments(name),hr_designations(name))").order("created_at",{ ascending:false }).limit(500),
     db.from("hr_leave_balances").select("*,hr_leave_types(name),hr_employee_records(employee_number,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email))").order("leave_year",{ ascending:false }).limit(1000),
     db.from("hr_leave_types").select("*").order("name"),
   ]);

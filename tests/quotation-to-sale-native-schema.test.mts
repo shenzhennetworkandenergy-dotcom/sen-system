@@ -40,8 +40,6 @@ const expectedMigrationOrder = [
   "202608190001_purchase_carrier_management.sql",
   "202608210002_inventory_daily_closing.sql",
   "202608220001_employee_stock_out_product_release.sql",
-  "202608230001_sales_payment_accounting_integration.sql",
-  "202608230002_supplier_shipment_tracking_correction.sql",
   "202608230003_quotation_view_own.sql",
   "202608230004_quotation_to_sale.sql",
   "202608240001_stock_out_authoritative_release_quantity.sql",
@@ -51,13 +49,6 @@ const expectedMigrationOrder = [
   "202608250004_non_sales_receivables_phase3.sql",
   "202608250005_payroll_receivables_phase4.sql",
   "202608250006_receivables_accounting_phase5.sql",
-  "202608310001_sales_money_receipts.sql",
-  "202609010001_accounting_cashbook_audit.sql",
-  "202609130001_murshida_manzil.sql",
-  "202609130002_murshida_manzil_units.sql",
-  "202609130003_murshida_manzil_rent_advance_foundation.sql",
-  "202609130004_murshida_manzil_unit_description_snapshots.sql",
-  "202609200001_personal_quick_cashbook.sql",
 ];
 
 function normalizeNewlines(value: string) {

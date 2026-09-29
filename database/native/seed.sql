@@ -338,8 +338,6 @@ bb62d0f8-6603-4fd8-b7de-4e8b0683b5e0	90a11db9-0075-4bc3-8521-0a63bb62603a	rma.re
 2fd8685f-6bc4-45ab-a2b5-d4c4d8fe0dd5	90a11db9-0075-4bc3-8521-0a63bb62603a	rma.close	Close RMA claims	Close completed RMA claims.	close	t	70	t	2026-08-01 12:37:08.017854+00	2026-08-01 12:37:08.017854+00
 8be2daa3-bd52-4d63-9c69-b53dac562c8a	90a11db9-0075-4bc3-8521-0a63bb62603a	rma.manage_attachments	Manage RMA attachments	View and manage claim evidence.	manage_attachments	t	80	t	2026-08-01 12:37:08.017854+00	2026-08-01 12:37:08.017854+00
 d419dbce-a2a1-47d4-8287-baf6af4dcfce	90a11db9-0075-4bc3-8521-0a63bb62603a	rma.override_warranty	Override warranty eligibility	Override normal eligibility after review.	override_warranty	t	90	t	2026-08-01 12:37:08.017854+00	2026-08-01 12:37:08.017854+00
-9f0b9d0c-1e11-4a42-9fc7-0d0f8c2a6e31	c4e45575-671a-47e2-9f44-ca1b6ac27dfd	accounting.audit_cashbook	Audit cashbook days	Review finalized Cash Book days and approve or request correction.	audit_cashbook	t	60	t	2026-09-01 00:00:00+00	2026-09-01 00:00:00+00
-c8105ff2-0afa-442b-a04e-c843b776b29b	96bbee68-ff73-4d4e-a9dc-876d222fdfc8	sales.money_receipt	Generate sales money receipts	Generate an immutable receipt for a received sale payment.	money_receipt	t	140	t	2026-08-31 00:00:00+00	2026-08-31 00:00:00+00
 \.
 
 

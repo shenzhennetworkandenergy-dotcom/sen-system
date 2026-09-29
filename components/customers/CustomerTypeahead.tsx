@@ -4,6 +4,8 @@ import { useId, useMemo, useState } from "react";
 
 import {
   customerOptionLabel,
+  customerPrimaryName,
+  customerSecondaryLabel,
   filterCustomerOptions,
   type CustomerSearchOption,
 } from "@/lib/customers/search";
@@ -90,11 +92,9 @@ export function CustomerTypeahead({
               }}
               className="block w-full rounded-lg px-3 py-2 text-left hover:bg-blue-50"
             >
-              <b>{customer.full_name || customer.email}</b>
+              <b>{customerPrimaryName(customer)}</b>
               <span className="block text-xs text-slate-500">
-                {[customer.email, customer.phone, customer.company_name]
-                  .filter(Boolean)
-                  .join(" · ")}
+                {customerSecondaryLabel(customer)}
               </span>
             </button>
           ))}

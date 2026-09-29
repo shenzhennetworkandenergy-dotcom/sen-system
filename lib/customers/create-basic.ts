@@ -5,9 +5,9 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export type CreatedBasicCustomer = {
   id: string;
-  full_name: string;
+  full_name: string | null;
   company_name: string | null;
-  email: string;
+  email: string | null;
   phone: string;
 };
 
@@ -27,14 +27,16 @@ export async function createBasicCustomerRecord(
   input: BasicCustomerInput,
 ): Promise<CreatedBasicCustomer> {
   const db = createSupabaseAdminClient();
+  const identity = input.email
+    ? { email: input.email, email_confirm: true }
+    : { phone: input.phone, phone_confirm: true };
   const created = await db.auth.admin.createUser({
-    email: input.email,
-    email_confirm: true,
+    ...identity,
     user_metadata: {
       full_name: input.fullName,
       company_name: input.companyName,
+      email: input.email,
       phone: input.phone,
-      country: input.country,
       role: "customer",
       status: "active",
     },
@@ -46,7 +48,7 @@ export async function createBasicCustomerRecord(
     });
     throw new Error(
       /already|registered|exists/i.test(created.error?.message ?? "")
-        ? "A customer with this email already exists."
+        ? "A customer with this email or phone already exists."
         : "Unable to add customer.",
     );
   }
@@ -57,8 +59,8 @@ export async function createBasicCustomerRecord(
     .update({
       full_name: input.fullName,
       company_name: input.companyName,
+      email: input.email,
       phone: input.phone,
-      country: input.country,
       role: "customer",
       status: "active",
     })
@@ -75,12 +77,11 @@ export async function createBasicCustomerRecord(
 
   const { error: addressError } = await db.from("customer_addresses").insert({
     profile_id: customerId,
-    recipient_name: input.fullName,
+    recipient_name: input.companyName || input.fullName!,
     phone: input.phone,
-    alternate_phone: input.alternatePhone,
     address_line_1: input.addressLine1,
-    city: input.city,
-    country_code: input.countryCode,
+    city: "Not specified",
+    country_code: "BD",
     is_default_shipping: true,
   });
 

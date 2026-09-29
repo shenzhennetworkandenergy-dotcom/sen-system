@@ -238,9 +238,7 @@ test("quotation builder preserves create customer selection and supports a fixed
   assert.match(builder, /fixedCustomer/);
   assert.match(builder, /mode === "create"/);
   assert.match(builder, /mode === "edit"/);
-  assert.match(builder, /<AddCustomerForm/);
-  assert.match(builder, /action=\{createQuotationCustomerAction\}/);
-  assert.match(builder, /onCustomerResolved=/);
+  assert.match(builder, /createQuotationCustomerAction\(previousState, form\)/);
   assert.match(builder, /<CustomerTypeahead/);
   assert.match(builder, /initialDraft\.items/);
   assert.match(builder, /initialDraft\.updatedAt/);

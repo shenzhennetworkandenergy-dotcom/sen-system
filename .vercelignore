@@ -1,11 +1,7 @@
-/sen-offline-release/
-/sen-offline-release.zip
-/vendor/
-/.local-sen-data/
-/.native-test-data/
-/ready-for-hosting/
-/ready-for-hosting.zip
-/.codex-logs/
-/.worktrees/
 /.next/
+/node_modules/
+/.git/
+/.superpowers/
+/supabase/.temp/
 /.env*
+*.tsbuildinfo

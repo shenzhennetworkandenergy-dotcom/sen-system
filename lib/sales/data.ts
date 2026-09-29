@@ -101,28 +101,10 @@ export async function getSale(
       .in("sale_payment_id", paymentIds)
     : { data: [], error: null };
   assertResult("Unable to load sale payment Accounting links.", accountingLinks.error);
-  const moneyReceipts = paymentIds.length
-    ? await db.from("sale_money_receipts")
-      .select("id,payment_id,receipt_number,receipt_date,created_at")
-      .in("payment_id", paymentIds)
-    : { data: [], error: null };
-  assertResult("Unable to load sale payment Money Receipts.", moneyReceipts.error);
   const accountingByPayment = new Map(
     (accountingLinks.data ?? []).map((entry) => [
       entry.sale_payment_id,
       normalizeSalePaymentAccountingLink(entry),
-    ]),
-  );
-  const moneyReceiptByPayment = new Map(
-    (moneyReceipts.data ?? []).map((receipt) => [
-      receipt.payment_id,
-      {
-        id: receipt.id,
-        payment_id: receipt.payment_id,
-        receipt_number: receipt.receipt_number,
-        receipt_date: receipt.receipt_date,
-        created_at: receipt.created_at,
-      },
     ]),
   );
   return {
@@ -133,7 +115,6 @@ export async function getSale(
     payments: paymentRows.map((payment) => ({
       ...payment,
       accounting: accountingByPayment.get(payment.id) ?? null,
-      moneyReceipt: moneyReceiptByPayment.get(payment.id) ?? null,
     })),
     adjustments: adjustments.data ?? [],
     documents: documents.data ?? [],

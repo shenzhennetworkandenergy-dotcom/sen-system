@@ -124,3 +124,5 @@ insert into public.permissions(module_id,key,name,description,action,is_sensitiv
 select m.id,c.permission_key,c.name,c.description,c.action,c.sensitive,c.position
 from catalogue c join public.app_modules m on m.key=c.module_key
 on conflict (key) do update set module_id=excluded.module_id,name=excluded.name,description=excluded.description,action=excluded.action,is_sensitive=excluded.is_sensitive,sort_order=excluded.sort_order;
+
+

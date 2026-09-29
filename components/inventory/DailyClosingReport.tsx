@@ -89,3 +89,4 @@ export function DailyClosingReport({ sheet, lines, movements, warehouseName, pre
     <p className="daily-closing-footnote mt-5 text-right text-xs text-slate-500">* Inventory reconciliation required · Generated {dateLabel(sheet.prepared_at)}</p>
   </div>;
 }
+

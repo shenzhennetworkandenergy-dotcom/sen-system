@@ -36,7 +36,7 @@ export default async function AdminMessagesPage({
   }>;
 }) {
   await connection();
-  const { profile, permissions } = await requirePermission("support.view");
+  await requirePermission("support.view");
   const params = await searchParams;
   const db = createSupabaseAdminClient();
   let query = db
@@ -166,7 +166,7 @@ export default async function AdminMessagesPage({
                     {selected.status.replaceAll("_", " ")}
                   </span>
                 </div>
-                {selected.status !== "closed" && (profile.role === "admin" || permissions.has("support.close")) ? (
+                {selected.status !== "closed" ? (
                   <form action={closeConversationAction.bind(null, selected.id)}>
                     <button className="rounded-full border px-3 py-2 text-xs font-bold">
                       Close chat
@@ -240,7 +240,7 @@ export default async function AdminMessagesPage({
                   );
                 })}
               </div>
-              {profile.role === "admin" || permissions.has("support.update") ? <form
+              <form
                 action={replyToConversationAction.bind(null, selected.id)}
                 className="sen-admin-chat-composer"
               >
@@ -259,7 +259,7 @@ export default async function AdminMessagesPage({
                   aria-label="Reply"
                 />
                 <button>Send</button>
-              </form> : null}
+              </form>
             </>
           ) : (
             <p className="grid h-full place-items-center p-10 text-slate-500">

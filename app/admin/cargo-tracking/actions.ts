@@ -6,6 +6,7 @@ import { requireProfile } from "@/lib/auth/session";
 import { requirePermission } from "@/lib/auth/permissions";
 import { normalizeBasicCustomerInput } from "@/lib/customers/basic";
 import { createBasicCustomerRecord } from "@/lib/customers/create-basic";
+import { customerPrimaryName } from "@/lib/customers/search";
 import { cargoPackageUnits, cargoPermissionForStatus, cargoTrackingEditableStatuses, nextCargoStatus, type CargoStatus } from "@/lib/cargo-tracking/data";
 import { normalizePurchaseCarrier } from "@/lib/purchasing/carriers";
 import { writeAuditLog } from "@/lib/audit/log";
@@ -108,7 +109,7 @@ export async function createCargoCustomerAction(form: FormData) {
     go("/admin/cargo-tracking/new", "error", error instanceof Error ? error.message : "Unable to add customer.");
   }
   revalidatePath("/admin/cargo-tracking/new");
-  redirect(`/admin/cargo-tracking/new?customer=${customer.id}&success=${encodeURIComponent(`Customer ${customer.full_name} added to the shared customer master.`)}`);
+  redirect(`/admin/cargo-tracking/new?customer=${customer.id}&success=${encodeURIComponent(`Customer ${customerPrimaryName(customer)} added to the shared customer master.`)}`);
 }
 
 export async function createCargoCarrierAction(form: FormData) {

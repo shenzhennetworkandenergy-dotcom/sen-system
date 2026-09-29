@@ -4,13 +4,9 @@ import { redirect } from "next/navigation";
 import { requireAllPermissions, requirePermission } from "@/lib/auth/permissions";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
-import {
-  basicCustomerInputFromForm,
-  type BasicCustomerActionState,
-} from "@/lib/customers/basic";
+import { normalizeBasicCustomerInput } from "@/lib/customers/basic";
 import { createBasicCustomerRecord } from "@/lib/customers/create-basic";
-import { customerCreationDecision } from "@/lib/customers/duplicate-decision";
-import { findPossibleCustomers } from "@/lib/customers/duplicates-server";
+import { customerPrimaryName } from "@/lib/customers/search";
 import { optionalString, uuid } from "@/lib/orders/validation";
 import { resolveQuotationViewScope } from "@/lib/quotations/access-policy";
 import { QUOTATION_SALE_CONVERSION_PERMISSIONS } from "@/lib/quotations/sale-conversion-types";
@@ -304,51 +300,6 @@ export async function recordPaymentAction(saleId: string, form: FormData) {
   redirect(target(saleId, "success", "Payment recorded and posted to Accounting."));
 }
 
-export async function generateMoneyReceiptAction(
-  saleId: string,
-  paymentId: string,
-  form: FormData,
-): Promise<never> {
-  void form;
-  const { profile, permissions } = await requirePermission("sales.money_receipt");
-  const db = createSupabaseAdminClient();
-  const sale = await db
-    .from("sales_orders")
-    .select("id,created_by")
-    .eq("id", saleId)
-    .maybeSingle();
-  if (sale.error || !sale.data) {
-    redirect(target(saleId, "error", "Sale was not found."));
-  }
-  const scope = resolveSalesVisibilityScope({
-    role: profile.role,
-    status: profile.status,
-    profileId: profile.id,
-    permissions,
-  });
-  if (!canAccessSaleUnderScope(scope, sale.data.created_by)) {
-    redirect(target(saleId, "error", "You are not allowed to access this sale."));
-  }
-  const payment = await db
-    .from("sale_payments")
-    .select("id,order_id")
-    .eq("id", paymentId)
-    .maybeSingle();
-  if (payment.error || !payment.data || payment.data.order_id !== saleId) {
-    redirect(target(saleId, "error", "Payment was not found for this sale."));
-  }
-  const result = await db.rpc("generate_sale_money_receipt", {
-    actor_profile_id: profile.id,
-    requested_payment_id: paymentId,
-  });
-  if (result.error || !result.data) {
-    redirect(target(saleId, "error", safe(result.error?.message, "Unable to generate Money Receipt.")));
-  }
-  revalidatePath(`/admin/sales/${saleId}`);
-  revalidatePath(`/admin/sales/${saleId}/payments/${paymentId}/receipt`);
-  redirect(`/admin/sales/${saleId}/payments/${paymentId}/receipt`);
-}
-
 export async function generateSaleDocumentAction(saleId: string, type: "invoice" | "delivery_challan", form: FormData) {
   const permission = type === "invoice" ? "sales.create_invoice" : "sales.create_delivery_challan";
   const { profile } = await requirePermission(permission), db = createSupabaseAdminClient();
@@ -390,48 +341,26 @@ export async function generateSaleDocumentAction(saleId: string, type: "invoice"
   redirect(`/admin/sales/${saleId}/documents/${result.data}`);
 }
 
-export async function createBasicCustomerAction(
-  _previousState: BasicCustomerActionState,
-  form: FormData,
-): Promise<BasicCustomerActionState> {
+export async function createBasicCustomerAction(form: FormData) {
   const { profile } = await requirePermission("sales.create");
+  let input;
+  let customer;
   try {
-    const input = basicCustomerInputFromForm(form);
-    const duplicates = await findPossibleCustomers({
-      email: input.email,
-      phone: input.phone,
-      companyName: input.companyName ?? "",
+    input = normalizeBasicCustomerInput({
+      fullName: form.get("full_name"),
+      companyName: form.get("company_name"),
+      email: form.get("email"),
+      phone: form.get("phone"),
+      addressLine1: form.get("address_line_1"),
     });
-    const decision = customerCreationDecision(
-      duplicates,
-      form.get("duplicate_override") === "true",
-    );
-    if (!decision.allowCreation) {
-      return {
-        status: "duplicate",
-        message: decision.message,
-        customer: null,
-        duplicates,
-      };
-    }
-    const customer = await createBasicCustomerRecord(input);
-    await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "sale.customer_created", module: "sales", entityType: "profile", entityId: customer.id, targetProfileId: customer.id, description: "Basic customer created from Sales." });
-    revalidatePath("/admin/sales/new");
-    return {
-      status: "success",
-      message: `Customer ${input.fullName} added. They can use password recovery to set a password.`,
-      customer,
-      duplicates: [],
-    };
+    customer = await createBasicCustomerRecord(input);
   } catch (error) {
-    const detail = error instanceof Error ? error.message : "";
-    return {
-      status: "error",
-      message: /already|registered|exists/i.test(detail)
-        ? "A customer with this email already exists. Search for the existing customer below."
-        : detail || "Unable to add customer.",
-      customer: null,
-      duplicates: [],
-    };
+    redirect(
+      `/admin/sales/new?error=${encodeURIComponent(
+        error instanceof Error ? error.message : "Unable to add customer.",
+      )}`,
+    );
   }
+  await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "sale.customer_created", module: "sales", entityType: "profile", entityId: customer.id, targetProfileId: customer.id, description: "Basic customer created from Sales." });
+  revalidatePath("/admin/sales/new"); redirect(`/admin/sales/new?success=${encodeURIComponent(`Customer ${customerPrimaryName(customer)} added.`)}`);
 }

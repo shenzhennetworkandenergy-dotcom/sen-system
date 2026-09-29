@@ -46,6 +46,6 @@ test("customer type-ahead limits results and creates the existing display label"
   assert.equal(filterCustomerOptions(many, "amina").length, 20);
   assert.equal(
     customerOptionLabel(customers[0]),
-    "Amina Rahman · amina@example.com",
+    "Tex Rise Engineering · Contact: Amina Rahman · amina@example.com · +8801711000001",
   );
 });

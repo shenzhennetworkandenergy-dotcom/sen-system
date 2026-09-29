@@ -4,8 +4,6 @@ import { randomUUID } from "node:crypto";
 import Link from "next/link";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
-import { SerialPrintLink } from "@/components/inventory/SerialPrintLink";
-import { MoneyReceiptAction } from "@/components/sales/MoneyReceiptAction";
 import { SaleLineEditor } from "@/components/sales/SaleLineEditor";
 import { SalePaymentMethodFields } from "@/components/sales/SalePaymentMethodFields";
 import { requireAnyPermission } from "@/lib/auth/permissions";
@@ -22,7 +20,6 @@ import {
 import {
   cancelSaleAction,
   confirmSaleAction,
-  generateMoneyReceiptAction,
   generateSaleDocumentAction,
   recordPaymentAction,
   updateSaleCommercialTermsAction,
@@ -99,8 +96,6 @@ export default async function SaleDetail({
     (item) => !["released", "cancelled"].includes(item.status),
   );
   const isAdmin = profile.role === "admin";
-  const canPrint = isAdmin || permissions.has("serials.print");
-  const canUseMoneyReceipt = isAdmin || permissions.has("sales.money_receipt");
   const canEditLines =
     !["delivered", "cancelled"].includes(order.status) &&
     (isAdmin || permissions.has("sales.edit"));
@@ -328,14 +323,13 @@ export default async function SaleDetail({
                       <ul className="mt-2 grid gap-1 md:grid-cols-2">
                         {itemSerials.map((allocation) => {
                           const serial = allocation.serial_numbers as {
-                            id: string;
                             sen_serial: string;
                             manufacturer_serial: string | null;
                           };
                           return (
-                            <li key={allocation.id} className="flex items-center justify-between gap-2 rounded bg-[var(--muted-surface)] p-2 text-xs">
-                              <span><b>{serial.sen_serial}</b>{serial.manufacturer_serial ? ` · ${serial.manufacturer_serial}` : ""} · {label(allocation.status)}</span>
-                              {canPrint ? <SerialPrintLink serialId={serial.id}>Print</SerialPrintLink> : null}
+                            <li key={allocation.id} className="rounded bg-[var(--muted-surface)] p-2 text-xs">
+                              <b>{serial.sen_serial}</b>
+                              {serial.manufacturer_serial ? ` · ${serial.manufacturer_serial}` : ""} · {label(allocation.status)}
                             </li>
                           );
                         })}
@@ -418,35 +412,14 @@ export default async function SaleDetail({
                           )}
                         </td>
                         <td className="py-2">
-                          {canUseMoneyReceipt ? (
-                            payment.moneyReceipt ? (
-                              <div className="flex flex-wrap gap-1">
-                                <Link
-                                  href={`/admin/sales/${saleId}/payments/${payment.id}/receipt`}
-                                  className="rounded-lg border px-2 py-1 text-xs font-semibold"
-                                >
-                                  View Money Receipt
-                                </Link>
-                                <Link
-                                  href={`/admin/sales/${saleId}/payments/${payment.id}/receipt`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="rounded-lg border px-2 py-1 text-xs font-semibold"
-                                >
-                                  Print / PDF
-                                </Link>
-                              </div>
-                            ) : payment.status === "received" ? (
-                              <MoneyReceiptAction
-                                action={generateMoneyReceiptAction.bind(null, saleId, payment.id)}
-                                label="Generate Money Receipt"
-                              />
-                            ) : (
-                              <span className="text-xs text-[var(--muted-text)]">Not eligible</span>
-                            )
-                          ) : (
-                            <span className="text-xs text-[var(--muted-text)]">No permission</span>
-                          )}
+                          <Link
+                            href={`/admin/sales/${saleId}/payments/${payment.id}/receipt`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-block rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-800"
+                          >
+                            Print Money Receipt
+                          </Link>
                         </td>
                       </tr>
                     );

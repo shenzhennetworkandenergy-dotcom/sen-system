@@ -35,3 +35,4 @@ export default async function DailyClosingHistoryPage({ searchParams }: { search
     <p className="mt-4 text-sm text-[var(--muted-text)]">{sheets.length} snapshot(s) found.</p>
   </DashboardShell>;
 }
+

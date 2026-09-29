@@ -7,3 +7,4 @@ export function DailyClosingPrintButton({ href }: { href: string }) {
 export function DailyClosingSystemPrintButton() {
   return <button type="button" onClick={() => window.print()} className="rounded bg-teal-600 px-5 py-3 font-bold text-white shadow-sm transition hover:bg-teal-700 print:hidden">Print</button>;
 }
+

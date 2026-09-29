@@ -224,3 +224,4 @@ export async function getDailyClosingSourceData(options: DailyClosingSourceOptio
   };
   return { warehouses, products, variations, input, aggregate: aggregateDailyClosing(input) };
 }
+

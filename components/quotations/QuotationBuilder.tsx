@@ -1,19 +1,20 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useActionState, useMemo, useState } from "react";
 
 import {
   createQuotationAction,
   createQuotationCustomerAction,
   updateDraftQuotationAction,
+  type QuotationCustomerActionState,
 } from "@/app/admin/quotations/actions";
-import { AddCustomerForm } from "@/components/customers/AddCustomerForm";
+import { BasicCustomerFields } from "@/components/customers/BasicCustomerFields";
 import { CustomerTypeahead } from "@/components/customers/CustomerTypeahead";
 import {
   SaleProductPicker,
   type SalePickerProduct,
 } from "@/components/sales/SaleProductPicker";
-import type { CustomerSearchOption } from "@/lib/customers/search";
+import { customerOptionLabel, type CustomerSearchOption } from "@/lib/customers/search";
 import {
   calculateDraftQuotationLine,
   calculateDraftQuotationTotals,
@@ -79,6 +80,28 @@ export function QuotationBuilder({
   const [customerId, setCustomerId] = useState(fixedCustomer?.id ?? "");
   const [customerOptions, setCustomerOptions] =
     useState<CustomerSearchOption[]>(customers);
+  const createAndSelectCustomer = async (
+    previousState: QuotationCustomerActionState,
+    form: FormData,
+  ) => {
+    const nextState = await createQuotationCustomerAction(previousState, form);
+    if (nextState.customer) {
+      setCustomerOptions((current) => [
+        nextState.customer!,
+        ...current.filter((item) => item.id !== nextState.customer!.id),
+      ]);
+      setCustomerId(nextState.customer.id);
+    }
+    return nextState;
+  };
+  const [customerState, customerFormAction, customerPending] = useActionState(
+    createAndSelectCustomer,
+    {
+      status: "idle",
+      message: "",
+      customer: null,
+    } satisfies QuotationCustomerActionState,
+  );
   const [rows, setRows] = useState<Row[]>(() =>
     initialDraft?.items.length
       ? initialDraft.items.map((item) => ({
@@ -185,17 +208,35 @@ export function QuotationBuilder({
 
   return (
     <>
-      {mode === "create" ? <AddCustomerForm
-        workflow="quotations"
-        action={createQuotationCustomerAction}
-        onCustomerResolved={(customer) => {
-          setCustomerOptions((current) => [
-            customer,
-            ...current.filter((item) => item.id !== customer.id),
-          ]);
-          setCustomerId(customer.id);
-        }}
-      /> : null}
+      {mode === "create" ? <details className="mb-5 rounded-2xl border bg-[var(--surface)] p-4" open>
+        <summary className="cursor-pointer font-bold">Add a new customer</summary>
+        <form
+          key={customerState.customer?.id ?? "new-customer"}
+          action={customerFormAction}
+          className="mt-4 grid gap-3 lg:grid-cols-5"
+        >
+          <BasicCustomerFields fieldClassName={field} />
+          <button
+            disabled={customerPending}
+            className="rounded-xl bg-[var(--primary)] px-4 py-3 font-bold text-[var(--primary-foreground)] disabled:opacity-50 lg:col-start-5"
+          >
+            {customerPending ? "Adding customer…" : "Add customer"}
+          </button>
+        </form>
+        {customerState.message ? (
+          <p
+            aria-live="polite"
+            className={`mt-3 text-sm ${
+              customerState.status === "error"
+                ? "text-red-700"
+                : "text-emerald-700"
+            }`}
+          >
+            {customerState.message}
+          </p>
+        ) : null}
+      </details>
+      : null}
 
       <form action={quotationAction} className="space-y-5">
       <input type="hidden" name="items" value={JSON.stringify(payload)} />
@@ -212,7 +253,7 @@ export function QuotationBuilder({
         /> : (
           <div className="rounded-xl border bg-[var(--muted-surface)] px-3 py-3">
             <p className="font-semibold">Customer</p>
-            <p className="text-sm">{fixedCustomer?.full_name ?? "Customer"} · {fixedCustomer?.email ?? ""}</p>
+            <p className="text-sm">{fixedCustomer ? customerOptionLabel(fixedCustomer) : "Customer"}</p>
           </div>
         )}
         <label className="font-semibold">

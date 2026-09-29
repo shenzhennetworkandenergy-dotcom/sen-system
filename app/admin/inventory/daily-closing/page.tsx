@@ -115,3 +115,4 @@ export default async function DailyClosingPage({ searchParams }: { searchParams:
     </> : <section className="rounded-xl border bg-[var(--surface)] p-10 text-center text-[var(--muted-text)]">{isEmployee ? "Generate today's sheet to preview confirmed Stock In and Stock Out movements for your assigned warehouse." : "Select a date and generate a draft to preview the Daily Inventory Update & Closing Sheet."}</section>}
   </DashboardShell>;
 }
+

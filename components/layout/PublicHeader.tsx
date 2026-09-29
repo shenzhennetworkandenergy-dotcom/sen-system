@@ -94,7 +94,7 @@ export async function PublicHeader() {
           </span>
         </Container>
           </div>
-          <Container className="sen-header-main flex min-h-20 max-w-[92rem] items-center justify-between gap-3 py-2">
+          <Container className="sen-header-main flex min-h-20 items-center justify-between gap-3 py-2">
         <Link
           href={routes.home}
           className="sen-brand-link shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300"
@@ -115,7 +115,7 @@ export async function PublicHeader() {
             <small>Shenzhen Energy &amp; Networks</small>
           </span>
         </Link>
-        <nav className="hidden xl:block" aria-label="Public navigation">
+        <nav className="hidden lg:block" aria-label="Public navigation">
           <ul className="sen-header-nav flex items-center gap-2 text-sm font-semibold">
             {siteConfig.navigation.map((item) => (
               <li key={item.href}>
@@ -126,8 +126,8 @@ export async function PublicHeader() {
             ))}
           </ul>
         </nav>
-        <ProductSearch compact className="sen-header-search sen-header-search-desktop hidden xl:block" />
-        <div className="sen-header-actions hidden items-center gap-2 xl:flex">
+        <ProductSearch compact className="sen-header-search hidden w-full max-w-xs xl:block" />
+        <div className="sen-header-actions hidden items-center gap-2 lg:flex">
           {dash ? (
             <>
               {profile?.role === "customer" ? <Link href="/request-quote/general" className="sen-menu-box">Request a Quote</Link> : null}
@@ -179,8 +179,10 @@ export async function PublicHeader() {
           dashboardHref={dash ?? undefined}
           dashboardLabel={label}
           cartCount={cartCount}
-          showRequestQuote={profile?.role === "customer"}
         />
+          </Container>
+          <Container className="pb-3 xl:hidden">
+            <ProductSearch compact className="sen-header-search" />
           </Container>
         </div>
       </header>

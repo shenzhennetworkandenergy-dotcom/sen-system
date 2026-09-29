@@ -44,3 +44,4 @@ export default async function DailyClosingPrintPage({ params }: { params: Promis
   const checkedBy = checkedResult.data?.full_name ?? checkedResult.data?.email ?? "Not provided";
   return <main className="daily-closing-print-page min-h-screen bg-white p-3 text-slate-900 sm:p-6"><div className="mb-4 flex justify-end print:hidden"><DailyClosingSystemPrintButton /></div><DailyClosingReport sheet={sheet} lines={linesResult.data ?? []} movements={movementsResult.data ?? []} warehouseName={warehouseResult.data ? `${warehouseResult.data.name} (${warehouseResult.data.code})` : "All warehouses"} preparedBy={preparedBy} checkedBy={checkedBy} showSerialDetails={!isEmployee && sheet.include_serial_details} /></main>;
 }
+

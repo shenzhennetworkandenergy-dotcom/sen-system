@@ -38,3 +38,4 @@ export async function getEmployeeDailyClosingAssignment(profileId: string): Prom
     countryName: warehouseResult.data.country_name,
   };
 }
+

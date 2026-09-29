@@ -7,10 +7,11 @@ import {
   type CargoJobFormState,
   type CargoJobFormValues,
 } from "../actions";
+import { customerPrimaryName } from "@/lib/customers/search";
 
 const field = "mt-1 w-full rounded-lg border bg-white px-3 py-2";
 
-type CustomerOption = { id: string; full_name: string | null; company_name: string | null; email: string };
+type CustomerOption = { id: string; full_name: string | null; company_name: string | null; email: string | null };
 type WarehouseOption = { id: string; code: string; name: string };
 type CarrierOption = { id: string; name: string };
 
@@ -81,7 +82,7 @@ export function CargoJobForm({
   return <form action={formAction} className="space-y-5 rounded-xl border bg-[var(--surface)] p-5">
     {state.error ? <p aria-live="polite" className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-900">{state.error}</p> : null}
     <div className="grid gap-4 md:grid-cols-2">
-      <label className="font-semibold">Customer<select name="customer_id" required value={values.customer_id} onChange={(event) => setField("customer_id", event.target.value)} className={field}><option value="">Select customer</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.full_name || customer.company_name || customer.email}</option>)}</select></label>
+      <label className="font-semibold">Customer<select name="customer_id" required value={values.customer_id} onChange={(event) => setField("customer_id", event.target.value)} className={field}><option value="">Select customer</option>{customers.map((customer) => <option key={customer.id} value={customer.id}>{customerPrimaryName(customer)}</option>)}</select></label>
       <label className="font-semibold">China courier tracking no.<input name="courier_tracking_number" required maxLength={160} value={values.courier_tracking_number} onChange={(event) => setField("courier_tracking_number", event.target.value)} className={field} /></label>
       <label className="font-semibold md:col-span-2">Goods description<textarea name="goods_summary" required maxLength={2000} rows={2} value={values.goods_summary} onChange={(event) => setField("goods_summary", event.target.value)} className={field} /></label>
       <label className="font-semibold">Shipping method<select name="shipping_method" value={values.shipping_method} onChange={(event) => setField("shipping_method", event.target.value)} className={field}><option value="air">Air</option><option value="sea">Sea</option><option value="hand_carry">Hand Carry</option></select></label>

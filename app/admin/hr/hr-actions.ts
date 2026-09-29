@@ -343,11 +343,15 @@ export async function reviewLeaveAction(form: FormData) {
   const { profile } = await requireHrAdmin();
   const decision = text(form,"decision");
   if (!["approved","rejected"].includes(decision)) return finish(form,"error","Select a valid decision.");
-  const { error } = await createSupabaseAdminClient().rpc("hr_review_leave", {
-    actor_profile_id:profile.id, requested_leave_id:text(form,"leave_id"),
-    requested_decision:decision, requested_note:text(form,"review_note"),
-  });
+  const db = createSupabaseAdminClient();
+  const application = await db.from("hr_leave_requests").select("id,signed_storage_path").eq("id",text(form,"leave_id")).eq("status","pending").maybeSingle();
+  if (application.error || !application.data?.signed_storage_path) return finish(form,"error","A signed application must be uploaded before review.");
+  const { data,error } = await db.from("hr_leave_requests").update({
+    status:decision, reviewed_by:profile.id, reviewed_at:new Date().toISOString(),
+    review_note:nullable(form,"review_note"), updated_at:new Date().toISOString(),
+  }).eq("id",application.data.id).eq("status","pending").not("signed_storage_path","is",null).select("id").maybeSingle();
   if (report("Leave review failed",error)) return finish(form,"error","Unable to review leave request.");
+  if (!data) return finish(form,"error","This leave request is no longer eligible for review.");
   finish(form,"success",`Leave request ${decision}.`);
 }
 

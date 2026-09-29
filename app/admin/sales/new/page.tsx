@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { connection } from "next/server";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
-import { AddCustomerForm } from "@/components/customers/AddCustomerForm";
+import { BasicCustomerFields } from "@/components/customers/BasicCustomerFields";
 import { SaleBuilder } from "@/components/sales/SaleBuilder";
 import { SourceQuotationSummary } from "@/components/sales/SourceQuotationSummary";
 import { requireAllPermissions, requirePermission } from "@/lib/auth/permissions";
@@ -89,10 +89,14 @@ export default async function NewSalePage({
     {success ? <p className="mb-3 rounded-lg border border-green-200 bg-green-50 p-3 text-green-900">{success}</p> : null}
     {error ? <p className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-red-900">{error}</p> : null}
     {initialQuotation ? <SourceQuotationSummary quotation={initialQuotation}/> : null}
-    {!initialQuotation ? <AddCustomerForm
-      workflow="sales"
-      action={createBasicCustomerAction}
-    /> : null}
+    {!initialQuotation ? <details className="mb-4 rounded-xl border bg-[var(--surface)] p-4">
+      <summary className="cursor-pointer font-bold">Add a new customer</summary>
+      <form action={createBasicCustomerAction} className="mt-3 grid gap-3 md:grid-cols-5">
+        <BasicCustomerFields fieldClassName="rounded-lg border px-3 py-2" />
+        <button className="rounded-lg bg-[var(--primary)] px-4 py-2 font-semibold text-[var(--primary-foreground)]">Add customer</button>
+        <p className="text-xs text-[var(--muted-text)] md:col-span-5">A default delivery address is created from the address above. The customer can add more details later in My Account.</p>
+      </form>
+    </details> : null}
     <SaleBuilder
       key={initialQuotation?.quotationId ?? "manual"}
       {...options}

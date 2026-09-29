@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { renderToStaticMarkup } from "react-dom/server";
+
+import { EmployeeLoanAgreement } from "../components/receivables/EmployeeLoanAgreement.tsx";
 import {
   EMPLOYEE_LOAN_FINAL_CONSENT_ITEMS,
   EMPLOYEE_LOAN_TERM_ITEMS,
@@ -14,13 +17,26 @@ import {
 
 const read = (path: string) => readFile(new URL(`../${path}`, import.meta.url), "utf8");
 
-test("agreement renders HR parent names and preserves empty-value fallbacks", async () => {
-  const agreement = await read("components/receivables/EmployeeLoanAgreement.tsx");
-  assert.match(agreement, /employeeProfile\?\.father_name/);
-  assert.match(agreement, /employeeProfile\?\.mother_name/);
-  assert.match(agreement, /Father's Name/);
-  assert.match(agreement, /Mother's Name/);
-  assert.match(agreement, /String\(value\)\.trim\(\) === "" \? "—"/);
+test("agreement renders HR parent names and preserves empty-value fallbacks", () => {
+  const account = { receivable_number: "SEN-TEST", approved_amount: 1000, currency: "BDT", final_due_date: null };
+  const detail = {};
+  const employee = {
+    employee_number: "SEN-TEST-EMPLOYEE",
+    profiles: { full_name: "Test Employee" },
+    hr_employee_profiles: { father_name: "Test Father", mother_name: "Test Mother" },
+  };
+
+  const populated = renderToStaticMarkup(EmployeeLoanAgreement({ account, detail, employee }));
+  assert.match(populated, /Test Father/);
+  assert.match(populated, /Test Mother/);
+
+  const empty = renderToStaticMarkup(EmployeeLoanAgreement({
+    account,
+    detail,
+    employee: { ...employee, hr_employee_profiles: { father_name: null, mother_name: " " } },
+  }));
+  assert.match(empty, /Father&#x27;s Name[\s\S]{0,300}<dd[^>]*>—<\/dd>/);
+  assert.match(empty, /Mother&#x27;s Name[\s\S]{0,300}<dd[^>]*>—<\/dd>/);
 });
 
 test("employee loan consent requires every acknowledgement", () => {

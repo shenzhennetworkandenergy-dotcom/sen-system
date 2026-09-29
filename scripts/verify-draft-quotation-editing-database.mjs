@@ -6,7 +6,7 @@ import net from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import pg from "pg";
+import pg from "../../../node_modules/pg/lib/index.js";
 const { Client } = pg;
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const timeout = 12_000;

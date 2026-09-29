@@ -1,5 +1,6 @@
 import { connection } from "next/server";
 import { DashboardShell } from "@/components/dashboard/Shell";
+import { BasicCustomerFields } from "@/components/customers/BasicCustomerFields";
 import { isAdmin, requirePermission } from "@/lib/auth/permissions";
 import { cargoPackageUnits, getCargoOptions } from "@/lib/cargo-tracking/data";
 import { createCargoCarrierAction, createCargoCustomerAction } from "../actions";
@@ -29,7 +30,7 @@ export default async function NewCargoJobPage({ searchParams }: { searchParams: 
         initialCarrierName={selectedCarrier?.name}
       />
       {admin ? <div className="space-y-5">
-        <form action={createCargoCustomerAction} className="space-y-3 rounded-xl border bg-[var(--surface)] p-5"><h2 className="text-lg font-bold">Add shared customer</h2><p className="text-sm text-[var(--muted-text)]">This creates the same customer record used by Sales and Quotations.</p><input name="full_name" required placeholder="Full name" className={field} /><input name="company_name" placeholder="Company name (optional)" className={field} /><input name="email" type="email" required placeholder="Email" className={field} /><input name="phone" required placeholder="Phone" className={field} /><textarea name="address_line_1" required placeholder="Full address" rows={2} className={field} /><button className="w-full rounded-lg border px-4 py-2 font-bold">Add Customer</button></form>
+        <form action={createCargoCustomerAction} className="space-y-3 rounded-xl border bg-[var(--surface)] p-5"><h2 className="text-lg font-bold">Add shared customer</h2><p className="text-sm text-[var(--muted-text)]">This creates the same customer record used by Sales and Quotations.</p><BasicCustomerFields fieldClassName={field} addressRows={2} /><button className="w-full rounded-lg border px-4 py-2 font-bold">Add Customer</button></form>
         <form action={createCargoCarrierAction} className="space-y-3 rounded-xl border bg-[var(--surface)] p-5"><h2 className="text-lg font-bold">Add Carrier</h2><p className="text-sm text-[var(--muted-text)]">Adds an active carrier to the same shared master used by Purchasing.</p><input name="name" required maxLength={200} placeholder="Carrier name" className={field} /><input name="phone_number" required maxLength={60} placeholder="Phone number" className={field} /><textarea name="address" required maxLength={500} placeholder="Address" rows={2} className={field} /><textarea name="description" maxLength={1000} placeholder="Description (optional)" rows={2} className={field} /><button className="w-full rounded-lg border px-4 py-2 font-bold">Add Carrier</button></form>
       </div> : null}
     </div>

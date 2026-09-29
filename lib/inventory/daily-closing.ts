@@ -291,3 +291,4 @@ export function aggregateDailyClosing(input: AggregateDailyClosingInput): DailyC
   } satisfies DailyClosingSummary;
   return { rows, movementDetails, summary };
 }
+

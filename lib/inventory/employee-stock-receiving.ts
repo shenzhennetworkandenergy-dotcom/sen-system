@@ -96,3 +96,4 @@ export function mustScopeSerialPrintToEmployeePurchaseReceipt({
 }) {
   return role === "employee" && !hasGlobalSerialPrintPermission;
 }
+

@@ -15,7 +15,8 @@ import {
   type RmbPaymentFormState,
   type RmbPaymentFormValues,
 } from "@/app/admin/rmb-payments/actions";
-import { customerOptionLabel, filterCustomerOptions } from "@/lib/customers/search";
+import { BasicCustomerFields } from "@/components/customers/BasicCustomerFields";
+import { customerOptionLabel, customerPrimaryName, customerSecondaryLabel, filterCustomerOptions } from "@/lib/customers/search";
 import { calculateRmbEstimate } from "@/lib/rmb-payments/calculations";
 import type { RmbAdminCustomerOption, RmbCurrencyOption, RmbPaymentMethodOption, RmbPaymentMethodType } from "@/lib/rmb-payments/data";
 
@@ -177,8 +178,8 @@ export function RmbPaymentForm({
             <input type="hidden" name="customer_id" value={values.customer_id} />
             {values.customer_query.trim() && !selectedCustomer && suggestions.length ? <div className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border bg-white shadow-lg">
               {suggestions.map((customer) => <button key={customer.id} type="button" className="block w-full border-b px-3 py-2 text-left last:border-b-0 hover:bg-slate-50" onClick={() => chooseCustomer(customer)}>
-                <strong className="block">{customer.full_name || customer.email}</strong>
-                <span className="text-sm text-[var(--muted)]">{customer.company_name || customer.email}</span>
+                <strong className="block">{customerPrimaryName(customer)}</strong>
+                <span className="text-sm text-[var(--muted)]">{customerSecondaryLabel(customer)}</span>
               </button>)}
             </div> : null}
             {selectedCustomer ? <p className="mt-2 text-sm text-emerald-700">Selected: {customerOptionLabel(selectedCustomer)}</p> : null}
@@ -272,7 +273,7 @@ export function RmbPaymentForm({
 
     <div className="grid gap-5 lg:grid-cols-2">
       <form action={currencyAction} className="rounded-xl border bg-[var(--surface)] p-5"><h2 className="text-lg font-bold">Add currency</h2><div className="mt-3 grid gap-3 sm:grid-cols-3"><input name="code" required maxLength={5} className={inputClass} placeholder="Code" /><input name="name" required className={inputClass} placeholder="Name" /><input name="symbol" required className={inputClass} placeholder="Symbol" /></div>{currencyState.message ? <p className={`mt-2 text-sm ${currencyState.status === "error" ? "text-red-700" : "text-emerald-700"}`}>{currencyState.message}</p> : null}<button disabled={currencyPending} className="mt-3 rounded-lg border px-4 py-2 font-semibold">{currencyPending ? "Adding…" : "Add Currency"}</button></form>
-      <form action={customerAction} className="rounded-xl border bg-[var(--surface)] p-5"><h2 className="text-lg font-bold">Add shared customer</h2><div className="mt-3 grid gap-3 md:grid-cols-2"><input name="full_name" required className={inputClass} placeholder="Full name" /><input name="company_name" className={inputClass} placeholder="Company name (optional)" /><input name="email" type="email" required className={inputClass} placeholder="Email" /><input name="phone" required className={inputClass} placeholder="Phone" /><input name="address_line_1" required className={`${inputClass} md:col-span-2`} placeholder="Full address" /></div>{customerState.message ? <p className={`mt-2 text-sm ${customerState.status === "error" ? "text-red-700" : "text-emerald-700"}`}>{customerState.message}</p> : null}<button disabled={customerPending} className="mt-3 rounded-lg border px-4 py-2 font-semibold">{customerPending ? "Adding…" : "Add Customer"}</button></form>
+      <form action={customerAction} className="rounded-xl border bg-[var(--surface)] p-5"><h2 className="text-lg font-bold">Add shared customer</h2><div className="mt-3 grid gap-3 md:grid-cols-2"><BasicCustomerFields fieldClassName={inputClass} addressClassName={`${inputClass} md:col-span-2`} /></div>{customerState.message ? <p className={`mt-2 text-sm ${customerState.status === "error" ? "text-red-700" : "text-emerald-700"}`}>{customerState.message}</p> : null}<button disabled={customerPending} className="mt-3 rounded-lg border px-4 py-2 font-semibold">{customerPending ? "Adding…" : "Add Customer"}</button></form>
       <form action={customerMethodAction} className="rounded-xl border bg-[var(--surface)] p-5"><h2 className="text-lg font-bold">Add Bangladesh payment method</h2><div className="mt-3 grid gap-3 sm:grid-cols-3"><input name="name" required className={inputClass} placeholder="Method name" /><select name="context" className={inputClass}><option value="CUSTOMER_PAYMENT">Customer payment</option><option value="BOTH">Both</option></select><select name="method_type" className={inputClass}><option value="OTHER">Other</option><option value="BANK">Bank</option><option value="CASH">Cash</option></select></div><MethodMessage state={customerMethodState} /><button disabled={customerMethodPending} className="mt-3 rounded-lg border px-4 py-2 font-semibold">{customerMethodPending ? "Adding…" : "Add Method"}</button></form>
       <form action={chinaMethodAction} className="rounded-xl border bg-[var(--surface)] p-5"><h2 className="text-lg font-bold">Add China payment method</h2><div className="mt-3 grid gap-3 sm:grid-cols-3"><input name="name" required className={inputClass} placeholder="Method name" /><select name="context" className={inputClass}><option value="CHINA_PAYMENT">China payment</option><option value="BOTH">Both</option></select><select name="method_type" className={inputClass}>{(["BANK", "WECHAT", "ALIPAY", "CASH", "OTHER"] as RmbPaymentMethodType[]).map((type) => <option key={type} value={type}>{type}</option>)}</select></div><MethodMessage state={chinaMethodState} /><button disabled={chinaMethodPending} className="mt-3 rounded-lg border px-4 py-2 font-semibold">{chinaMethodPending ? "Adding…" : "Add Method"}</button></form>
     </div>

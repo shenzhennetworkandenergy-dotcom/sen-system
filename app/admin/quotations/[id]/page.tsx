@@ -213,16 +213,17 @@ export default async function QuotationDocumentPage({
   const total = number(data.total_amount) || calculatedTotal;
   const billing = data.billing_address_snapshot as AddressSnapshot | null;
   const shipping = data.shipping_address_snapshot as AddressSnapshot | null;
-  const customerName = text(
-    customer?.full_name ??
-      data.company_name ??
-      customer?.company_name ??
-      customer?.email,
-    "Customer",
-  );
   const companyName = text(
     data.company_name ?? customer?.company_name,
   );
+  const customerName = text(
+    companyName || customer?.full_name || customer?.email,
+    "Customer",
+  );
+  const contactName =
+    companyName && customer?.full_name
+      ? `Contact: ${customer.full_name}`
+      : "";
   const pages = paginateQuotationItems(items);
   const expirationDate =
     data.expiration_date ??
@@ -305,7 +306,7 @@ export default async function QuotationDocumentPage({
                     <CustomerBlock
                       title="Quotation for"
                       name={customerName}
-                      company={companyName}
+                      company={contactName}
                       email={text(customer?.email)}
                       phone={text(billing?.phone ?? customer?.phone)}
                       address={billing}

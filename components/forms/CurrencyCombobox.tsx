@@ -1,10 +1,8 @@
 "use client";
 
-import { useId, useState, useSyncExternalStore } from "react";
+import { useId, useState } from "react";
 
 import { currencyOptions } from "@/lib/currency/currencies";
-
-const subscribeToHydration = () => () => {};
 
 export function CurrencyCombobox({
   name,
@@ -22,11 +20,6 @@ export function CurrencyCombobox({
   onValueChange?: (value: string) => void;
 }) {
   const listId = useId();
-  const isHydrated = useSyncExternalStore(
-    subscribeToHydration,
-    () => true,
-    () => false,
-  );
   const [value, setValue] = useState(
     String(defaultValue || "BDT").toUpperCase(),
   );
@@ -52,7 +45,7 @@ export function CurrencyCombobox({
       <datalist id={listId}>
         {currencyOptions.map((currency) => (
           <option key={currency.code} value={currency.code}>
-            {isHydrated ? currency.name : currency.code}
+            {currency.name}
           </option>
         ))}
       </datalist>

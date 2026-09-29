@@ -171,3 +171,4 @@ export const DAILY_CLOSING_PRINT_STYLES = `
   }
 }
 `;
+

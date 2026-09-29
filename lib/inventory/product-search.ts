@@ -40,3 +40,4 @@ export function escapeInventoryIlikePattern(value: string) {
 export function mergeInventorySearchResults<T extends { id: string }>(results: readonly T[], limit = INVENTORY_PRODUCT_SEARCH_LIMIT) {
   return [...new Map(results.map((item) => [item.id, item])).values()].slice(0, limit);
 }
+

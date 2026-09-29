@@ -1,5 +1,3 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
 # dependencies
 /node_modules
 /.pnp
@@ -10,55 +8,25 @@
 !.yarn/releases
 !.yarn/versions
 
-# testing
+# testing and build output
 /coverage
-
-# next.js
 /.next/
 /out/
-
-# production
 /build
+*.tsbuildinfo
+next-env.d.ts
 
-# generated offline bundles, disposable databases, and local verification output
-/.offline-test/
-/work/
-
-# platform runtime binaries are supplied when assembling the offline installer
-/vendor/
-
-# misc
+# local and platform state
+.env*
+!.env.example
+.vercel
+/supabase/.temp/
 .DS_Store
 *.pem
-
-# debug
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 /.codex-logs/
-/.worktrees/
-/.next-dev.log
-/.next-dev-error.log
-/.next-dev.pid
+/.superpowers/
 
-# local duplicate source asset (the tracked copy lives in public/brand)
-/SEN Logo (2).png
-
-# local WooCommerce source/import artifacts (products and media are imported
-# into Supabase; these archives are not required by Next.js or Vercel)
-/2025.zip
-/2026.zip
-/data/woocommerce-import-2026-07-24/
-/data/woocommerce-media-source/
-
-# env files (can opt-in for committing if needed)
-.env*
-!.env.example
-
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts

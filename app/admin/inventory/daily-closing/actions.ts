@@ -206,3 +206,4 @@ export async function verifyDailyClosingAction(form: FormData) {
   await writeAuditLog({ actorId: profile.id, actorRole: profile.role, action: "inventory.daily_closing.verified", module: "inventory", entityType: "daily_closing_sheet", entityId: sheetId, description: `Daily inventory closing sheet ${sheet.reference} verified.`, newValues: { status: "verified", closing_status: closingStatus } });
   revalidatePath(path); revalidatePath(historyPath); redirect(`${path}?sheet_id=${encodeURIComponent(sheetId)}&success=${encodeURIComponent("Daily inventory closing sheet verified.")}`);
 }
+
