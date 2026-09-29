@@ -10,13 +10,16 @@ import {
 } from "../lib/crm/whatsapp-workspace-supabase.ts";
 
 class MemoryPort implements WhatsappSupabaseStoragePort {
-  manifest: WhatsappManifest | null = null;
+  manifests = new Map<string, WhatsappManifest>();
   objects = new Map<string, string>();
   failUploadAt = 0;
   failCas = false;
   uploadCount = 0;
 
-  async readManifest() { return this.manifest ? structuredClone(this.manifest) : null; }
+  async readManifest(namespace: string) {
+    const manifest = this.manifests.get(namespace);
+    return manifest ? structuredClone(manifest) : null;
+  }
   async download(path: string) {
     const value = this.objects.get(path);
     if (value === undefined) throw new Error("missing");
@@ -28,10 +31,10 @@ class MemoryPort implements WhatsappSupabaseStoragePort {
     if (this.objects.has(path)) throw new Error("duplicate object");
     this.objects.set(path, body);
   }
-  async compareAndSwap(expectedRevision: string | null, next: WhatsappManifest) {
+  async compareAndSwap(namespace: string, expectedRevision: string | null, next: WhatsappManifest) {
     if (this.failCas) throw new Error("rpc failed");
-    if ((this.manifest?.revision ?? null) !== expectedRevision) return false;
-    this.manifest = structuredClone(next);
+    if ((this.manifests.get(namespace)?.revision ?? null) !== expectedRevision) return false;
+    this.manifests.set(namespace, structuredClone(next));
     return true;
   }
 }
@@ -44,8 +47,8 @@ test("initialization is private immutable and converges under a race", async () 
   const second = createSupabaseWhatsappWorkspaceStorage(port);
   const [left, right] = await Promise.all([first.initialize(empty), second.initialize(empty)]);
   assert.equal(left.revision, right.revision);
-  assert.equal(port.manifest?.previousRevision, null);
-  const activeObjects = [...port.objects.keys()].filter((key) => key.startsWith(`revisions/${left.revision}/`));
+  assert.equal(port.manifests.get("production")?.previousRevision, null);
+  const activeObjects = [...port.objects.keys()].filter((key) => key.startsWith(`production/revisions/${left.revision}/`));
   assert.equal(activeObjects.filter((key) => /\/categories\/.*-customers\.csv$/.test(key)).length, 9);
 });
 
@@ -70,11 +73,11 @@ test("only one publication wins and failures never replace the active manifest",
   const activeRevision = active!.revision;
   port.failUploadAt = port.uploadCount + 2;
   await assert.rejects(() => store.publish(activeRevision, empty), /unavailable/i);
-  assert.equal(port.manifest?.revision, activeRevision);
+  assert.equal(port.manifests.get("production")?.revision, activeRevision);
   port.failUploadAt = 0;
   port.failCas = true;
   await assert.rejects(() => store.publish(activeRevision, empty), /unavailable/i);
-  assert.equal(port.manifest?.revision, activeRevision);
+  assert.equal(port.manifests.get("production")?.revision, activeRevision);
 });
 
 test("missing active objects fail generically and restore is one step", async () => {
@@ -93,6 +96,20 @@ test("missing active objects fail generically and restore is one step", async ()
   assert.equal(restored.previousRevision, null);
   await assert.rejects(() => store.restore(restored.revision), /previous|restore/i);
 
-  port.objects.delete(`revisions/${restored.revision}/metadata/categories.json`);
+  port.objects.delete(`production/revisions/${restored.revision}/metadata/categories.json`);
   await assert.rejects(() => store.read(), /^Error: WhatsApp CRM workspace is unavailable\.$/);
+});
+
+test("preview and production use separate manifests and object prefixes", async () => {
+  const port = new MemoryPort();
+  const production = createSupabaseWhatsappWorkspaceStorage(port, "production");
+  const preview = createSupabaseWhatsappWorkspaceStorage(port, "preview-crm-release");
+
+  const productionSnapshot = await production.initialize(empty);
+  const previewSnapshot = await preview.initialize(empty);
+
+  assert.notEqual(productionSnapshot.revision, previewSnapshot.revision);
+  assert.equal(port.manifests.size, 2);
+  assert.ok([...port.objects.keys()].some((key) => key.startsWith(`production/revisions/${productionSnapshot.revision}/`)));
+  assert.ok([...port.objects.keys()].some((key) => key.startsWith(`preview-crm-release/revisions/${previewSnapshot.revision}/`)));
 });

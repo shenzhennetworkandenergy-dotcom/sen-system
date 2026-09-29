@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const read = (path: string) => readFileSync(path, "utf8");
-const migration = read("supabase/migrations/202609240001_crm_followups_phase1_phase2.sql");
+const migration = read("supabase/migrations/202609290002_crm_followups_phase1_phase2.sql");
 const actions = read("app/admin/crm/actions.ts");
 const data = read("lib/crm/data.ts");
 const workspace = read("app/admin/crm/follow-ups/page.tsx");

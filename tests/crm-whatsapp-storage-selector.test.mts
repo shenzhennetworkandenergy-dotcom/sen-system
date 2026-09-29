@@ -23,3 +23,26 @@ test("uses filesystem by default only outside production", () => {
     filesystem,
   );
 });
+
+test("supabase storage receives a validated isolated namespace", () => {
+  const seen: string[] = [];
+  const storage = fake("supabase");
+  const factories = {
+    filesystem: () => fake("filesystem"),
+    supabase: (namespace: string) => {
+      seen.push(namespace);
+      return storage;
+    },
+  };
+
+  assert.equal(getWhatsappWorkspaceStorage({ CRM_WHATSAPP_STORAGE_BACKEND: "supabase" }, factories), storage);
+  assert.equal(getWhatsappWorkspaceStorage({
+    CRM_WHATSAPP_STORAGE_BACKEND: "supabase",
+    CRM_WHATSAPP_STORAGE_NAMESPACE: "preview-crm-release",
+  }, factories), storage);
+  assert.deepEqual(seen, ["production", "preview-crm-release"]);
+  assert.throws(() => getWhatsappWorkspaceStorage({
+    CRM_WHATSAPP_STORAGE_BACKEND: "supabase",
+    CRM_WHATSAPP_STORAGE_NAMESPACE: "../production",
+  }, factories), /namespace/i);
+});
