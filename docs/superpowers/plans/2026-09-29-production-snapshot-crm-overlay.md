@@ -109,4 +109,3 @@
 - [ ] Link only this isolated worktree to the existing Vercel project and configure preview-scoped CRM variables without printing values.
 - [ ] Deploy a Preview, inspect metadata/logs, and run preview smoke checks.
 - [ ] Stop before production database migration, staged production deployment, domain assignment, or promotion and report the exact remaining authorization gate.
-

@@ -51,4 +51,3 @@ The database compare-and-swap function accepts a validated namespace and updates
 ## Stop conditions
 
 Stop before push if the boundary gate reports any non-CRM path, secrets, customer CSV data, dependency change, historical migration edit, failing CRM test, TypeScript error, lint error, or production build failure. Stop before database migration or production promotion until those external operations are explicitly authorized.
-
