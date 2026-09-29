@@ -15,7 +15,7 @@ const selectedUuid = (form: FormData, key: string) => {
   return /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(value) ? value : null;
 };
 const safeMessage = (value: string | undefined) =>
-  value && /company|contact|lead|activity|name|email|phone|status|permission|assignee|required|invalid/i.test(value)
+  value && /company|contact|lead|activity|follow-up|name|email|phone|status|permission|assignee|required|invalid|active|date|instruction|outcome/i.test(value)
     ? value
     : "Unable to complete the CRM operation.";
 
@@ -114,4 +114,161 @@ export async function createCrmActivityAction(leadId: string, form: FormData) {
   if (result.error) redirect(`${base}/leads/${leadId}?error=${encodeURIComponent(safeMessage(result.error.message))}`);
   revalidatePath(`${base}/leads/${leadId}`);
   redirect(`${base}/leads/${leadId}?success=Activity%20recorded.`);
+}
+
+const followupBase = `${base}/follow-ups`;
+const checkbox = (form: FormData, key: string) => form.get(key) === "on";
+const dateTime = (form: FormData, key: string, required = false) => {
+  const value = text(form, key, 40);
+  if (!value) return { value: null, invalid: required };
+  const hasZone = /(?:z|[+-]\d{2}:\d{2})$/i.test(value);
+  const parsed = new Date(hasZone ? value : `${value}+06:00`);
+  return Number.isNaN(parsed.getTime()) ? { value: null, invalid: true } : { value: parsed.toISOString(), invalid: false };
+};
+const followupDestination = (form: FormData, fallback = followupBase) => {
+  const value = text(form, "return_to", 300);
+  return value.startsWith("/admin/crm") ? value : fallback;
+};
+const followupValue = (form: FormData, key: string, allowed: readonly string[], fallback: string) => {
+  const value = text(form, key);
+  return allowed.includes(value) ? value : fallback;
+};
+const reasons = ["price_follow_up", "quotation_follow_up", "purchase_decision", "product_availability", "technical_clarification", "payment_discussion", "sample_follow_up", "general_follow_up", "customer_callback", "other"];
+const channels = ["whatsapp", "phone", "email", "messenger", "wechat", "other"];
+const priorities = ["low", "normal", "high", "urgent"];
+
+export async function createCrmFollowupAction(leadId: string, form: FormData) {
+  const { profile } = await requirePermission("crm.followups_create");
+  const destination = followupDestination(form, `${base}/leads/${leadId}`);
+  const lastContact = dateTime(form, "last_contact_at");
+  const nextFollowup = dateTime(form, "next_follow_up_at", true);
+  if (lastContact.invalid || nextFollowup.invalid) redirect(`${destination}?error=Invalid%20follow-up%20date%20or%20time.`);
+  const result = await createSupabaseAdminClient().rpc("create_crm_followup", {
+    actor_profile_id: profile.id,
+    requested_lead_id: leadId,
+    requested_reason: followupValue(form, "reason", reasons, "general_follow_up"),
+    requested_reason_details: nullable(form, "reason_details", 500),
+    requested_instruction: text(form, "instruction", 2000),
+    requested_interest_summary: nullable(form, "interest_summary", 1000),
+    requested_conversation_summary: nullable(form, "conversation_summary", 2000),
+    requested_channel: followupValue(form, "preferred_channel", channels, "other"),
+    requested_assigned_to: selectedUuid(form, "assigned_to"),
+    requested_priority: followupValue(form, "priority", priorities, "normal"),
+    requested_last_contact_at: lastContact.value,
+    requested_next_follow_up_at: nextFollowup.value,
+    requested_status: followupValue(form, "status", ["active", "waiting_customer"], "active"),
+    requested_manual_review: checkbox(form, "manual_review"),
+  });
+  if (result.error) redirect(`${destination}?error=${encodeURIComponent(safeMessage(result.error.message))}`);
+  revalidatePath(base); revalidatePath(followupBase); revalidatePath(`${base}/leads/${leadId}`);
+  redirect(`${destination}?success=Follow-up%20created.`);
+}
+
+export async function updateCrmFollowupAction(followupId: string, form: FormData) {
+  const { profile } = await requirePermission("crm.followups_edit");
+  const destination = followupDestination(form);
+  const result = await createSupabaseAdminClient().rpc("update_crm_followup", {
+    actor_profile_id: profile.id,
+    requested_followup_id: followupId,
+    requested_reason: followupValue(form, "reason", reasons, "general_follow_up"),
+    requested_reason_details: nullable(form, "reason_details", 500),
+    requested_instruction: text(form, "instruction", 2000),
+    requested_interest_summary: nullable(form, "interest_summary", 1000),
+    requested_conversation_summary: nullable(form, "conversation_summary", 2000),
+    requested_channel: followupValue(form, "preferred_channel", channels, "other"),
+    requested_assigned_to: selectedUuid(form, "assigned_to"),
+    requested_priority: followupValue(form, "priority", priorities, "normal"),
+    requested_status: followupValue(form, "status", ["active", "waiting_customer"], "active"),
+    requested_manual_review: checkbox(form, "manual_review"),
+  });
+  if (result.error) redirect(`${destination}?error=${encodeURIComponent(safeMessage(result.error.message))}`);
+  revalidatePath(base); revalidatePath(followupBase);
+  redirect(`${destination}?success=Follow-up%20updated.`);
+}
+
+export async function rescheduleCrmFollowupAction(followupId: string, form: FormData) {
+  const { profile } = await requirePermission("crm.followups_edit");
+  const destination = followupDestination(form);
+  const nextFollowup = dateTime(form, "next_follow_up_at", true);
+  if (nextFollowup.invalid) redirect(`${destination}?error=Invalid%20follow-up%20date%20or%20time.`);
+  const result = await createSupabaseAdminClient().rpc("reschedule_crm_followup", {
+    actor_profile_id: profile.id,
+    requested_followup_id: followupId,
+    requested_next_follow_up_at: nextFollowup.value,
+    requested_reason: text(form, "reschedule_reason", 2000),
+    requested_instruction: text(form, "instruction", 2000),
+  });
+  if (result.error) redirect(`${destination}?error=${encodeURIComponent(safeMessage(result.error.message))}`);
+  revalidatePath(base); revalidatePath(followupBase);
+  redirect(`${destination}?success=Follow-up%20rescheduled.`);
+}
+
+export async function completeCrmFollowupAction(followupId: string, form: FormData) {
+  const { profile } = await requirePermission("crm.followups_complete");
+  const destination = followupDestination(form);
+  const scheduleNext = checkbox(form, "schedule_next");
+  const nextFollowup = dateTime(form, "next_follow_up_at", scheduleNext);
+  if (nextFollowup.invalid) redirect(`${destination}?error=Invalid%20follow-up%20date%20or%20time.`);
+  const result = await createSupabaseAdminClient().rpc("complete_crm_followup", {
+    actor_profile_id: profile.id,
+    requested_followup_id: followupId,
+    requested_outcome: text(form, "outcome", 1000),
+    requested_summary: text(form, "summary", 2000),
+    requested_channel: followupValue(form, "channel", channels, "other"),
+    requested_customer_response: nullable(form, "customer_response", 2000),
+    requested_schedule_next: scheduleNext,
+    requested_next_follow_up_at: scheduleNext ? nextFollowup.value : null,
+    requested_next_reason: scheduleNext ? followupValue(form, "next_reason", reasons, "general_follow_up") : null,
+    requested_next_instruction: scheduleNext ? text(form, "next_instruction", 2000) : null,
+    requested_next_priority: scheduleNext ? followupValue(form, "next_priority", priorities, "normal") : null,
+  });
+  if (result.error) redirect(`${destination}?error=${encodeURIComponent(safeMessage(result.error.message))}`);
+  revalidatePath(base); revalidatePath(followupBase);
+  redirect(`${destination}?success=Follow-up%20completed.`);
+}
+
+export async function cancelCrmFollowupAction(followupId: string, form: FormData) {
+  const { profile } = await requirePermission("crm.followups_edit");
+  const destination = followupDestination(form);
+  const result = await createSupabaseAdminClient().rpc("cancel_crm_followup", {
+    actor_profile_id: profile.id,
+    requested_followup_id: followupId,
+    requested_reason: text(form, "cancellation_reason", 2000),
+  });
+  if (result.error) redirect(`${destination}?error=${encodeURIComponent(safeMessage(result.error.message))}`);
+  revalidatePath(base); revalidatePath(followupBase);
+  redirect(`${destination}?success=Follow-up%20cancelled.`);
+}
+
+export async function recordCrmFollowupActivityAction(followupId: string, form: FormData) {
+  const { profile } = await requirePermission("crm.followups_edit");
+  const destination = followupDestination(form);
+  const result = await createSupabaseAdminClient().rpc("record_crm_followup_activity", {
+    actor_profile_id: profile.id,
+    requested_followup_id: followupId,
+    requested_activity_type: followupValue(form, "activity_type", ["note", "call", "email", "meeting", "follow_up", "whatsapp", "customer_reply", "quotation_discussion", "other"], "note"),
+    requested_channel: followupValue(form, "channel", channels, "other"),
+    requested_direction: followupValue(form, "direction", ["inbound", "outbound", "internal"], "internal"),
+    requested_summary: text(form, "summary", 2000),
+    requested_outcome: nullable(form, "outcome", 1000),
+    requested_customer_response: nullable(form, "customer_response", 2000),
+  });
+  if (result.error) redirect(`${destination}?error=${encodeURIComponent(safeMessage(result.error.message))}`);
+  revalidatePath(base); revalidatePath(followupBase);
+  redirect(`${destination}?success=Activity%20recorded.`);
+}
+
+export async function setCrmDoNotContactAction(leadId: string, form: FormData) {
+  const { profile } = await requirePermission("crm.followups_edit");
+  const destination = followupDestination(form, `${base}/leads/${leadId}`);
+  const enabled = checkbox(form, "enabled");
+  const result = await createSupabaseAdminClient().rpc("set_crm_lead_do_not_contact", {
+    actor_profile_id: profile.id,
+    requested_lead_id: leadId,
+    requested_enabled: enabled,
+    requested_reason: nullable(form, "reason", 1000),
+  });
+  if (result.error) redirect(`${destination}?error=${encodeURIComponent(safeMessage(result.error.message))}`);
+  revalidatePath(base); revalidatePath(followupBase); revalidatePath(`${base}/leads/${leadId}`);
+  redirect(`${destination}?success=Contact%20restriction%20updated.`);
 }
