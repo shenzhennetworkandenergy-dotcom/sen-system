@@ -8,6 +8,7 @@ import { getCurrentProfile } from "@/lib/auth/session";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
 import { getEmployeeInventoryWorkCounts } from "@/lib/inventory/employee-inventory-work-counts";
+import { getEmployeePendingWorkCount } from "@/lib/work-scheduler/data";
 
 type DashboardShellProps = {
   title: string;
@@ -23,11 +24,16 @@ export async function DashboardShell({ title, subtitle, children, admin = false,
   const { profile } = await getCurrentProfile();
   let workCounts: Record<string, number> = {};
   try {
-    workCounts = admin
-      ? await getDashboardWorkCounts()
-      : profile?.role === "employee" && profile.status === "active"
-        ? await getEmployeeInventoryWorkCounts(profile.id, permissionSet)
-        : {};
+    if (admin) {
+      workCounts = await getDashboardWorkCounts();
+    } else if (profile?.role === "employee" && profile.status === "active") {
+      workCounts = await getEmployeeInventoryWorkCounts(profile.id, permissionSet);
+      try {
+        workCounts = { ...workCounts, "employee-work": await getEmployeePendingWorkCount(profile.id) };
+      } catch (error) {
+        console.error("Work Scheduler pending count unavailable", error);
+      }
+    }
   } catch (error) {
     console.error("Dashboard work counts unavailable", error);
   }

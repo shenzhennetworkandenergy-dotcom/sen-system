@@ -353,7 +353,10 @@ export async function createBasicCustomerAction(form: FormData) {
       phone: form.get("phone"),
       addressLine1: form.get("address_line_1"),
     });
-    customer = await createBasicCustomerRecord(input);
+    customer = await createBasicCustomerRecord(input, {
+      categorySlugs: form.getAll("customer_category_slugs").map(String),
+      districtCode: String(form.get("customer_district_code") ?? "").trim() || null,
+    });
   } catch (error) {
     redirect(
       `/admin/sales/new?error=${encodeURIComponent(

@@ -1,7 +1,7 @@
 "use client";
 
 /* eslint-disable @next/next/no-img-element */
-import { useState, type MouseEvent } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 
 type ProductImage = {
   id: string;
@@ -10,17 +10,58 @@ type ProductImage = {
   primary: boolean;
 };
 
+type VariationImage = ProductImage & { variationId: string };
+
 export function ProductImageGallery({
   images,
+  variationImages = [],
   category,
 }: {
   images: ProductImage[];
+  variationImages?: VariationImage[];
   category: string;
 }) {
   const initialImage = images.find((image) => image.primary) ?? images[0] ?? null;
   const [selectedId, setSelectedId] = useState(initialImage?.id ?? null);
   const [zooming, setZooming] = useState(false);
   const [zoomPosition, setZoomPosition] = useState({ x: 50, y: 50 });
+  useEffect(() => {
+    const selectVariation = (variationId?: string) => {
+      const image = variationImages.find((item) => item.variationId === variationId);
+      if (!image) return;
+      setSelectedId(image.id);
+      setZooming(false);
+      setZoomPosition({ x: 50, y: 50 });
+      const displayedImage = document.querySelector<HTMLImageElement>('button[aria-label^="Zoom "] img');
+      if (displayedImage) {
+        displayedImage.src = image.url;
+        displayedImage.alt = image.alt;
+      }
+    };
+    const handleVariationChange = (event: Event) => {
+      selectVariation((event as CustomEvent<{ variationId?: string }>).detail?.variationId);
+    };
+    const handleSelectChange = (event: Event) => {
+      if ((event.target as HTMLSelectElement).name === "variation_selector") {
+        selectVariation((event.target as HTMLSelectElement).value);
+      }
+    };
+    window.addEventListener("product-variation-change", handleVariationChange);
+    document.addEventListener("change", handleSelectChange);
+    let observedVariationId: string | undefined;
+    const pollSelection = window.setInterval(() => {
+      const nextVariationId = document.querySelector<HTMLSelectElement>('select[name="variation_selector"]')?.value;
+      if (nextVariationId && nextVariationId !== observedVariationId) {
+        observedVariationId = nextVariationId;
+        selectVariation(nextVariationId);
+      }
+    }, 100);
+    return () => {
+      window.removeEventListener("product-variation-change", handleVariationChange);
+      document.removeEventListener("change", handleSelectChange);
+      window.clearInterval(pollSelection);
+    };
+  }, [variationImages]);
   const selected =
     images.find((image) => image.id === selectedId) ?? initialImage;
 

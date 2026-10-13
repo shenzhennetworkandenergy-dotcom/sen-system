@@ -5,6 +5,7 @@ import { routes } from "@/lib/constants/routes";
 import { activityLabel, formatActivityTime } from "@/lib/audit/format";
 import { getDashboardWorkCounts } from "@/lib/dashboard/work-counts";
 import { adminNavigation } from "@/lib/navigation/dashboard";
+import { QuickAccessSection } from "./QuickAccessSection";
 
 const plannedModules = ["Manufacturing", "Projects", "Reports", "AI Assistant"];
 const operationalModules = [
@@ -38,6 +39,7 @@ export default async function AdminPage(){
 
   return <DashboardShell admin title="Admin Overview" subtitle="Accounts, permissions and operations at a glance.">
     <section className="mb-3 rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 to-white p-3 shadow-sm"><div className="flex flex-wrap items-center gap-2"><h2 className="mr-2 text-sm font-bold text-amber-950">Needs attention</h2>{Object.entries(workCounts).filter(([,count])=>count>0).map(([key,count])=>{const item=adminNavigation.find((entry)=>entry.key===key);return item?.route?<a key={key} href={item.route} className="inline-flex items-center gap-2 rounded-full border border-amber-300 bg-white px-3 py-1.5 text-xs font-bold text-amber-950 shadow-sm transition hover:-translate-y-0.5"><span>{item.label}</span><span className="rounded-full bg-red-500 px-2 py-0.5 text-white">{count}</span></a>:null})}{Object.values(workCounts).every((count)=>count===0)?<span className="text-xs text-emerald-700">No unresolved operational work.</span>:null}</div></section>
+    <QuickAccessSection />
     <section aria-labelledby="account-summary-title">
       <div className="mb-2 flex items-center justify-between"><h2 id="account-summary-title" className="text-sm font-bold uppercase tracking-wide text-[var(--muted-text)]">Account summary</h2><a href={routes.adminUsers} className="text-xs font-semibold text-[var(--primary)]">Manage users →</a></div>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-8">{metrics.map((metric,index)=><article key={metric.label} className={`min-w-0 rounded-xl border border-l-4 bg-[var(--surface)] px-3 py-2.5 shadow-sm ${statStyles[index]}`}><p className="truncate text-[11px] font-medium text-[var(--muted-text)]" title={metric.label}>{metric.label}</p><p className="mt-0.5 text-2xl font-bold leading-none tabular-nums">{metric.value}</p></article>)}</div>

@@ -22,6 +22,7 @@ function NavigationIcon({ name }: { name: string }) {
     : name === "statuses" ? <><circle cx="12" cy="12" r="9"/><path d="m8 12 2.5 2.5L16 9"/></>
     : name === "suppliers" ? <><path d="M3 21V7l6-4 6 4v14M15 10h6v11M7 10h4M7 14h4"/></>
     : name === "accounting" ? <><path d="M4 6h16M4 18h16M7 3v18M17 3v18"/><path d="M10 10h4M10 14h4"/></>
+    : name === "calendar" ? <><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18M8 14h.01M12 14h.01M16 14h.01M8 18h.01M12 18h.01"/></>
     : <><circle cx="12" cy="12" r="9"/><path d="M8 12h8M12 8v8"/></>;
   return <svg aria-hidden="true" viewBox="0 0 24 24" className="h-4 w-4 shrink-0" {...common}>{path}</svg>;
 }
@@ -35,6 +36,7 @@ type DashboardNavigationProps = {
 export function DashboardNavigation({items,workCounts={},workCountsEndpoint}:DashboardNavigationProps){
   const [open,setOpen]=useState(false); const pathname=usePathname(); const searchParams=useSearchParams(); const trigger=useRef<HTMLButtonElement>(null);
   const [liveWorkCounts,setLiveWorkCounts]=useState<Record<string,number>>(workCounts);
+  useEffect(()=>{setLiveWorkCounts(workCounts);},[workCounts]);
   useEffect(()=>{document.body.style.overflow=open?"hidden":""; const close=(event:KeyboardEvent)=>{if(event.key==="Escape"){setOpen(false);trigger.current?.focus();}}; window.addEventListener("keydown",close); return()=>{document.body.style.overflow="";window.removeEventListener("keydown",close);};},[open]);
   useEffect(()=>{
     if(!workCountsEndpoint)return;
@@ -59,7 +61,7 @@ export function DashboardNavigation({items,workCounts={},workCountsEndpoint}:Das
     document.addEventListener("visibilitychange",onVisibilityChange);
     return()=>{disposed=true;request?.abort();window.clearInterval(interval);document.removeEventListener("visibilitychange",onVisibilityChange);};
   },[workCountsEndpoint]);
-  const displayedWorkCounts=workCountsEndpoint?liveWorkCounts:workCounts;
+  const displayedWorkCounts={...workCounts,...(workCountsEndpoint?liveWorkCounts:{})};
   const groups=[...new Set(items.map((item)=>item.group))];
   const matchesRoute=(route:string)=>{const [path,query=""]=route.split("?");if(pathname!==path)return false;const expected=new URLSearchParams(query);return [...expected].every(([key,value])=>searchParams.get(key)===value);};
   const specificMatch=items.some((item)=>Boolean(item.route?.includes("?")&&matchesRoute(item.route)));

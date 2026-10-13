@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { publicStockLabel } from "@/lib/catalog/product-display";
 
 type Variation = {
@@ -59,6 +59,10 @@ export function ProductPurchasePanel({
   );
   const selectedAvailable = selected ? Number(selected.available) : available;
   const selectedIncoming = selected ? Number(selected.incoming) : incoming;
+  useEffect(() => {
+    if (productType !== "variable" || !variationId) return;
+    window.dispatchEvent(new CustomEvent("product-variation-change", { detail: { variationId } }));
+  }, [productType, variationId]);
   const canOrder = Boolean(
     (productType === "variable" ? selected : true) &&
       (selectedAvailable > 0 || allowBackorders),
@@ -74,7 +78,9 @@ export function ProductPurchasePanel({
             name="variation_selector"
             value={variationId}
             onChange={(event) => {
-              setVariationId(event.target.value);
+              const nextVariationId = event.target.value;
+              setVariationId(nextVariationId);
+              window.dispatchEvent(new CustomEvent("product-variation-change", { detail: { variationId: nextVariationId } }));
               setQuantity(1);
             }}
             className="mt-2 w-full rounded-xl border border-slate-300 bg-white p-3 text-slate-950"
