@@ -79,10 +79,6 @@ jobs:
       NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:19092
       NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: synthetic-ci-public-key
       SUPABASE_SECRET_KEY: synthetic-ci-admin-key
-      NODE_USE_ENV_PROXY: "1"
-      HTTP_PROXY: http://127.0.0.1:9
-      HTTPS_PROXY: http://127.0.0.1:9
-      NO_PROXY: 127.0.0.1,localhost
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -95,6 +91,11 @@ jobs:
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Build with loopback-only synthetic Supabase responses
         shell: bash
+        env:
+          NODE_USE_ENV_PROXY: "1"
+          HTTP_PROXY: http://127.0.0.1:9
+          HTTPS_PROXY: http://127.0.0.1:9
+          NO_PROXY: 127.0.0.1,localhost
         run: |
           set -euo pipefail
           node scripts/ci/synthetic-supabase.mjs > synthetic-supabase.log 2>&1 &
