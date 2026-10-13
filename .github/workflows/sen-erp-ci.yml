@@ -1,0 +1,206 @@
+name: SEN ERP CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sen-erp-ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  typescript:
+    name: ci / typescript
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Configure Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Validate TypeScript
+        run: npx --no-install tsc --noEmit --pretty false
+
+  dependency-security:
+    name: ci / dependency-security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Configure Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Audit critical and high advisories against the reviewed baseline
+        shell: bash
+        run: |
+          set +e
+          npm audit --json > audit.json
+          audit_exit=$?
+          set -e
+          echo "npm audit exit code: ${audit_exit}"
+          node scripts/ci/check-audit-baseline.mjs audit.json
+      - name: Preserve sanitized audit evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dependency-audit
+          path: audit.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  synthetic-build:
+    name: ci / synthetic-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:19092
+      NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: synthetic-ci-public-key
+      SUPABASE_SECRET_KEY: synthetic-ci-admin-key
+      NODE_USE_ENV_PROXY: "1"
+      HTTP_PROXY: http://127.0.0.1:9
+      HTTPS_PROXY: http://127.0.0.1:9
+      NO_PROXY: 127.0.0.1,localhost
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Configure Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Build with loopback-only synthetic Supabase responses
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/ci/synthetic-supabase.mjs > synthetic-supabase.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "${fixture_pid}" 2>/dev/null || true' EXIT
+          node -e "fetch('http://127.0.0.1:19092/health').then(r => { if (!r.ok) throw new Error('fixture health check failed') })"
+          npm run build 2>&1 | tee build.log
+          grep -E 'Generating static pages.*\(49/49\)' build.log
+          grep -F '/about' build.log
+          grep -F '/careers' build.log
+      - name: Preserve synthetic build evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: synthetic-build-logs
+          path: |
+            build.log
+            synthetic-supabase.log
+          if-no-files-found: warn
+          retention-days: 7
+
+  focused-tests-advisory:
+    name: ci / focused-tests (advisory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Configure Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run the recovered-feature suite without suppressing failures
+        shell: bash
+        run: |
+          set -o pipefail
+          node --test --experimental-strip-types --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
+            tests/customer-classification-phase1.test.mts \
+            tests/employee-business-access-phase2.test.mts \
+            tests/product-variation-image-switching.test.mts \
+            tests/work-scheduler-v1.test.mts \
+            tests/purchasing-selector-ui-v1.test.mts 2>&1 | tee focused-tests.log
+      - name: Preserve focused-test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: focused-test-log
+          path: focused-tests.log
+          if-no-files-found: warn
+          retention-days: 7
+
+  broad-tests-advisory:
+    name: ci / broad-tests (advisory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Configure Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run the complete source-only suite without suppressing failures
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:standalone 2>&1 | tee broad-tests.log
+      - name: Preserve broad-test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: broad-test-log
+          path: broad-tests.log
+          if-no-files-found: warn
+          retention-days: 7
+
+  eslint-advisory:
+    name: ci / eslint (advisory)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Configure Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+      - name: Install locked dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run ESLint without suppressing findings
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run lint 2>&1 | tee eslint.log
+      - name: Preserve ESLint evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: eslint-log
+          path: eslint.log
+          if-no-files-found: warn
+          retention-days: 7
