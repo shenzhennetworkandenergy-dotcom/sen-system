@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { CurrencyCombobox } from "@/components/forms/CurrencyCombobox";
+import { PurchaseProductSelector } from "@/components/purchasing/PurchaseProductSelector";
 import type { PurchaseBuilderItem } from "@/lib/purchasing/types";
 import { roundMoney } from "@/lib/validation/numbers";
 
@@ -16,7 +17,7 @@ type Defaults = {
 };
 
 export function PurchaseOrderBuilder({
-  action, suppliers, warehouses, products, variations, defaults = {}, initialItems = [], submitLabel,
+  action, suppliers, warehouses, products, variations, defaults = {}, initialItems = [], submitLabel, searchableProductSelector = false,
 }: {
   action: (form: FormData) => void | Promise<void>;
   suppliers: Supplier[];
@@ -26,6 +27,7 @@ export function PurchaseOrderBuilder({
   defaults?: Defaults;
   initialItems?: PurchaseBuilderItem[];
   submitLabel: string;
+  searchableProductSelector?: boolean;
 }) {
   const [items, setItems] = useState<PurchaseBuilderItem[]>(() => initialItems.map((item) => ({
     ...item,
@@ -100,7 +102,12 @@ export function PurchaseOrderBuilder({
 
     <section className="rounded-2xl border bg-[var(--surface)] p-4 shadow-sm">
       <div className="flex flex-wrap items-end gap-3">
-        <label className="min-w-64 flex-1 text-sm font-semibold">Find product by name or SKU
+        {searchableProductSelector ? <PurchaseProductSelector
+          key={items.length}
+          products={products}
+          selectedProductId={productId}
+          onSelect={(id) => { setProductId(id); setVariationId(""); }}
+        /> : <><label className="min-w-64 flex-1 text-sm font-semibold">Find product by name or SKU
           <input
             value={productQuery}
             list="purchase-product-search"
@@ -125,6 +132,7 @@ export function PurchaseOrderBuilder({
             <option value="">Choose product</option>{products.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.sku}</option>)}
           </select>
         </label>
+        </>}
         {product?.product_type === "variable" ? <label className="min-w-56 text-sm font-semibold">Variation *
           <select value={variationId} onChange={(event) => setVariationId(event.target.value)} className="mt-1 w-full rounded-xl border px-3 py-2.5">
             <option value="">Choose variation</option>{productVariations.map((item) => <option key={item.id} value={item.id}>{item.combination_key} · {item.sku}</option>)}

@@ -1,6 +1,7 @@
 import "server-only";
 
 import type { BasicCustomerInput } from "@/lib/customers/basic";
+import { persistCustomerClassification } from "@/lib/customers/classification-server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export type CreatedBasicCustomer = {
@@ -9,6 +10,11 @@ export type CreatedBasicCustomer = {
   company_name: string | null;
   email: string | null;
   phone: string;
+};
+
+export type BasicCustomerClassification = {
+  categorySlugs: string[];
+  districtCode: string | null;
 };
 
 async function removeIncompleteCustomer(customerId: string) {
@@ -25,6 +31,7 @@ async function removeIncompleteCustomer(customerId: string) {
 
 export async function createBasicCustomerRecord(
   input: BasicCustomerInput,
+  classification?: BasicCustomerClassification,
 ): Promise<CreatedBasicCustomer> {
   const db = createSupabaseAdminClient();
   const identity = input.email
@@ -92,6 +99,15 @@ export async function createBasicCustomerRecord(
     });
     await removeIncompleteCustomer(customerId);
     throw new Error("Unable to save the customer address.");
+  }
+
+  if (classification) {
+    try {
+      await persistCustomerClassification(customerId, classification.categorySlugs, classification.districtCode);
+    } catch (error) {
+      await removeIncompleteCustomer(customerId);
+      throw error instanceof Error ? error : new Error("Unable to save customer classification.");
+    }
   }
 
   return {

@@ -67,6 +67,7 @@ export default async function PublicProductDetailPage({ params, searchParams }: 
     ["Country of origin", product.country_of_origin],
     ["Serial tracking", product.serial_tracking_required ? "Required" : "Not required"],
   ];
+  const variationImages = product.variations.flatMap((variation) => variation.image ? [{ ...variation.image, variationId: variation.id }] : []);
 
   const productSchema = {
     "@context": "https://schema.org",
@@ -106,6 +107,7 @@ export default async function PublicProductDetailPage({ params, searchParams }: 
       <section className="pb-14"><Container><div className="grid gap-8 lg:grid-cols-[1.05fr_.95fr]">
         <ProductImageGallery
           images={product.images}
+          variationImages={variationImages}
           category={product.businessCategory.name}
         />
         <div className="catalogue-theme-panel rounded-3xl border p-6 shadow-sm sm:p-8">
