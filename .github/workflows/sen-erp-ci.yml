@@ -101,7 +101,32 @@ jobs:
           node scripts/ci/synthetic-supabase.mjs > synthetic-supabase.log 2>&1 &
           fixture_pid=$!
           trap 'kill "${fixture_pid}" 2>/dev/null || true' EXIT
-          node -e "fetch('http://127.0.0.1:19092/health').then(r => { if (!r.ok) throw new Error('fixture health check failed') })"
+          set +e
+          timeout 30s bash -c '
+            fixture_pid="$1"
+            while true; do
+              if ! kill -0 "${fixture_pid}" 2>/dev/null; then
+                exit 2
+              fi
+              if curl --fail --silent --output /dev/null \
+                --connect-timeout 1 --max-time 1 \
+                http://127.0.0.1:19092/health; then
+                exit 0
+              fi
+              sleep 1
+            done
+          ' _ "${fixture_pid}"
+          fixture_status=$?
+          set -e
+          if [[ "${fixture_status}" -eq 2 ]]; then
+            echo "Synthetic fixture exited before becoming ready." >&2
+            exit 1
+          fi
+          if [[ "${fixture_status}" -ne 0 ]]; then
+            echo "Synthetic fixture was not ready within 30 seconds." >&2
+            exit 1
+          fi
+          echo "Synthetic fixture is ready on the loopback endpoint."
           npm run build 2>&1 | tee build.log
           grep -E 'Generating static pages.*\(49/49\)' build.log
           grep -F '/about' build.log
