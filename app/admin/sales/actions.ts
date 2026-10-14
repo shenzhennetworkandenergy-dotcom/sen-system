@@ -18,6 +18,10 @@ import {
 } from "@/lib/sales/create-draft-input";
 import { moneyFromForm, parseWholeNumber } from "@/lib/validation/numbers";
 import { normalizeSaleLineEdit } from "@/lib/sales/line-editing";
+import {
+  assertSaleCustomerLocked,
+  parseDraftSaleEditItems,
+} from "@/lib/sales/draft-sale-editing";
 import { buildSalePaymentRpcArguments } from "@/lib/sales/payment-accounting";
 import {
   normalizeCommercialTermsDraft,
@@ -31,6 +35,81 @@ import {
 
 const target = (id: string, kind: "success" | "error", message: string) => `/admin/sales/${id}?${kind}=${encodeURIComponent(message)}`;
 const safe = (message: string | undefined, fallback: string) => message && /sale|invoice|revision|release|payment|amount|method|stock|draft|serial|document|permission|eligible|accounting|cashbook|closed|received|channel|retry|operation|terms|credit|due date|correction/i.test(message) ? message : fallback;
+
+const editTarget = (id: string, kind: "success" | "error", message: string) =>
+  `/admin/sales/${id}/edit?${kind}=${encodeURIComponent(message)}`;
+
+export async function updateDraftSaleAction(saleId: string, form: FormData) {
+  const { profile, permissions } = await requirePermission("sales.edit");
+  const db = createSupabaseAdminClient();
+  const reason = String(form.get("reason") ?? "").trim().slice(0, 500);
+  const expectedUpdatedAt = String(form.get("expected_updated_at") ?? "").trim();
+  let items;
+  try {
+    if (!reason) throw new Error("An edit reason is required.");
+    if (!expectedUpdatedAt || Number.isNaN(Date.parse(expectedUpdatedAt))) {
+      throw new Error("The Sale changed before it could be saved.");
+    }
+    items = parseDraftSaleEditItems(
+      JSON.parse(String(form.get("items") ?? "[]")) as unknown,
+    );
+  } catch (error) {
+    redirect(editTarget(saleId, "error", error instanceof Error ? error.message : "Sale items are invalid."));
+  }
+
+  const { data: sale, error: saleError } = await db
+    .from("sales_orders")
+    .select("id,customer_profile_id,fulfillment_warehouse_id,status,created_by,updated_at")
+    .eq("id", saleId)
+    .maybeSingle();
+  if (saleError || !sale) redirect(editTarget(saleId, "error", "Sale not found."));
+  const scope = resolveSalesVisibilityScope({
+    role: profile.role,
+    status: profile.status,
+    profileId: profile.id,
+    permissions,
+  });
+  if (!canAccessSaleUnderScope(scope, sale.created_by)) {
+    redirect(editTarget(saleId, "error", "Sales access denied."));
+  }
+  try {
+    assertSaleCustomerLocked(form.get("customer_id"), sale.customer_profile_id);
+    if (sale.status !== "draft") {
+      throw new Error("Only a Draft Sale can be edited in the Create Sale form.");
+    }
+    if (items.some((item) => item.warehouse_id !== sale.fulfillment_warehouse_id)) {
+      throw new Error("The Sale warehouse cannot be changed in this editor.");
+    }
+  } catch (error) {
+    redirect(editTarget(saleId, "error", error instanceof Error ? error.message : "Sale edit is invalid."));
+  }
+
+  const result = await db.rpc("update_draft_sale_products", {
+    actor_profile_id: profile.id,
+    requested_order_id: saleId,
+    requested_expected_updated_at: expectedUpdatedAt,
+    requested_reason: reason,
+    requested_items: items,
+  });
+  if (result.error || !result.data) {
+    redirect(editTarget(saleId, "error", safe(result.error?.message, "Unable to update Draft Sale.")));
+  }
+  await writeAuditLog({
+    actorId: profile.id,
+    actorRole: profile.role,
+    action: "sale.draft_products_updated",
+    module: "sales",
+    entityType: "sales_order",
+    entityId: saleId,
+    targetProfileId: sale.customer_profile_id,
+    description: "Draft Sale products and pricing updated from the Sale form.",
+    newValues: { reason, item_count: items.length },
+  });
+  revalidatePath("/admin/sales");
+  revalidatePath(`/admin/sales/${saleId}`);
+  revalidatePath(`/admin/sales/${saleId}/edit`);
+  redirect(target(saleId, "success", "Draft Sale changes saved."));
+}
 
 export async function updateSaleLinesAction(saleId: string, form: FormData) {
   const { profile } = await requirePermission("sales.edit");

@@ -99,6 +99,7 @@ export default async function SaleDetail({
   const canEditLines =
     !["delivered", "cancelled"].includes(order.status) &&
     (isAdmin || permissions.has("sales.edit"));
+  const canEditDraftSale = order.status === "draft" && canEditLines;
   const canChangePrice = isAdmin || permissions.has("sales.change_price");
   const canApplyDiscount = isAdmin || permissions.has("sales.apply_discount");
   const canEditCommercialTerms = isAdmin || permissions.has("sales.edit");
@@ -147,6 +148,13 @@ export default async function SaleDetail({
         <p className="mb-3 rounded-lg border border-green-200 bg-green-50 p-3 text-green-900">
           {notice.success}
         </p>
+      ) : null}
+      {canEditDraftSale ? (
+        <div className="mb-4 flex justify-end">
+          <Link href={`/admin/sales/${saleId}/edit`} className="rounded-lg bg-[var(--primary)] px-4 py-2 font-semibold text-[var(--primary-foreground)]">
+            Edit Sale
+          </Link>
+        </div>
       ) : null}
       {notice.error ? (
         <p className="mb-3 rounded-lg border border-red-200 bg-red-50 p-3 text-red-900">

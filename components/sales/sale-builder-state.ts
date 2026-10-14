@@ -2,6 +2,7 @@ import type { QuotationSaleInitial } from "../../lib/quotations/sale-conversion-
 
 export type SaleBuilderRow = {
   key: string;
+  sale_order_item_id?: string | null;
   product_id: string;
   variation_id: string;
   source_quotation_item_id: string | null;
@@ -14,6 +15,37 @@ export type SaleBuilderRow = {
   catalogue_price: number;
   baseline_unit_price: number;
   baseline_line_discount: number;
+};
+
+export type SaleEditInitial = {
+  saleId: string;
+  orderNumber: string;
+  updatedAt: string;
+  customerId: string;
+  warehouseId: string;
+  addressId: string | null;
+  billingAddressId: string | null;
+  shippingAddressLabel: string;
+  billingAddressLabel: string;
+  salesSource: string;
+  expectedDeliveryDate: string | null;
+  discountAmount: number;
+  shippingAmount: number;
+  serviceAmount: number;
+  taxAmount: number;
+  customerNotes: string | null;
+  internalNotes: string | null;
+  items: Array<{
+    id: string;
+    productId: string;
+    variationId: string | null;
+    quantity: number;
+    unitPrice: number;
+    discountType: "percentage" | "fixed";
+    discountValue: number;
+    lineDiscount: number;
+    lineTax: number;
+  }>;
 };
 
 export type SaleBuilderInitialState = {
@@ -48,8 +80,9 @@ export const approvedQuotationReason = (reference: string) =>
 
 export function saleBuilderRowControlState(
   row: Pick<SaleBuilderRow, "source_quotation_item_id">,
+  editingSale = false,
 ) {
-  const sourced = Boolean(row.source_quotation_item_id);
+  const sourced = !editingSale && Boolean(row.source_quotation_item_id);
   return {
     productLocked: sourced,
     variationLocked: sourced,
@@ -82,7 +115,40 @@ export function createSaleBuilderInitialState(
   initialQuotation: QuotationSaleInitial | undefined,
   warehouses: Array<{ id: string }>,
   makeKey: () => string,
+  initialSale?: SaleEditInitial,
 ): SaleBuilderInitialState {
+  if (initialSale) {
+    return {
+      customerId: initialSale.customerId,
+      warehouseId: initialSale.warehouseId,
+      addressId: initialSale.addressId ?? "",
+      billingAddressId: initialSale.billingAddressId ?? "",
+      rows: initialSale.items.map((line) => ({
+        key: `sale:${line.id}`,
+        sale_order_item_id: line.id,
+        product_id: line.productId,
+        variation_id: line.variationId ?? "",
+        source_quotation_item_id: null,
+        quantity: String(line.quantity),
+        unit_price: String(line.unitPrice),
+        line_discount: line.discountType === "fixed" ? String(line.discountValue) : "0",
+        discount_percent: line.discountType === "percentage" ? String(line.discountValue) : "0",
+        line_tax: String(line.lineTax),
+        reason: "",
+        catalogue_price: line.unitPrice,
+        baseline_unit_price: line.unitPrice,
+        baseline_line_discount: line.lineDiscount,
+      })),
+      expectedDeliveryDate: initialSale.expectedDeliveryDate ?? "",
+      discountAmount: String(initialSale.discountAmount),
+      shippingAmount: String(initialSale.shippingAmount),
+      serviceAmount: String(initialSale.serviceAmount),
+      taxAmount: String(initialSale.taxAmount),
+      discountReason: "",
+      customerNotes: initialSale.customerNotes ?? "",
+      internalNotes: initialSale.internalNotes ?? "",
+    };
+  }
   const warehouseId = warehouses[0]?.id ?? "";
   if (!initialQuotation) {
     return {
@@ -157,6 +223,7 @@ export function buildSaleBuilderSubmission(
   validProductIds: Set<string>,
   initialQuotation: QuotationSaleInitial | undefined,
   header: SaleBuilderHeader,
+  initialSale?: SaleEditInitial,
 ) {
   const defaultReason = initialQuotation
     ? approvedQuotationReason(initialQuotation.reference)
@@ -173,6 +240,7 @@ export function buildSaleBuilderSubmission(
         rawGross * Number(row.discount_percent || 0) / 100,
     );
     return {
+      ...(initialSale ? { id: row.sale_order_item_id } : {}),
       product_id: row.product_id,
       variation_id: row.variation_id || null,
       warehouse_id: warehouseId,
@@ -183,6 +251,12 @@ export function buildSaleBuilderSubmission(
       unit_price: initialQuotation ? values.unitPrice : rawUnitPrice,
       line_discount: initialQuotation ? values.discount : rawDiscount,
       line_tax: initialQuotation ? values.tax : 0,
+      ...(initialSale ? {
+        discount_type: Number(row.discount_percent || 0) > 0 ? "percentage" : "fixed",
+        discount_value: Number(row.discount_percent || 0) > 0
+          ? money(row.discount_percent)
+          : money(row.line_discount),
+      } : {}),
       price_overridden: initialQuotation
         ? values.unitPrice !== money(row.baseline_unit_price)
         : rawUnitPrice !== row.catalogue_price,
