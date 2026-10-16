@@ -497,7 +497,7 @@ test("SaleBuilder wiring selects the conversion action only for quotation mode a
   assert.match(builder, /initialQuotation\s*\?\s*createSaleFromQuotationAction\s*:\s*createSaleAction/);
   assert.match(builder, /name="quotation_id"/);
   assert.match(builder, /name="adjustments"/);
-  assert.match(builder, /locked=\{Boolean\(initialQuotation\)\}/);
+  assert.match(builder, /locked=\{Boolean\(initialQuotation \|\| initialSale\)\}/);
   assert.match(builder, /Line tax/);
   assert.match(builder, /locked=\{rowControls\.productLocked\}/);
   assert.match(builder, /disabled=\{rowControls\.variationLocked\}/);

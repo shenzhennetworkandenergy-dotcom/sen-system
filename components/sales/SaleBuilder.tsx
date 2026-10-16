@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 import {
   createSaleAction,
   createSaleFromQuotationAction,
+  updateDraftSaleAction,
 } from "@/app/admin/sales/actions";
 import { CustomerTypeahead } from "@/components/customers/CustomerTypeahead";
 import {
@@ -17,6 +18,7 @@ import {
   createBlankSaleBuilderRow,
   createSaleBuilderInitialState,
   saleBuilderRowControlState,
+  type SaleEditInitial,
   type SaleBuilderRow,
 } from "@/components/sales/sale-builder-state";
 import type { CustomerSearchOption } from "@/lib/customers/search";
@@ -40,6 +42,7 @@ export function SaleBuilder({
   warehouses,
   addresses,
   initialQuotation,
+  initialSale,
 }: {
   customers: Customer[];
   products: Product[];
@@ -48,9 +51,10 @@ export function SaleBuilder({
   warehouses: Warehouse[];
   addresses: Address[];
   initialQuotation?: QuotationSaleInitial;
+  initialSale?: SaleEditInitial;
 }) {
   const [initialState] = useState(() =>
-    createSaleBuilderInitialState(initialQuotation, warehouses, () => crypto.randomUUID()),
+    createSaleBuilderInitialState(initialQuotation, warehouses, () => crypto.randomUUID(), initialSale),
   );
   const [customerId, setCustomerId] = useState(() => initialState.customerId);
   const [warehouseId, setWarehouseId] = useState(() => initialState.warehouseId);
@@ -86,8 +90,9 @@ export function SaleBuilder({
       validProductIds,
       initialQuotation,
       { discountAmount, serviceAmount, discountReason },
+      initialSale,
     ),
-    [rows, warehouseId, validProductIds, initialQuotation, discountAmount, serviceAmount, discountReason],
+    [rows, warehouseId, validProductIds, initialQuotation, discountAmount, serviceAmount, discountReason, initialSale],
   );
 
   const update = (key:string, patch:Partial<SaleBuilderRow>) =>
@@ -97,8 +102,15 @@ export function SaleBuilder({
     ? approvedQuotationReason(initialQuotation.reference)
     : "";
 
-  return <form action={initialQuotation ? createSaleFromQuotationAction : createSaleAction} className="space-y-4">
+  const action = initialSale
+    ? updateDraftSaleAction.bind(null, initialSale.saleId)
+    : initialQuotation
+      ? createSaleFromQuotationAction
+      : createSaleAction;
+
+  return <form action={action} className="space-y-4">
     <input type="hidden" name="items" value={JSON.stringify(submission.items)}/>
+    {initialSale ? <input type="hidden" name="expected_updated_at" value={initialSale.updatedAt}/> : null}
     {initialQuotation ? <>
       <input type="hidden" name="quotation_id" value={initialQuotation.quotationId}/>
       <input type="hidden" name="adjustments" value={JSON.stringify(submission.adjustments)}/>
@@ -107,7 +119,7 @@ export function SaleBuilder({
       <CustomerTypeahead
         customers={customers}
         selectedCustomerId={customerId}
-        locked={Boolean(initialQuotation)}
+        locked={Boolean(initialQuotation || initialSale)}
         onSelectionChange={(selectedCustomer) => {
           setCustomerId(selectedCustomer?.id ?? "");
           setAddressId(selectedCustomer ? addresses.find((address) => address.profile_id === selectedCustomer.id && address.is_default_shipping)?.id ?? "" : "");
@@ -115,12 +127,12 @@ export function SaleBuilder({
         }}
         fieldClassName={field}
       />
-      <label className="text-sm font-semibold">Sales source<select name="sales_source" className={field}>{["website","facebook","whatsapp","phone","email","direct_office","existing_customer","sales_representative","referral","other"].map((item)=><option key={item} value={item}>{item.replaceAll("_"," ")}</option>)}</select></label>
-      <label className="text-sm font-semibold">Expected delivery<input name="expected_delivery_date" type="date" value={expectedDeliveryDate} onChange={(event)=>setExpectedDeliveryDate(event.target.value)} className={field}/></label>
-      <label className="text-sm font-semibold">Warehouse<select name="warehouse_id" value={warehouseId} onChange={(event)=>setWarehouseId(event.target.value)} className={field} required>{warehouses.map((item)=><option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}</select></label>
-      <label className="text-sm font-semibold">Delivery address<select name="address_id" value={addressId} onChange={(event)=>setAddressId(event.target.value)} className={field}><option value="">Enter below</option>{customerAddresses.map((item)=><option key={item.id} value={item.id}>{item.recipient_name}, {item.address_line_1}</option>)}</select></label>
-      <label className="text-sm font-semibold">Billing address<select name="billing_address_id" value={billingAddressId} onChange={(event)=>setBillingAddressId(event.target.value)} className={field}><option value="">Same as delivery</option>{customerAddresses.map((item)=><option key={item.id} value={item.id}>{item.recipient_name}, {item.address_line_1}</option>)}</select></label>
-      {!addressId ? <>
+      <label className="text-sm font-semibold">Sales source<select name="sales_source" defaultValue={initialSale?.salesSource} disabled={Boolean(initialSale)} className={field}>{["website","facebook","whatsapp","phone","email","direct_office","existing_customer","sales_representative","referral","other"].map((item)=><option key={item} value={item}>{item.replaceAll("_"," ")}</option>)}</select></label>
+      <label className="text-sm font-semibold">Expected delivery<input name="expected_delivery_date" type="date" value={expectedDeliveryDate} disabled={Boolean(initialSale)} onChange={(event)=>setExpectedDeliveryDate(event.target.value)} className={field}/></label>
+      <label className="text-sm font-semibold">Warehouse<select name="warehouse_id" value={warehouseId} disabled={Boolean(initialSale)} onChange={(event)=>setWarehouseId(event.target.value)} className={field} required>{warehouses.map((item)=><option key={item.id} value={item.id}>{item.code} · {item.name}</option>)}</select>{initialSale ? <input type="hidden" name="warehouse_id" value={warehouseId}/> : null}</label>
+      <label className="text-sm font-semibold">Delivery address<select name="address_id" value={addressId} disabled={Boolean(initialSale)} onChange={(event)=>setAddressId(event.target.value)} className={field}><option value="">{initialSale?.shippingAddressLabel || "Enter below"}</option>{customerAddresses.map((item)=><option key={item.id} value={item.id}>{item.recipient_name}, {item.address_line_1}</option>)}</select></label>
+      <label className="text-sm font-semibold">Billing address<select name="billing_address_id" value={billingAddressId} disabled={Boolean(initialSale)} onChange={(event)=>setBillingAddressId(event.target.value)} className={field}><option value="">{initialSale?.billingAddressLabel || "Same as delivery"}</option>{customerAddresses.map((item)=><option key={item.id} value={item.id}>{item.recipient_name}, {item.address_line_1}</option>)}</select></label>
+      {!addressId && !initialSale ? <>
         <input key={`${customerId}:name`} name="recipient_name" placeholder="Recipient name" defaultValue={customer?.full_name ?? ""} className={field} required/>
         <input key={`${customerId}:phone`} name="phone" placeholder="Phone" defaultValue={customer?.phone ?? ""} className={field} required/>
         <input name="address_line_1" placeholder="Delivery address" className={field} required/>
@@ -132,7 +144,7 @@ export function SaleBuilder({
     <section className="rounded-xl border bg-[var(--surface)] p-4">
       <div><h2 className="font-bold">Products and pricing</h2><p className="text-sm text-[var(--muted-text)]">Search by product name, model or SKU. Product details and price fill automatically.</p></div>
       <div className="mt-3 space-y-3">{selected.map((row)=>{
-        const rowControls = saleBuilderRowControlState(row);
+        const rowControls = saleBuilderRowControlState(row, Boolean(initialSale));
         return <article key={row.key} className="grid gap-2 rounded-xl border p-3 lg:grid-cols-[2fr_1fr_.6fr_.8fr_.7fr_.7fr_auto]">
         <SaleProductPicker
           products={products}
@@ -154,8 +166,8 @@ export function SaleBuilder({
         <label className="text-xs font-semibold">Variation<select value={row.variation_id} disabled={rowControls.variationLocked} onChange={(event)=>{const variation=variations.find((item)=>item.id===event.target.value),price=roundMoney(Number(variation?.sale_price??variation?.regular_price??row.catalogue_price));update(row.key,{variation_id:event.target.value,unit_price:String(price),catalogue_price:row.source_quotation_item_id?row.catalogue_price:price,baseline_unit_price:row.source_quotation_item_id?row.baseline_unit_price:price})}} className={field}><option value="">None</option>{variations.filter((item)=>item.product_id===row.product_id).map((item)=><option key={item.id} value={item.id}>{item.name||item.sku}</option>)}</select></label>
         <label className="text-xs font-semibold">Qty<input type="number" min="1" max={row.available} step="1" value={row.quantity} onChange={(event)=>update(row.key,{quantity:String(Math.max(1,Math.trunc(Number(event.target.value)||1)))})} className={field}/><span className={Number(row.quantity)>row.available?"text-red-700":"text-[var(--muted-text)]"}>Available {row.available}</span></label>
         <label className="text-xs font-semibold">Unit BDT<input type="number" inputMode="decimal" min="0" step=".01" value={row.unit_price} onChange={(event)=>update(row.key,{unit_price:event.target.value})} onBlur={()=>update(row.key,{unit_price:String(roundMoney(Number(row.unit_price)||0))})} className={field}/></label>
-        <label className="text-xs font-semibold">Discount %<input type="number" inputMode="decimal" min="0" max="100" step=".01" value={row.discount_percent} onChange={(event)=>update(row.key,{discount_percent:event.target.value})} onBlur={()=>update(row.key,{discount_percent:String(roundMoney(Number(row.discount_percent)||0))})} className={field}/></label>
-        <label className="text-xs font-semibold">Fixed discount<input type="number" inputMode="decimal" min="0" step=".01" value={row.line_discount} onChange={(event)=>update(row.key,{line_discount:event.target.value})} onBlur={()=>update(row.key,{line_discount:String(roundMoney(Number(row.line_discount)||0))})} className={field}/><span>Line {row.lineTotal.toFixed(2)}</span></label>
+        <label className="text-xs font-semibold">Discount %<input type="number" inputMode="decimal" min="0" max="100" step=".01" value={row.discount_percent} onChange={(event)=>update(row.key,{discount_percent:event.target.value,...(initialSale?{line_discount:"0"}:{})})} onBlur={()=>update(row.key,{discount_percent:String(roundMoney(Number(row.discount_percent)||0))})} className={field}/></label>
+        <label className="text-xs font-semibold">Fixed discount<input type="number" inputMode="decimal" min="0" step=".01" value={row.line_discount} onChange={(event)=>update(row.key,{line_discount:event.target.value,...(initialSale?{discount_percent:"0"}:{})})} onBlur={()=>update(row.key,{line_discount:String(roundMoney(Number(row.line_discount)||0))})} className={field}/><span>Line {row.lineTotal.toFixed(2)}</span></label>
         {initialQuotation ? <label className="text-xs font-semibold">Line tax<input type="number" inputMode="decimal" min="0" step=".01" value={row.line_tax} onChange={(event)=>update(row.key,{line_tax:event.target.value})} onBlur={()=>update(row.key,{line_tax:String(roundMoney(Number(row.line_tax)||0))})} className={field}/></label> : null}
         <button type="button" disabled={!rowControls.removable || rows.length===1} onClick={()=>setRows((current)=>current.filter((item)=>item.key!==row.key))} className="self-center rounded-lg border px-3 py-2 disabled:opacity-40">Remove</button>
         {(Number(row.unit_price)!==row.baseline_unit_price||row.discount!==row.baseline_line_discount)?<label className="text-xs font-semibold lg:col-span-full">Adjustment reason<input value={row.reason} onChange={(event)=>update(row.key,{reason:event.target.value})} required className={field}/></label>:null}
@@ -163,15 +175,16 @@ export function SaleBuilder({
       <button type="button" onClick={()=>setRows((current)=>[...current,createBlankSaleBuilderRow(()=>crypto.randomUUID(),defaultQuotationReason)])} className="mt-3 rounded-lg border px-4 py-2 font-semibold">+ Add product</button>
     </section>
     <section className="grid gap-3 rounded-xl border bg-[var(--surface)] p-4 md:grid-cols-3">
-      <label className="text-sm">Order discount<input name="discount_amount" type="number" min="0" step=".01" value={discountAmount} onChange={(event)=>setDiscountAmount(event.target.value)} className={field}/></label>
-      <label className="text-sm">Shipping charge<input name="shipping_amount" type="number" min="0" step=".01" value={shippingAmount} onChange={(event)=>setShippingAmount(event.target.value)} className={field}/></label>
-      <label className="text-sm">Installation/service<input name="service_amount" type="number" min="0" step=".01" value={serviceAmount} onChange={(event)=>setServiceAmount(event.target.value)} className={field}/></label>
-      <label className="text-sm">VAT/tax<input name="tax_amount" type="number" min="0" step=".01" value={taxAmount} onChange={(event)=>setTaxAmount(event.target.value)} className={field}/></label>
-      <label className="text-sm md:col-span-2">Discount reason<input name="discount_reason" value={discountReason} onChange={(event)=>setDiscountReason(event.target.value)} className={field}/></label>
-      <label className="text-sm md:col-span-3">Customer note<textarea name="customer_notes" value={customerNotes} onChange={(event)=>setCustomerNotes(event.target.value)} className={field}/></label>
-      <label className="text-sm md:col-span-3">Internal note<textarea name="internal_notes" value={internalNotes} onChange={(event)=>setInternalNotes(event.target.value)} className={field}/></label>
+      <label className="text-sm">Order discount<input name="discount_amount" type="number" min="0" step=".01" value={discountAmount} disabled={Boolean(initialSale)} onChange={(event)=>setDiscountAmount(event.target.value)} className={field}/></label>
+      <label className="text-sm">Shipping charge<input name="shipping_amount" type="number" min="0" step=".01" value={shippingAmount} disabled={Boolean(initialSale)} onChange={(event)=>setShippingAmount(event.target.value)} className={field}/></label>
+      <label className="text-sm">Installation/service<input name="service_amount" type="number" min="0" step=".01" value={serviceAmount} disabled={Boolean(initialSale)} onChange={(event)=>setServiceAmount(event.target.value)} className={field}/></label>
+      <label className="text-sm">VAT/tax<input name="tax_amount" type="number" min="0" step=".01" value={taxAmount} disabled={Boolean(initialSale)} onChange={(event)=>setTaxAmount(event.target.value)} className={field}/></label>
+      <label className="text-sm md:col-span-2">Discount reason<input name="discount_reason" value={discountReason} disabled={Boolean(initialSale)} onChange={(event)=>setDiscountReason(event.target.value)} className={field}/></label>
+      <label className="text-sm md:col-span-3">Customer note<textarea name="customer_notes" value={customerNotes} disabled={Boolean(initialSale)} onChange={(event)=>setCustomerNotes(event.target.value)} className={field}/></label>
+      <label className="text-sm md:col-span-3">Internal note<textarea name="internal_notes" value={internalNotes} disabled={Boolean(initialSale)} onChange={(event)=>setInternalNotes(event.target.value)} className={field}/></label>
+      {initialSale ? <label className="text-sm font-semibold md:col-span-3">Edit reason<input name="reason" required maxLength={500} className={field}/></label> : null}
       <div className="md:col-span-3 text-right text-xl font-bold">Items after line discounts: {subtotal.toFixed(2)} BDT</div>
     </section>
-    <div className="flex justify-end"><button disabled={!customerId || !submission.items.length} className="rounded-lg bg-[var(--primary)] px-5 py-3 font-bold text-[var(--primary-foreground)] disabled:cursor-not-allowed disabled:opacity-50">Create draft sale</button></div>
+    <div className="flex justify-end"><button disabled={!customerId || !submission.items.length} className="rounded-lg bg-[var(--primary)] px-5 py-3 font-bold text-[var(--primary-foreground)] disabled:cursor-not-allowed disabled:opacity-50">{initialSale ? "Save Changes" : "Create draft sale"}</button></div>
   </form>;
 }
