@@ -3,6 +3,7 @@
   "git": {
     "deploymentEnabled": {
       "main": false,
+      "codex/work-scheduler-ui-contrast": false,
       "codex/sales-edit-reuse-create-form": false
     }
   }

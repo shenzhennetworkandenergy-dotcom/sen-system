@@ -22,14 +22,20 @@ export default async function WorkSchedulerAdminPage({ searchParams }: { searchP
     unable: today.filter((item) => item.status === "UNABLE_TO_COMPLETE").length,
     reassigned: today.filter((item) => item.effective_profile_id !== item.scheduled_profile_id).length,
   };
+  const summaryCards = [
+    { label: "Pending", value: counts.pending, tone: "border-indigo-200 bg-indigo-50", labelTone: "text-indigo-700" },
+    { label: "Completed", value: counts.completed, tone: "border-blue-200 bg-blue-50", labelTone: "text-blue-700" },
+    { label: "Unable", value: counts.unable, tone: "border-slate-300 bg-slate-100", labelTone: "text-slate-700" },
+    { label: "Reassigned", value: counts.reassigned, tone: "border-violet-200 bg-violet-50", labelTone: "text-violet-700" },
+  ];
   const employeeName = (id: string) => {
     const person = data.employees.find((employee) => employee.id === id);
     return person?.full_name ?? person?.email ?? "Employee";
   };
   return <DashboardShell admin={profile.role === "admin"} employeePermissions={profile.role === "employee" ? permissions : undefined} title="Work Scheduler" subtitle="Coordinate today’s operational work without changing any ERP transaction.">
-    <section className="overflow-hidden rounded-3xl bg-gradient-to-br from-[#111b4f] via-indigo-700 to-blue-600 p-6 text-white shadow-xl shadow-indigo-200 sm:p-8">
-      <div className="flex flex-wrap items-end justify-between gap-5"><div><p className="text-xs font-black uppercase tracking-[.18em] text-indigo-200">Operations control</p><h2 className="mt-2 text-3xl font-black">Work Scheduler</h2><p className="mt-2 max-w-xl text-sm text-indigo-100">A calm, shared view of what is assigned, completed, blocked, or reassigned today.</p></div><div className="rounded-2xl border border-white/20 bg-white/10 p-4 text-right"><p className="text-xs font-bold uppercase tracking-wider text-indigo-100">Today</p><p className="text-2xl font-black">{today.length} assigned</p></div></div>
-      <div className="mt-6 grid gap-3 sm:grid-cols-4">{Object.entries(counts).map(([label, value]) => <div key={label} className="rounded-2xl bg-white/10 p-4"><p className="text-xs font-bold capitalize text-indigo-100">{label}</p><p className="mt-1 text-2xl font-black">{value}</p></div>)}</div>
+    <section className="overflow-hidden rounded-3xl bg-gradient-to-r from-[#172554] to-[#3730A3] p-6 text-white shadow-lg shadow-indigo-950/15 sm:p-8">
+      <div className="flex flex-wrap items-end justify-between gap-5"><div><p className="text-xs font-black uppercase tracking-[.18em] text-[#E0E7FF]">Operations control</p><h2 className="mt-2 text-3xl font-black !text-white">Work Scheduler</h2><p className="mt-2 max-w-xl text-sm text-[#E0E7FF]">A calm, shared view of what is assigned, completed, blocked, or reassigned today.</p></div><div className="w-full rounded-[1rem] border border-[#CBD5E1] bg-white p-4 text-right shadow-sm sm:w-auto sm:min-w-36"><p className="text-xs font-black uppercase tracking-wider text-[#4338CA]">Today</p><p className="mt-1 text-4xl font-black tabular-nums text-[#0F172A]">{today.length}</p><p className="text-sm font-bold text-[#334155]">Assigned</p></div></div>
+      <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">{summaryCards.map(({ label, value, tone, labelTone }) => <div key={label} className={`rounded-[1rem] border p-4 shadow-sm ${tone}`}><p className={`text-xs font-bold ${labelTone}`}>{label}</p><p className="mt-1 text-2xl font-black tabular-nums text-[#0F172A]">{value}</p></div>)}</div>
     </section>
     {params.success || params.error ? <p className={`mt-4 rounded-xl border p-3 text-sm font-semibold ${params.error ? "border-rose-200 bg-rose-50 text-rose-800" : "border-emerald-200 bg-emerald-50 text-emerald-800"}`}>{params.error ?? params.success}</p> : null}
     <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(22rem,.65fr)]">

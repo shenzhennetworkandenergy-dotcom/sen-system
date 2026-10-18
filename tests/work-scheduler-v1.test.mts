@@ -114,6 +114,16 @@ test("Employee My Work hero pending card has high-contrast styling", () => {
   assert.match(page, /text-sm font-semibold text-red-700">pending/);
 });
 
+test("Admin Work Scheduler hero keeps summary text high-contrast and responsive", () => {
+  const page = readFileSync("app/admin/work-scheduler/page.tsx", "utf8");
+  assert.match(page, /from-\[#172554\] to-\[#3730A3\]/);
+  assert.match(page, /font-black !text-white">Work Scheduler/);
+  assert.match(page, /text-\[#4338CA\]">Today/);
+  assert.match(page, /text-4xl font-black tabular-nums text-\[#0F172A\]">\{today\.length\}/);
+  assert.match(page, /text-sm font-bold text-\[#334155\]">Assigned/);
+  assert.match(page, /grid grid-cols-2 gap-3 sm:grid-cols-4/);
+});
+
 test("Delivery customer linking is Work Scheduler-only and snapshots CRM display data", () => {
   const migration = readFileSync("supabase/migrations/202610010002_work_scheduler_customer_delivery.sql", "utf8");
   const action = readFileSync("app/admin/work-scheduler/actions.ts", "utf8");
