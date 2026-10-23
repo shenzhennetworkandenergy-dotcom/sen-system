@@ -161,7 +161,7 @@ export async function getAdminEmployeeLoanDetail(accountId: string) {
   const db = createSupabaseAdminClient();
   const [{ data: account, error: accountError }, { data: installments, error: installmentsError }, { data: transactions, error: transactionsError }, { data: audit, error: auditError }] = await Promise.all([
     db.from("non_sales_receivable_details_v")
-      .select("id,receivable_number,employee_record_id,category,requested_amount,approved_amount,currency,status,installment_count,installment_amount,first_due_date,final_due_date,disbursement_date,created_at,approved_at,outstanding_amount,recovered_amount,disbursed_amount,opening_principal,opening_as_of_date,default_repayment_method,notes")
+      .select("id,receivable_number,employee_record_id,category,requested_amount,approved_amount,currency,status,installment_count,installment_amount,first_due_date,final_due_date,disbursement_date,created_at,approved_at,outstanding_amount,recovered_amount,disbursed_amount,opening_principal,opening_as_of_date,default_repayment_method,notes,version")
       .eq("id", accountId).eq("category", "employee_loan").maybeSingle(),
     db.from("receivable_installment_status_v")
       .select("id,installment_number,due_date,amount_due,paid_amount,remaining_amount,status:installment_status")
@@ -177,6 +177,7 @@ export async function getAdminEmployeeLoanDetail(accountId: string) {
   if (!account) return null;
   const accountView = {
     id: account.id,
+    version: account.version,
     receivableNumber: account.receivable_number,
     borrowerName: relation(extension.employee?.profiles as Record<string, unknown> | Record<string, unknown>[] | null)?.full_name
       || extension.employee?.employee_number || "Employee",

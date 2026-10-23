@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { EmployeeLoanStartDateEditor } from "@/components/receivables/EmployeeLoanStartDateEditor";
 
 import {
   disburseEmployeeLoanAction,
@@ -14,7 +15,7 @@ const relation = (value: unknown) => (Array.isArray(value) ? value[0] : value) a
 export function EmployeeLoanAdminPanel({ account, extension, permissions }: {
   account: Record<string, unknown>;
   extension: { detail: Record<string, unknown>; employee: Record<string, unknown> | null; documents: Record<string, unknown>[]; representatives: Record<string, unknown>[]; disbursement: Record<string, unknown> | null };
-  permissions: { canApprove: boolean; canDisburse: boolean };
+  permissions: { canApprove: boolean; canDisburse: boolean; canEditStartDate?: boolean };
 }) {
   const { detail, employee, documents, representatives, disbursement } = extension;
   const profile = relation(employee?.profiles);
@@ -40,6 +41,7 @@ export function EmployeeLoanAdminPanel({ account, extension, permissions }: {
         ["Preferred start", detail.preferred_start_date], ["Stage", String(detail.workflow_stage).replaceAll("_", " ")],
       ].map(([term, description]) => <div key={String(term)} className="rounded-lg bg-white p-3"><dt className="font-semibold text-slate-500">{String(term)}</dt><dd className="mt-1">{description == null || description === "" ? "—" : String(description)}</dd></div>)}
     </dl>
+    {permissions.canEditStartDate ? <EmployeeLoanStartDateEditor accountId={String(account.id)} currentDate={String(detail.preferred_start_date)} approvedDate={detail.approved_start_date ? String(detail.approved_start_date) : null} repaymentMethod={account.defaultRepaymentMethod ? String(account.defaultRepaymentMethod) : null} version={Number(account.version)} eligible={["requested", "under_review", "approved"].includes(String(account.status)) && !signed && !detail.final_approved_at && !disbursement} /> : null}
     <div className="rounded-xl bg-white p-4">
       <h3 className="font-bold">Witness details</h3>
       {witnesses.length ? <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{witnesses.map((witness, index) => <article key={`${String(witness.name)}-${index}`} className="rounded-lg border p-3 text-sm">
