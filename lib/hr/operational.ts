@@ -163,7 +163,7 @@ export async function getHrLeave() {
 
 export async function getHrPayroll() {
   const result = await createSupabaseAdminClient().from("hr_payroll_records")
-    .select("*,hr_employee_records(employee_number,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email)),hr_payroll_components(*)")
+    .select("*,hr_employee_records(employee_number,profiles:profiles!hr_employee_records_profile_id_fkey(full_name,email)),hr_payroll_components(*),payroll_receivable_deductions(*,receivable_accounts(receivable_number))")
     .order("period_start",{ ascending:false }).limit(500);
   return checked("Unable to load payroll.",result) ?? [];
 }

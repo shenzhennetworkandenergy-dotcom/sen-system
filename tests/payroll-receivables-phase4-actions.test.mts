@@ -4,7 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 const root = process.cwd();
-const actionsPath = join(root, "app", "admin", "hr", "hr-actions.ts");
+const actionsPath = join(root, "app", "admin", "hr", "payroll", "payroll-actions.ts");
 
 test("Payroll Paid delegates to the trusted atomic boundary", async () => {
   const source = await readFile(actionsPath, "utf8");
@@ -16,6 +16,8 @@ test("Payroll Paid delegates to the trusted atomic boundary", async () => {
 test("Payroll action keeps Admin/Payroll authorization and exposes Phase 4 plan operations", async () => {
   const source = await readFile(actionsPath, "utf8");
   assert.match(source, /requireHrAdmin\(\)/);
-  assert.match(source, /payroll_receivable_deductions|planPayrollLoanDeductions/);
+  assert.match(source, /save_hr_payroll_draft_v1/);
+  assert.match(source, /cancel_hr_payroll_v1/);
+  assert.match(source, /confirm_hr_payroll_approval_v1/);
   assert.match(source, /assertPayrollStatusTransition/);
 });
