@@ -1,18 +1,54 @@
 import { connection } from "next/server";
 import Link from "next/link";
-import { CurrencyCombobox } from "@/components/forms/CurrencyCombobox";
-import { EmployeeCombobox } from "@/components/hr/EmployeeCombobox";
-import { HrPage, hrCard, hrField, hrPrimary, hrSecondary, relation } from "@/components/hr/HrPage";
+import { PayrollDraftForm } from "@/components/hr/PayrollDraftForm";
+import { HrPage, hrCard, hrPrimary, hrSecondary, relation } from "@/components/hr/HrPage";
+import { requireHrAdmin } from "@/lib/hr/admin";
 import { getHrEmployeeOptions, getHrPayroll } from "@/lib/hr/operational";
-import { savePayrollAction, updatePayrollStatusAction } from "../hr-actions";
+import { updatePayrollStatusAction } from "../hr-actions";
 
 export const dynamic = "force-dynamic";
 
+type Component = { id: string; name: string; amount: number };
+type Deduction = {
+  id: string; payroll_component_id: string | null; installment_number: number | null; installment_due_date: string | null;
+  original_installment_amount: number | null; planned_deduction_amount: number;
+  outstanding_at_plan: number | null; status: string;
+  receivable_accounts: { receivable_number: string } | { receivable_number: string }[] | null;
+};
+
 export default async function PayrollPage({ searchParams }: { searchParams: Promise<{ success?: string; error?: string }> }) {
   await connection();
-  const [rows, employees, params] = await Promise.all([getHrPayroll(),getHrEmployeeOptions(),searchParams]);
+  await requireHrAdmin();
+  const [rows, employees, params] = await Promise.all([getHrPayroll(), getHrEmployeeOptions(), searchParams]);
   return <HrPage title="Payroll" subtitle="Prepare, approve and mark employee payroll records as paid." success={params.success} error={params.error}>
-    <form action={savePayrollAction} className={`${hrCard} relative z-40`}><input type="hidden" name="return_to" value="/admin/hr/payroll"/><h2 className="font-semibold">Create payroll record</h2><p className="mt-1 text-sm text-[var(--muted-text)]">Eligible active Employee Loans and Salary Advances with a due installment are planned automatically. The receivable changes only when payroll is marked paid.</p><div className="mt-3 grid gap-3 md:grid-cols-3 xl:grid-cols-6"><label className="text-sm font-semibold">Employee<EmployeeCombobox employees={employees} required className={hrField}/></label><label className="text-sm font-semibold">Period start<input type="date" name="period_start" required className={hrField}/></label><label className="text-sm font-semibold">Period end<input type="date" name="period_end" required className={hrField}/></label><label className="text-sm font-semibold">Base salary<input type="number" min="0" step=".01" name="base_salary" required className={hrField}/></label><label className="text-sm font-semibold">Allowance<input type="number" min="0" step=".01" name="allowance" defaultValue="0" className={hrField}/></label><label className="text-sm font-semibold">Bonus<input type="number" min="0" step=".01" name="bonus" defaultValue="0" className={hrField}/></label><label className="text-sm font-semibold">Deduction<input type="number" min="0" step=".01" name="deduction" defaultValue="0" className={hrField}/></label><label className="text-sm font-semibold">Currency<CurrencyCombobox name="currency" defaultValue="BDT" required className={hrField}/></label><label className="text-sm font-semibold md:col-span-2">Notes<input name="notes" className={hrField}/></label></div><button className={`${hrPrimary} mt-3`}>Create draft payroll</button></form>
-    <section className="mt-5 space-y-3">{rows.map(row=>{const employee=relation(row.hr_employee_records);const person=employee?relation(employee.profiles):null;const components=(Array.isArray(row.hr_payroll_components)?row.hr_payroll_components:[]) as Array<{id:string;name?:string;amount?:number}>;const loanComponents=components.filter((component)=>String(component.name??"").startsWith("Loan installment"));return <article key={row.id} className={`${hrCard} flex flex-wrap items-center justify-between gap-4`}><div><strong>{person?.full_name||employee?.employee_number}</strong><p className="text-sm text-[var(--muted-text)]">{row.period_start} to {row.period_end} · Gross {row.currency} {row.gross_pay} · Net {row.currency} {row.net_pay}</p>{loanComponents.length?<div className="mt-2 space-y-1 text-xs text-[var(--muted-text)]"><p className="font-semibold text-[var(--foreground)]">Planned loan deductions (no balance movement until Paid)</p>{loanComponents.map((component)=><p key={component.id}>• {component.name}: {row.currency} {component.amount}</p>)}</div>:null}</div><div className="flex items-center gap-2"><span className="capitalize">{row.status}</span><Link href={`/admin/hr/payroll/${row.id}/voucher`} className={hrSecondary}>Print Payroll Voucher</Link>{row.status==="draft"?<form action={updatePayrollStatusAction}><input type="hidden" name="payroll_id" value={row.id}/><input type="hidden" name="return_to" value="/admin/hr/payroll"/><button name="status" value="approved" className={hrPrimary}>Approve</button></form>:null}{row.status==="approved"?<form action={updatePayrollStatusAction}><input type="hidden" name="payroll_id" value={row.id}/><input type="hidden" name="return_to" value="/admin/hr/payroll"/><button name="status" value="paid" className={hrPrimary}>Mark paid</button></form>:null}{!["paid","cancelled"].includes(row.status)?<form action={updatePayrollStatusAction}><input type="hidden" name="payroll_id" value={row.id}/><input type="hidden" name="return_to" value="/admin/hr/payroll"/><button name="status" value="cancelled" className={hrSecondary}>Cancel</button></form>:null}</div></article>})}{!rows.length?<p className={hrCard}>No payroll records yet.</p>:null}</section>
+    <PayrollDraftForm employees={employees}/>
+    <section className="mt-5 space-y-3">{rows.map(row => {
+      const employee = relation(row.hr_employee_records); const person = employee ? relation(employee.profiles) : null;
+      const components = (Array.isArray(row.hr_payroll_components) ? row.hr_payroll_components : []) as Component[];
+      const deductions = (Array.isArray(row.payroll_receivable_deductions) ? row.payroll_receivable_deductions : []) as Deduction[];
+      const automaticComponents = new Set(deductions.map(d => d.payroll_component_id));
+      const amount = (name: string) => String(components.filter(c => c.name === name && !automaticComponents.has(c.id)).reduce((sum, c) => sum + Number(c.amount), 0));
+      return <article key={row.id} className={hrCard}>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div><strong>{person?.full_name || employee?.employee_number}</strong>
+            <p className="text-sm text-[var(--muted-text)]">{row.period_start} to {row.period_end} · Gross {row.currency} {row.gross_pay} · Total deduction {row.currency} {row.deductions} · Net {row.currency} {row.net_pay}</p>
+            <p className="mt-1 text-sm">Payment effective date: <strong>{row.payment_effective_date || "Not recorded (historical / manual review required)"}</strong></p>
+            {row.paid_at ? <p className="text-xs text-[var(--muted-text)]">Actual payment posting: {row.paid_at}</p> : null}
+          </div>
+          <div className="flex flex-wrap items-center gap-2"><span className="capitalize">{row.status}</span>
+            <Link href={`/admin/hr/payroll/${row.id}/voucher`} className={hrSecondary}>Print Payroll Voucher</Link>
+            {row.status === "draft" ? <form action={updatePayrollStatusAction} className="space-y-2 rounded-lg border p-2">
+              <input type="hidden" name="payroll_id" value={row.id}/><input type="hidden" name="payment_effective_date" value={row.payment_effective_date || ""}/><input type="hidden" name="expected_updated_at" value={row.updated_at}/>
+              <label className="flex items-center gap-2 text-xs"><input type="checkbox" name="effective_date_confirmed" required disabled={!row.payment_effective_date}/>I confirm effective date {row.payment_effective_date || "(recalculate first)"}</label>
+              <button name="status" value="approved" disabled={!row.payment_effective_date} className={hrPrimary}>Approve</button>
+            </form> : null}
+            {row.status === "approved" ? <form action={updatePayrollStatusAction}><input type="hidden" name="payroll_id" value={row.id}/><button name="status" value="paid" className={hrPrimary}>Mark paid</button></form> : null}
+            {!["paid", "cancelled"].includes(row.status) ? <form action={updatePayrollStatusAction}><input type="hidden" name="payroll_id" value={row.id}/><button name="status" value="cancelled" className={hrSecondary}>Cancel payroll</button></form> : null}
+          </div>
+        </div>
+        {deductions.length ? <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-xs"><caption className="py-2 text-left font-semibold">Loan / advance installment snapshot (balance moves only at Paid)</caption><thead><tr>{["Reference", "Sequence", "Due date", "Original amount", "Scheduled deduction", "Outstanding at planning", "Reservation"].map(label => <th className="border-b p-2" key={label}>{label}</th>)}</tr></thead><tbody>{deductions.map(d => <tr key={d.id}><td className="p-2">{relation(d.receivable_accounts)?.receivable_number}</td><td className="p-2">{d.installment_number ?? "Legacy — review"}</td><td className="p-2">{d.installment_due_date ?? "Not recorded"}</td><td className="p-2">{d.original_installment_amount ?? "Not recorded"}</td><td className="p-2 font-semibold">{row.currency} {d.planned_deduction_amount}</td><td className="p-2">{d.outstanding_at_plan ?? "Not recorded"}</td><td className="p-2">{d.status}</td></tr>)}</tbody></table></div> : null}
+        {row.status === "draft" ? <details className="mt-4"><summary className="cursor-pointer font-semibold">Edit draft / re-confirm payment date</summary><div className="mt-3"><PayrollDraftForm employees={employees} initial={{ id: row.id, employeeId: row.employee_record_id, start: row.period_start, end: row.period_end, effective: row.payment_effective_date || "", base: String(row.base_salary), allowance: amount("Allowance"), bonus: amount("Bonus"), manual: amount("Deduction"), currency: row.currency, notes: row.notes || "", updatedAt: row.updated_at }}/></div></details> : null}
+      </article>;
+    })}{!rows.length ? <p className={hrCard}>No payroll records yet.</p> : null}</section>
   </HrPage>;
 }

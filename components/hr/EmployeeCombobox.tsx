@@ -14,6 +14,7 @@ export function EmployeeCombobox({
   required = false,
   className = "",
   placeholder = "Search employee name, email or number",
+  onSelect,
 }: {
   employees: EmployeeOption[];
   name?: string;
@@ -21,6 +22,7 @@ export function EmployeeCombobox({
   required?: boolean;
   className?: string;
   placeholder?: string;
+  onSelect?: (employeeId: string) => void;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const defaultEmployee = employees.find((item) => item.id === defaultValue);
@@ -46,6 +48,7 @@ export function EmployeeCombobox({
     setQuery(employee.label);
     setOpen(false);
     setActiveIndex(0);
+    onSelect?.(employee.id);
   };
 
   return (
@@ -56,6 +59,7 @@ export function EmployeeCombobox({
         onChange={(event) => {
           setQuery(event.target.value);
           setSelectedId("");
+          onSelect?.("");
           setOpen(true);
           setActiveIndex(0);
         }}
