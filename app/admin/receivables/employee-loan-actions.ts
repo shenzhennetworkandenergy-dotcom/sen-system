@@ -7,6 +7,7 @@ import { redirect } from "next/navigation";
 import { requirePermission } from "@/lib/auth/permissions";
 import { requireProfile } from "@/lib/auth/session";
 import { normalizeEmployeeLoanStartDateEdit, type EmployeeLoanStartDateState } from "@/lib/receivables/employee-loan-start-date";
+import { normalizeRepaymentMethodEdit, type RepaymentMethodState } from "@/lib/receivables/employee-loan-repayment-method";
 import {
   EMPLOYEE_LOAN_DOCUMENT_BUCKET,
   normalizeApprovedEmployeeLoanTerms,
@@ -160,6 +161,28 @@ export async function recordEmployeeLoanRepaymentAction(form: FormData) {
     finish(accountId, "success", "Repayment recorded operationally. Accounting was not posted.");
   } catch (error) {
     finish(accountId, "error", error instanceof Error ? error.message : "Unable to record repayment.");
+  }
+}
+
+export async function editEmployeeLoanRepaymentMethodAction(_previous: RepaymentMethodState, form: FormData): Promise<RepaymentMethodState> {
+  const { profile } = await requireProfile(["admin"]);
+  try {
+    const allowed = new Set(["account_id", "operation_id", "method", "reason", "effective_date", "expected_version", "confirmed"]);
+    for (const key of form.keys()) if (!key.startsWith("$ACTION_") && !allowed.has(key)) throw new Error("This form contains an unsupported field.");
+    const input = normalizeRepaymentMethodEdit({ accountId: value(form, "account_id"), operationId: value(form, "operation_id"), method: value(form, "method"), reason: value(form, "reason"), effectiveDate: value(form, "effective_date"), expectedVersion: value(form, "expected_version"), confirmed: value(form, "confirmed") });
+    const result = await createSupabaseAdminClient().rpc("edit_employee_loan_repayment_method_v1", {
+      actor_profile_id: profile.id, requested_account_id: input.accountId,
+      requested_method: input.method, requested_reason: input.reason,
+      requested_effective_date: input.effectiveDate, requested_expected_version: input.expectedVersion,
+      requested_operation_id: input.operationId, requested_confirmed: true,
+    });
+    if (result.error) return { status: "error", message: result.error.message };
+    revalidatePath(`/admin/receivables/loans/${input.accountId}`);
+    revalidatePath(`/employee/loans/${input.accountId}`);
+    revalidatePath("/admin/hr/payroll");
+    return { status: "success", message: "Repayment method saved and audited. Historical financial records and signed agreements were not changed." };
+  } catch (error) {
+    return { status: "error", message: error instanceof Error ? error.message : "Unable to save the repayment method." };
   }
 }
 

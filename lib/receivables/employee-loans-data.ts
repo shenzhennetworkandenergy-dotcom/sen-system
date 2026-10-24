@@ -6,6 +6,16 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+// Read through the same DB clock used by the atomic update, not the browser clock.
+export async function getEmployeeLoanRepaymentMethod(accountId: string, actorProfileId: string) {
+  if (!UUID.test(accountId)) return null;
+  const { data, error } = await createSupabaseAdminClient().rpc("employee_loan_repayment_method_context_v1", {
+    actor_profile_id: actorProfileId, requested_account_id: accountId,
+  });
+  if (error) throw new Error("Unable to load the employee loan repayment method.");
+  return data as { method: string | null; version: number; effective_date: string } | null;
+}
+
 export async function getEmployeeLoanIdentity() {
   const context = await requireEmployeeHrRecord();
   if (!context.employee) return { ...context, identity: null };
