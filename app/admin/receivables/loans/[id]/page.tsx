@@ -6,9 +6,10 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { ReceivableOperations } from "@/components/receivables/ReceivableOperations";
 import { ReceivablesNavigation } from "@/components/receivables/ReceivablesNavigation";
 import { EmployeeLoanAdminPanel } from "@/components/receivables/EmployeeLoanAdminPanel";
+import { EmployeeLoanRepaymentMethodEditor } from "@/components/receivables/EmployeeLoanRepaymentMethodEditor";
 import { requireAllPermissions } from "@/lib/auth/permissions";
 import { getNonSalesReceivableDetail } from "@/lib/receivables/data";
-import { getAdminEmployeeLoanDetail } from "@/lib/receivables/employee-loans-data";
+import { getAdminEmployeeLoanDetail, getEmployeeLoanRepaymentMethod } from "@/lib/receivables/employee-loans-data";
 
 export const dynamic = "force-dynamic";
 
@@ -56,6 +57,8 @@ export default async function ReceivableLoanDetailPage({
     ? await getAdminEmployeeLoanDetail(id)
     : null;
   const isAdmin = profile.role === "admin";
+  const repaymentMethod = isAdmin && detail.account.category === "employee_loan" && detail.account.borrowerType === "employee"
+    ? await getEmployeeLoanRepaymentMethod(id, profile.id) : null;
   const canViewCustomer = isAdmin || permissions.has("receivables.view_customer");
   const operationPermissions = {
     canCreate: isAdmin || permissions.has("receivables.create"),
@@ -94,6 +97,11 @@ export default async function ReceivableLoanDetailPage({
         canViewLoans
         canReconcile={isAdmin || (permissions.has("accounting.view") && permissions.has("receivables.view_loans"))}
       />
+      {isAdmin && repaymentMethod ? <EmployeeLoanRepaymentMethodEditor
+        key={id}
+        accountId={id} method={repaymentMethod.method} version={repaymentMethod.version}
+        effectiveDate={repaymentMethod.effective_date} operationId={crypto.randomUUID()}
+      /> : null}
       {employeeLoan ? (
         <EmployeeLoanAdminPanel
           account={employeeLoan.account}
