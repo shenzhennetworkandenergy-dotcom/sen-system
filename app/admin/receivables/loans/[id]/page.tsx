@@ -101,6 +101,7 @@ export default async function ReceivableLoanDetailPage({
           permissions={{
             canApprove: isAdmin || permissions.has("receivables.approve"),
             canDisburse: isAdmin || permissions.has("receivables.disburse"),
+            canEditStartDate: isAdmin,
           }}
         />
       ) : null}

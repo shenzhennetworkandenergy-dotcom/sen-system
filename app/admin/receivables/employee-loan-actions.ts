@@ -5,6 +5,8 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { requirePermission } from "@/lib/auth/permissions";
+import { requireProfile } from "@/lib/auth/session";
+import { normalizeEmployeeLoanStartDateEdit, type EmployeeLoanStartDateState } from "@/lib/receivables/employee-loan-start-date";
 import {
   EMPLOYEE_LOAN_DOCUMENT_BUCKET,
   normalizeApprovedEmployeeLoanTerms,
@@ -158,5 +160,28 @@ export async function recordEmployeeLoanRepaymentAction(form: FormData) {
     finish(accountId, "success", "Repayment recorded operationally. Accounting was not posted.");
   } catch (error) {
     finish(accountId, "error", error instanceof Error ? error.message : "Unable to record repayment.");
+  }
+}
+
+export async function editEmployeeLoanStartDateAction(_previous: EmployeeLoanStartDateState, form: FormData): Promise<EmployeeLoanStartDateState> {
+  const { profile } = await requireProfile(["admin"]);
+  try {
+    const allowed = new Set(["account_id", "start_date", "expected_version", "confirmed"]);
+    for (const key of form.keys()) if (!key.startsWith("$ACTION_") && !allowed.has(key)) throw new Error("This form contains an unsupported field.");
+    const input = normalizeEmployeeLoanStartDateEdit({ accountId: value(form, "account_id"), startDate: value(form, "start_date"), expectedVersion: value(form, "expected_version"), confirmed: value(form, "confirmed") });
+    const result = await createSupabaseAdminClient().rpc("edit_employee_loan_start_date", {
+      actor_profile_id: profile.id,
+      requested_account_id: input.accountId,
+      requested_start_date: input.startDate,
+      requested_expected_version: input.expectedVersion,
+    });
+    if (result.error) return { status: "error", message: result.error.message };
+    revalidatePath(`/admin/receivables/loans/${input.accountId}`);
+    revalidatePath(`/admin/receivables/loans/${input.accountId}/agreement`);
+    revalidatePath(`/employee/loans/${input.accountId}`);
+    revalidatePath(`/employee/loans/${input.accountId}/agreement`);
+    return { status: "success", message: "Preferred start date saved. Future eligible deductions follow the updated installment schedule. Review the agreement again before signing." };
+  } catch (error) {
+    return { status: "error", message: error instanceof Error ? error.message : "Unable to save the preferred start date." };
   }
 }
