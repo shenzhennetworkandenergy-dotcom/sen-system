@@ -4,7 +4,8 @@
     "deploymentEnabled": {
       "main": false,
       "codex/work-scheduler-ui-contrast": false,
-      "codex/sales-edit-reuse-create-form": false
+      "codex/sales-edit-reuse-create-form": false,
+      "codex/inventory-stock-forms-first-20261106": false
     }
   }
 }
