@@ -5,10 +5,12 @@ import { QuickCashbook } from "@/components/accounting/QuickCashbook";
 import {
   getBusinessDate,
   getBusinessDateTimeLocal,
+  formatCashbookPredecessorError,
+  isPersonalCashbookPredecessorError,
   normalizeCashbookDate,
 } from "@/lib/accounting/cashbook";
 import { requireAnyPermission } from "@/lib/auth/permissions";
-import { getAccountingDashboard } from "@/lib/accounting/data";
+import { getAccountingDashboard, getBlockingPersonalCashbookDate } from "@/lib/accounting/data";
 import { postJournalAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -26,13 +28,16 @@ export default async function AccountingPage({ searchParams }: { searchParams: P
     includeLedger: canViewLedger,
     cashbookOwnerId: profile.id,
   });
+  const errorMessage = isPersonalCashbookPredecessorError(params.error)
+    ? formatCashbookPredecessorError(params.error, await getBlockingPersonalCashbookDate(profile.id, selectedDate))
+    : params.error;
   const canManageCashbook = profile.role === "admin" || permissions.has("accounting.create_entry") || permissions.has("accounting.manage_cashbook");
   const canCreateJournal = profile.role === "admin" || permissions.has("accounting.create_entry");
   const canPost = profile.role === "admin" || permissions.has("accounting.approve_entry");
   const posted = data.entries.filter((entry) => entry.status === "posted");
   return <DashboardShell admin={profile.role === "admin"} employeePermissions={profile.role === "employee" ? permissions : undefined} title="Accounting" subtitle={canViewLedger ? "Chart of accounts, balanced journals and an auditable general-ledger foundation." : "কুইক ক্যাশবুক ও ক্যাশ ক্লোজিং সিস্টেম"}>
     {params.success ? <p className="mb-4 rounded-lg border border-green-200 bg-green-50 p-3 text-green-900">{params.success}</p> : null}
-    {params.error ? <p className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-red-900">{params.error}</p> : null}
+    {errorMessage ? <p className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-red-900">{errorMessage}</p> : null}
     <QuickCashbook
       selectedDate={selectedDate}
       defaultOccurredAt={selectedDate === today ? currentBusinessDateTime : `${selectedDate}T12:00`}

@@ -1,6 +1,29 @@
 import "server-only";
-import { summarizeCashbookEntries } from "@/lib/accounting/cashbook";
+import { normalizeCashbookDate, summarizeCashbookEntries } from "@/lib/accounting/cashbook";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+
+export async function getBlockingPersonalCashbookDate(cashbookOwnerId: string, selectedDate: string): Promise<string | null> {
+  const date = normalizeCashbookDate(selectedDate, "");
+  if (!cashbookOwnerId || !date) return null;
+  // Match assert_cashbook_predecessor_closed: inspect the latest predecessor
+  // first, then its closed state. Filtering open days first could name the wrong day.
+  const { data, error } = await createSupabaseAdminClient()
+    .from("cashbook_days")
+    .select("business_date,is_closed")
+    .eq("cashbook_scope", "PERSONAL")
+    .eq("cashbook_owner_id", cashbookOwnerId)
+    .lt("business_date", date)
+    .order("business_date", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error("Cashbook predecessor date unavailable", { code: error.code });
+    return null;
+  }
+  if (data?.is_closed !== false) return null;
+  const predecessorDate = normalizeCashbookDate(data.business_date, "");
+  return predecessorDate && predecessorDate < date ? predecessorDate : null;
+}
 
 const normalizeAuditStatus = (value: unknown, isClosed: boolean) => {
   const status = String(value ?? "").trim().toUpperCase();
