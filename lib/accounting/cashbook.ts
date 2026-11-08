@@ -95,6 +95,20 @@ export function normalizeCashbookDate(value: unknown, fallback = getBusinessDate
   return date.toISOString().slice(0, 10) === candidate ? candidate : fallback;
 }
 
+const PERSONAL_CASHBOOK_PREDECESSOR_ERROR = "Close the previous personal cashbook day before continuing";
+
+export function isPersonalCashbookPredecessorError(message: unknown): message is string {
+  return typeof message === "string"
+    && message.trim().replace(/\.$/, "").toLowerCase() === PERSONAL_CASHBOOK_PREDECESSOR_ERROR.toLowerCase();
+}
+
+export function formatCashbookPredecessorError(message: string, blockingDate: string | null) {
+  if (!isPersonalCashbookPredecessorError(message)) return message;
+  const date = normalizeCashbookDate(blockingDate, "");
+  if (!date) return message;
+  return `${message.trim().replace(/\.$/, "")} (${date})`;
+}
+
 export function summarizeCashbookEntries(
   entries: ReadonlyArray<{ transactionType: CashbookTransactionType; amount: number }>,
   openingBalance = 0,
