@@ -1,6 +1,7 @@
 import "server-only";
 
 import { getUnreadChatbotInquiryCount } from "@/lib/crm/chatbot-inquiries";
+import { getDonationDueReminderCount } from "@/lib/donation-expenses/data";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export type DashboardWorkCounts = Record<string, number>;
@@ -25,7 +26,7 @@ async function unresolvedCount(
 }
 
 export async function getDashboardWorkCounts(): Promise<DashboardWorkCounts> {
-  const [crm, orders, support, quotations, shipments, purchasing] =
+  const [crm, orders, support, quotations, shipments, purchasing, donations] =
     await Promise.all([
       getUnreadChatbotInquiryCount(),
       unresolvedCount("sales_orders", [
@@ -59,6 +60,7 @@ export async function getDashboardWorkCounts(): Promise<DashboardWorkCounts> {
         "received",
         "partially_received",
       ]),
+      getDonationDueReminderCount(),
     ]);
-  return { crm, orders, support, quotations, shipments, purchasing };
+  return { crm, orders, support, quotations, shipments, purchasing, "donation-expenses": donations };
 }

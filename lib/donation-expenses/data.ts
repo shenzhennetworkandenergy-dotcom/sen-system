@@ -1,5 +1,6 @@
 import "server-only";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { countDueDonationSupports } from "@/lib/donation-expenses/reminder-count";
 
 export const DONATION_BUCKET = "donation-expense-proofs";
 export const BENEFICIARY_TYPES = ["INDIVIDUAL", "FAMILY", "INSTITUTION", "MADRASA_MOSQUE", "OTHER"] as const;
@@ -76,6 +77,27 @@ export async function ensureCurrentDonationReminders() {
   assertNoError(error, "Unable to prepare monthly support reminders");
 }
 
+export async function getDonationDueReminderCount(): Promise<number> {
+  const db = createSupabaseAdminClient();
+  const now = new Date();
+  const month = `${now.toISOString().slice(0, 7)}-01`;
+  const [reminders, beneficiaries] = await Promise.all([
+    db.from("donation_monthly_support")
+      .select("beneficiary_id,support_month,reminder_day_of_month,status")
+      .eq("support_month", month),
+    db.from("donation_beneficiaries")
+      .select("id,is_active,monthly_support_enabled,reminder_day_of_month,support_start_date,support_end_date")
+      .eq("is_active", true).eq("monthly_support_enabled", true),
+  ]);
+  if (reminders.error || beneficiaries.error) {
+    console.error("Donation reminder count unavailable", {
+      code: reminders.error?.code ?? beneficiaries.error?.code,
+    });
+    return 0;
+  }
+  return countDueDonationSupports(reminders.data ?? [], beneficiaries.data ?? [], now);
+}
+
 export async function getDonationDashboard(search?: string) {
   await ensureCurrentDonationReminders();
   const db = createSupabaseAdminClient();
@@ -121,7 +143,7 @@ export async function getDonationDashboard(search?: string) {
     ...options,
     expenses: (expensesResult.data ?? []) as unknown as DonationExpense[],
     reminders,
-    dueReminderCount: reminders.filter((item) => item.displayStatus === "DUE" || item.displayStatus === "OVERDUE").length,
+    dueReminderCount: countDueDonationSupports(reminders, options.beneficiaries, today),
     matchedBeneficiaries,
   };
 }
