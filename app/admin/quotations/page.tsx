@@ -3,32 +3,20 @@ import { connection } from "next/server";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { QuotationStatusBadge } from "@/components/quotations/QuotationStatusBadge";
+import { QuotationCustomerFilter } from "@/components/quotations/QuotationCustomerFilter";
+import type { CustomerSearchOption } from "@/lib/customers/search";
 import { requireQuotationView } from "@/lib/quotations/access";
 import { canOpenQuotationDocument } from "@/lib/quotations/access-policy";
+import { quotationCustomerOptions } from "@/lib/quotations/customer-options";
+import { literalQuotationPattern, quotationListFilters, quotationStatuses as statuses } from "@/lib/quotations/list-filters";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export const dynamic = "force-dynamic";
 
-const statuses = [
-  "draft",
-  "submitted",
-  "reviewing",
-  "quoted",
-  "accepted",
-  "declined",
-  "additional_info_required",
-  "approved",
-  "rejected",
-  "expired",
-  "converted_to_sale",
-  "converted_to_invoice",
-  "closed",
-];
-
 export default async function AdminQuotationsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; success?: string; error?: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   await connection();
   const { profile, permissions, quotationViewScope } =
@@ -42,6 +30,17 @@ export default async function AdminQuotationsPage({
     permissions,
   );
   const params = await searchParams;
+  const filters = quotationListFilters(params);
+  let filterError = filters.error;
+  let selectedCustomer: CustomerSearchOption | null = null;
+  if (filters.customer && !filterError) {
+    try {
+      selectedCustomer = (await quotationCustomerOptions({ profile, quotationViewScope }, { id: filters.customer }))[0] ?? null;
+      if (!selectedCustomer) filterError = "Selected customer is unavailable. Clear filters and choose again.";
+    } catch {
+      filterError = "Unable to verify the selected customer. Try again later.";
+    }
+  }
   const db = createSupabaseAdminClient();
   let query = db
     .from("quotation_requests")
@@ -53,10 +52,11 @@ export default async function AdminQuotationsPage({
   if (quotationViewScope === "own") {
     query = query.eq("created_by", profile.id);
   }
-  if (params.status && statuses.includes(params.status)) {
-    query = query.eq("status", params.status);
-  }
-  const { data, error } = await query;
+  if (filters.status) query = query.eq("status", filters.status);
+  if (filters.q) query = query.ilike("reference", literalQuotationPattern(filters.q));
+  if (filters.customer) query = query.eq("profile_id", filters.customer);
+  if (filters.range) query = query.gte("created_at", filters.range.start).lt("created_at", filters.range.end);
+  const { data, error } = filterError ? { data: [], error: null } : await query;
 
   return (
     <DashboardShell
@@ -72,9 +72,9 @@ export default async function AdminQuotationsPage({
           {params.success}
         </p>
       ) : null}
-      {params.error || error ? (
+      {params.error || filterError || error ? (
         <p className="mb-4 rounded-xl bg-red-50 p-4 text-red-900">
-          {params.error ?? "Unable to load quotations."}
+          {params.error ?? filterError ?? "Unable to load quotations."}
         </p>
       ) : null}
       {canCreate ? (
@@ -87,11 +87,21 @@ export default async function AdminQuotationsPage({
           </Link>
         </div>
       ) : null}
-      <form className="mb-5 flex flex-wrap gap-3 rounded-2xl border bg-[var(--surface)] p-4">
+      <form key={`${filters.q}:${filters.date}:${filters.customer}:${filters.status}`} method="get" action="/admin/quotations" className="relative z-20 mb-5 grid items-end gap-3 rounded-2xl border bg-[var(--surface)] p-4 md:grid-cols-2 xl:grid-cols-[1fr_1fr_2fr_1fr_auto]">
+        <label className="block text-sm font-semibold">Quotation number
+          <input name="q" defaultValue={filters.q} maxLength={80} placeholder="Quotation number"
+            className="mt-1 w-full rounded-xl border px-3 py-2.5 text-sm font-normal" />
+        </label>
+        <label className="block text-sm font-semibold">Date (Bangladesh)
+          <input name="date" type="date" defaultValue={filters.date}
+            className="mt-1 w-full rounded-xl border px-3 py-2.5 text-sm font-normal" />
+        </label>
+        <QuotationCustomerFilter key={filters.customer} initialCustomer={selectedCustomer} />
+        <label className="block text-sm font-semibold">Status
         <select
           name="status"
-          defaultValue={params.status}
-          className="rounded-xl border px-4 py-2.5"
+          defaultValue={filters.status}
+          className="mt-1 w-full rounded-xl border px-3 py-2.5 text-sm font-normal"
         >
           <option value="">All statuses</option>
           {statuses.map((status) => (
@@ -100,9 +110,13 @@ export default async function AdminQuotationsPage({
             </option>
           ))}
         </select>
-        <button className="rounded-xl border px-4 py-2.5 font-semibold">
-          Filter
-        </button>
+        </label>
+        <div className="flex items-center gap-3">
+          <button type="submit" className="rounded-xl bg-[var(--primary)] px-4 py-2.5 font-semibold text-[var(--primary-foreground)]">Apply filters</button>
+          {/* A full GET also resets unsaved input and typeahead state when already on the unfiltered URL. */}
+          {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+          <a href="/admin/quotations" className="text-sm font-semibold underline">Clear</a>
+        </div>
       </form>
       <div className="grid gap-4">
         {(data ?? []).map((quotation) => {
@@ -158,7 +172,7 @@ export default async function AdminQuotationsPage({
             </article>
           );
         })}
-        {!data?.length && !error ? (
+        {!data?.length && !error && !filterError ? (
           <p className="rounded-2xl border p-10 text-center">
             No quotation requests found.
           </p>
