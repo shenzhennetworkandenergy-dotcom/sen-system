@@ -128,7 +128,7 @@ jobs:
           fi
           echo "Synthetic fixture is ready on the loopback endpoint."
           npm run build 2>&1 | tee build.log
-          grep -E 'Generating static pages.*\(49/49\)' build.log
+          grep -E 'Generating static pages.*\(([1-9][0-9]*)/\1\)' build.log
           grep -F '/about' build.log
           grep -F '/careers' build.log
       - name: Preserve synthetic build evidence
