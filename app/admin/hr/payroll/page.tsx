@@ -16,7 +16,7 @@ type Deduction = {
   receivable_accounts: { receivable_number: string } | { receivable_number: string }[] | null;
 };
 
-export default async function PayrollPage({ searchParams }: { searchParams: Promise<{ success?: string; error?: string }> }) {
+export default async function PayrollPage({ searchParams }: { searchParams: Promise<{ success?: string; error?: string; edit?: string }> }) {
   await connection();
   await requireHrAdmin();
   const [rows, employees, params] = await Promise.all([getHrPayroll(), getHrEmployeeOptions(), searchParams]);
@@ -37,6 +37,7 @@ export default async function PayrollPage({ searchParams }: { searchParams: Prom
           </div>
           <div className="flex flex-wrap items-center gap-2"><span className="capitalize">{row.status}</span>
             <Link href={`/admin/hr/payroll/${row.id}/voucher`} className={hrSecondary}>Print Payroll Voucher</Link>
+            {row.status === "draft" ? <Link href={`/admin/hr/payroll?edit=${row.id}#edit-payroll-${row.id}`} className={hrSecondary}>Edit payroll</Link> : null}
             {row.status === "draft" ? <form action={updatePayrollStatusAction} className="space-y-2 rounded-lg border p-2">
               <input type="hidden" name="payroll_id" value={row.id}/><input type="hidden" name="payment_effective_date" value={row.payment_effective_date || ""}/><input type="hidden" name="expected_updated_at" value={row.updated_at}/>
               <label className="flex items-center gap-2 text-xs"><input type="checkbox" name="effective_date_confirmed" required disabled={!row.payment_effective_date}/>I confirm effective date {row.payment_effective_date || "(recalculate first)"}</label>
@@ -47,7 +48,7 @@ export default async function PayrollPage({ searchParams }: { searchParams: Prom
           </div>
         </div>
         {deductions.length ? <div className="mt-3 overflow-x-auto"><table className="w-full text-left text-xs"><caption className="py-2 text-left font-semibold">Loan / advance installment snapshot (balance moves only at Paid)</caption><thead><tr>{["Reference", "Sequence", "Due date", "Original amount", "Scheduled deduction", "Outstanding at planning", "Reservation"].map(label => <th className="border-b p-2" key={label}>{label}</th>)}</tr></thead><tbody>{deductions.map(d => <tr key={d.id}><td className="p-2">{relation(d.receivable_accounts)?.receivable_number}</td><td className="p-2">{d.installment_number ?? "Legacy — review"}</td><td className="p-2">{d.installment_due_date ?? "Not recorded"}</td><td className="p-2">{d.original_installment_amount ?? "Not recorded"}</td><td className="p-2 font-semibold">{row.currency} {d.planned_deduction_amount}</td><td className="p-2">{d.outstanding_at_plan ?? "Not recorded"}</td><td className="p-2">{d.status}</td></tr>)}</tbody></table></div> : null}
-        {row.status === "draft" ? <details className="mt-4"><summary className="cursor-pointer font-semibold">Edit draft / re-confirm payment date</summary><div className="mt-3"><PayrollDraftForm employees={employees} initial={{ id: row.id, employeeId: row.employee_record_id, start: row.period_start, end: row.period_end, effective: row.payment_effective_date || "", base: String(row.base_salary), allowance: amount("Allowance"), bonus: amount("Bonus"), manual: amount("Deduction"), currency: row.currency, notes: row.notes || "", updatedAt: row.updated_at }}/></div></details> : null}
+        {row.status === "draft" ? <details id={`edit-payroll-${row.id}`} open={params.edit === row.id} className="mt-4 scroll-mt-24"><summary className="cursor-pointer font-semibold">Edit draft / re-confirm payment date</summary><div className="mt-3"><PayrollDraftForm employees={employees} initial={{ id: row.id, employeeId: row.employee_record_id, start: row.period_start, end: row.period_end, effective: row.payment_effective_date || "", base: String(row.base_salary), allowance: amount("Allowance"), bonus: amount("Bonus"), manual: amount("Deduction"), currency: row.currency, notes: row.notes || "", updatedAt: row.updated_at }}/></div></details> : null}
       </article>;
     })}{!rows.length ? <p className={hrCard}>No payroll records yet.</p> : null}</section>
   </HrPage>;
