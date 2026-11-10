@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { loadFooterProductLinks } from "../lib/catalog/footer-product-links.ts";
+import { loadOptionalBusinessCategories } from "../lib/catalog/optional-business-categories.ts";
 
 test("uses dynamic business categories when they are available", async () => {
   const links = await loadFooterProductLinks(async () => [
@@ -32,4 +33,12 @@ test("uses a stable products link when no categories exist", async () => {
   assert.deepEqual(links, [
     { label: "All products", href: "/products" },
   ]);
+});
+
+test("omits optional category records when their source is unavailable", async () => {
+  const categories = await loadOptionalBusinessCategories(async () => {
+    throw new Error("database unavailable");
+  });
+
+  assert.deepEqual(categories, []);
 });
