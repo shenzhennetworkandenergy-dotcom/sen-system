@@ -3,18 +3,16 @@ import Image from "next/image";
 import { Container } from "@/components/ui/Container";
 import { siteConfig } from "@/config/site";
 import { getBusinessCategories } from "@/lib/catalog/business-categories";
+import { loadFooterProductLinks } from "@/lib/catalog/footer-product-links";
 
 export async function PublicFooter() {
   const year = new Date().getFullYear();
-  const categories = await getBusinessCategories();
+  const productLinks = await loadFooterProductLinks(getBusinessCategories);
   const footerGroups = [
     siteConfig.footerGroups[0],
     {
       title: "Products",
-      links: categories.map((category) => ({
-        label: category.name,
-        href: `/products?category=${encodeURIComponent(category.slug)}`,
-      })),
+      links: productLinks,
     },
     ...siteConfig.footerGroups.slice(1),
   ];

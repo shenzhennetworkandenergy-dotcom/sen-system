@@ -2,6 +2,7 @@ import type { MetadataRoute } from "next";
 
 import { siteConfig } from "@/config/site";
 import { getBusinessCategories } from "@/lib/catalog/business-categories";
+import { loadOptionalBusinessCategories } from "@/lib/catalog/optional-business-categories";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 const siteUrl = "https://sen.com.bd";
@@ -15,7 +16,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       .eq("public_catalogue_visible", true)
       .order("updated_at", { ascending: false })
       .limit(5000),
-    getBusinessCategories(),
+    loadOptionalBusinessCategories(getBusinessCategories),
   ]);
 
   const staticPages: MetadataRoute.Sitemap = [
