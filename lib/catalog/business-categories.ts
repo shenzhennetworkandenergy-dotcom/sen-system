@@ -17,6 +17,64 @@ type CategoryQueryOptions = {
 const categoryColumns =
   "id,name,slug,description,tagline,theme_color,icon,image_path,is_active,sort_order,archived_at";
 
+type SupabaseDiagnosticError = {
+  code?: unknown;
+  message?: unknown;
+  status?: unknown;
+};
+
+function logSupabaseDiagnostic(
+  operation: string,
+  error: SupabaseDiagnosticError,
+) {
+  const rawCode = typeof error.code === "string" ? error.code : "";
+  const code = /^[A-Za-z0-9_.-]{1,64}$/.test(rawCode)
+    ? rawCode
+    : "unavailable";
+  const message = typeof error.message === "string" ? error.message.toLowerCase() : "";
+  const category =
+    code === "42501" || /permission|not authorized|row-level security/.test(message)
+      ? "authorization"
+      : /jwt|authentication|invalid api key/.test(message)
+        ? "authentication"
+        : /timeout|timed out|aborted/.test(message)
+          ? "timeout"
+          : /fetch failed|network|dns|enotfound|econn|tls|certificate/.test(message)
+            ? "network"
+            : code.startsWith("PGRST")
+              ? "supabase-api"
+              : /^[0-9A-Z]{5}$/.test(code)
+                ? "query"
+                : "unknown";
+  const status =
+    typeof error.status === "number" &&
+    Number.isInteger(error.status) &&
+    error.status >= 100 &&
+    error.status <= 599
+      ? error.status
+      : "unavailable";
+
+  console.error(
+    "[supabase-diagnostic]",
+    JSON.stringify({
+      operation,
+      category,
+      code,
+      status,
+      environment: {
+        supabaseUrlPresent: Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL),
+        publishableKeyPresent: Boolean(
+          process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
+        ),
+        serverKeyPresent: Boolean(
+          process.env.SUPABASE_SECRET_KEY ??
+            process.env.SUPABASE_SERVICE_ROLE_KEY,
+        ),
+      },
+    }),
+  );
+}
+
 function isUuid(value: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
     value,
@@ -102,7 +160,10 @@ export async function getBusinessCategories(
     .order("name");
   if (!options.includeInactive) query = query.eq("is_active", true);
   const { data, error } = await query;
-  if (error) throw new Error("Unable to load business categories.");
+  if (error) {
+    logSupabaseDiagnostic("catalog.business_categories.select", error);
+    throw new Error("Unable to load business categories.");
+  }
   return hydrateCategories((data ?? []) as BusinessCategoryRow[], options);
 }
 
