@@ -51,6 +51,7 @@ async function renderPage(params: Record<string, unknown>, scope = "all", rows: 
     select(value: string) { calls.push(["select", value]); return query; },
     order() { return query; }, limit() { return query; },
     eq(key: string, value: string) { calls.push(["eq", key, value]); predicates.push(r => r[key] === value); return query; },
+    in(key: string, values: string[]) { calls.push(["in", key, values]); predicates.push(r => values.includes(String(r[key]))); return query; },
     ilike(key: string, value: string) { calls.push(["ilike", key, value]); predicates.push(r => String(r[key]).toLowerCase().includes(value.slice(1, -1).toLowerCase())); return query; },
     gte(key: string, value: string) { calls.push(["gte", key, value]); predicates.push(r => Date.parse(String(r[key])) >= Date.parse(value)); return query; },
     lt(key: string, value: string) { calls.push(["lt", key, value]); predicates.push(r => Date.parse(String(r[key])) < Date.parse(value)); return query; },
@@ -61,6 +62,7 @@ async function renderPage(params: Record<string, unknown>, scope = "all", rows: 
     "react/jsx-runtime": { jsx, jsxs: jsx }, "next/link": {}, "next/server": { connection: async () => {} },
     "@/components/dashboard/Shell": {}, "@/components/quotations/QuotationStatusBadge": {},
     "@/components/quotations/QuotationCustomerFilter": {},
+    "@/lib/customers/visibility": { getVisibleCustomerIds: async () => [customer] },
     "@/lib/quotations/access": { requireQuotationView: async () => ({ profile: { id: owner, role: "employee" }, permissions: new Set(["quotations.view_own"]), quotationViewScope: scope }) },
     "@/lib/quotations/access-policy": { canOpenQuotationDocument: () => false },
     "@/lib/quotations/list-filters": filters,
@@ -72,26 +74,30 @@ async function renderPage(params: Record<string, unknown>, scope = "all", rows: 
 }
 test("page applies quotation reference, customer, date and status as an intersection", async () => {
   const { calls } = await renderPage({ q: "QT-10", customer, status: "draft", date: "2026-11-09" }, "own");
-  for (const expected of [["eq", "created_by", owner], ["eq", "profile_id", customer], ["eq", "status", "draft"], ["ilike", "reference", "%QT-10%"], ["gte", "created_at", "2026-11-09T00:00:00+06:00"], ["lt", "created_at", "2026-11-10T00:00:00+06:00"]]) assert.ok(calls.some(c => JSON.stringify(c) === JSON.stringify(expected)));
+  for (const expected of [["eq", "created_by", owner], ["in", "profile_id", [customer]], ["eq", "profile_id", customer], ["eq", "status", "draft"], ["ilike", "reference", "%QT-10%"], ["gte", "created_at", "2026-11-09T00:00:00+06:00"], ["lt", "created_at", "2026-11-10T00:00:00+06:00"]]) assert.ok(calls.some(c => JSON.stringify(c) === JSON.stringify(expected)));
 });
 test("date filter includes Bangladesh midnight and excludes the next midnight", async () => {
-  const rows = ["2026-11-08T17:59:59.999Z", "2026-11-08T18:00:00Z", "2026-11-09T17:59:59.999Z", "2026-11-09T18:00:00Z"].map(created_at => ({ created_at }));
+  const rows = ["2026-11-08T17:59:59.999Z", "2026-11-08T18:00:00Z", "2026-11-09T17:59:59.999Z", "2026-11-09T18:00:00Z"].map(created_at => ({ created_at, profile_id: customer }));
   assert.equal((await renderPage({ date: "2026-11-09" }, "all", rows)).matches.length, 2);
 });
 test("filtering happens in the database query before the existing 100-result limit", async () => {
-  const rows = Array.from({ length: 110 }, (_, i) => ({ reference: `QT-${i}` }));
+  const rows = Array.from({ length: 110 }, (_, i) => ({ reference: `QT-${i}`, profile_id: customer }));
   assert.equal((await renderPage({ q: "QT-109" }, "all", rows)).matches[0].reference, "QT-109");
 });
-test("own-only employee filtering never expands into another creator's quotations", async () => {
-  const rows = [{ created_by: owner, reference: "QT-1" }, { created_by: other, reference: "QT-1" }];
-  assert.equal((await renderPage({ q: "QT-1" }, "own", rows)).matches.length, 1);
+test("own-only quotation access requires both the creator and customer category to match", async () => {
+  const rows = [
+    { created_by: owner, profile_id: customer, reference: "QT-1" },
+    { created_by: other, profile_id: customer, reference: "QT-1" },
+    { created_by: owner, profile_id: customer2, reference: "QT-1" },
+  ];
+  assert.deepEqual((await renderPage({ q: "QT-1" }, "own", rows)).matches, [rows[0]]);
 });
 test("invalid filters stop list execution instead of showing unfiltered records", async () => {
   const { calls } = await renderPage({ customer: "not-a-uuid" });
   assert.ok(!calls.some(c => c[0] === "executed"));
 });
 
-async function customerReader(fail = false) {
+async function customerReader(fail = false, visibleCustomerIds = [customer, customer2]) {
   const urls: URL[] = [];
   const db = createClient("http://127.0.0.1:19099", "synthetic-test-key", {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -105,6 +111,7 @@ async function customerReader(fail = false) {
   });
   const readerModule = load("lib/quotations/customer-options.ts", {
     "server-only": {}, "@/lib/quotations/list-filters": filters,
+    "@/lib/customers/visibility": { getVisibleCustomerIds: async () => visibleCustomerIds },
     "@/lib/supabase/admin": { createSupabaseAdminClient: () => db },
   });
   return { urls, read: readerModule.quotationCustomerOptions as (context: unknown, search: unknown) => Promise<Record<string, unknown>[]> };
@@ -115,6 +122,7 @@ test("customer search uses supported scoped reverse-FK queries, bounded parent/c
   assert.equal(results.length, 2); assert.equal(urls.length, 2);
   for (const url of urls) {
     assert.match(url.searchParams.get("select")!, /quotation_requests!quotation_requests_profile_id_fkey!inner/);
+    assert.equal(url.searchParams.get("id"), `in.(${customer},${customer2})`);
     assert.equal(url.searchParams.get("quotation_requests.created_by"), `eq.${owner}`);
     assert.equal(url.searchParams.get("limit"), "20");
     assert.equal(url.searchParams.get("quotation_requests.limit"), "1");
@@ -131,12 +139,20 @@ test("same-name customers retain distinct identities; duplicate query matches ar
 test("selected customer lookup is ID-bound and still own-scope restricted", async () => {
   const { read, urls } = await customerReader();
   await read({ profile: { id: owner }, quotationViewScope: "own" }, { id: customer });
-  assert.equal(urls.length, 1); assert.equal(urls[0].searchParams.get("id"), `eq.${customer}`);
+  assert.equal(urls.length, 1);
+  assert.deepEqual(urls[0].searchParams.getAll("id"), [`in.(${customer},${customer2})`, `eq.${customer}`]);
   assert.equal(urls[0].searchParams.get("quotation_requests.created_by"), `eq.${owner}`);
 });
 test("empty and oversized searches do not query profiles", async () => {
   const { read, urls } = await customerReader();
   for (const q of ["", " ", "x".repeat(81)]) assert.equal((await read({ profile: { id: owner }, quotationViewScope: "all" }, { q })).length, 0);
+  assert.equal(urls.length, 0);
+});
+test("an employee without customer access cannot search or look up a customer by ID", async () => {
+  const { read, urls } = await customerReader(false, []);
+  const context = { profile: { id: owner }, quotationViewScope: "all" };
+  assert.equal((await read(context, { q: "Amina" })).length, 0);
+  assert.equal((await read(context, { id: customer })).length, 0);
   assert.equal(urls.length, 0);
 });
 test("customer lookup failures never return a broader fallback or backend detail", async () => {

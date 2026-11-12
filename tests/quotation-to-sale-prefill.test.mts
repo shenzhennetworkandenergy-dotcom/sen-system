@@ -523,7 +523,7 @@ test("locked customer and page/entry contracts preserve manual mode and authoriz
   assert.match(newPage, /loadQuotationSaleInitial/);
   assert.match(newPage, /<SourceQuotationSummary/);
   assert.match(newPage, /initialQuotation=\{initialQuotation\}/);
-  assert.match(newPage, /getOrderCreationOptions\(initialQuotation\s*\?/);
+  assert.match(newPage, /getOrderCreationOptions\(profile,\s*initialQuotation\s*\?/);
   assert.match(orderData, /required\.customerId/);
   assert.match(orderData, /required\.addressIds/);
   assert.match(orderData, /required\.lines/);
