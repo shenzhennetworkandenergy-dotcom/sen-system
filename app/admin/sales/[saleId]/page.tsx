@@ -7,6 +7,7 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { SaleLineEditor } from "@/components/sales/SaleLineEditor";
 import { SalePaymentMethodFields } from "@/components/sales/SalePaymentMethodFields";
 import { requireAnyPermission } from "@/lib/auth/permissions";
+import { assertCustomerVisibleToActor } from "@/lib/customers/visibility";
 import { buildSaleSourceQuotationLookup } from "@/lib/quotations/access-policy";
 import { getSaleSourceQuotationLink } from "@/lib/quotations/traceability";
 import { dateTime, label, money } from "@/lib/orders/types";
@@ -61,6 +62,11 @@ export default async function SaleDetail({
   );
   const data = await getSale(saleId, quotationLookup);
   if (!data) notFound();
+  try {
+    await assertCustomerVisibleToActor(profile, data.order.customer_profile_id);
+  } catch {
+    notFound();
+  }
 
   const {
     order,

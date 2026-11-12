@@ -66,6 +66,7 @@ export function QuotationBuilder({
   mode = "create",
   fixedCustomer,
   initialDraft,
+  canCreateCustomer = true,
 }: {
   customers: CustomerSearchOption[];
   products: SalePickerProduct[];
@@ -76,6 +77,7 @@ export function QuotationBuilder({
   mode?: "create" | "edit";
   fixedCustomer?: CustomerSearchOption;
   initialDraft?: DraftQuotationValues;
+  canCreateCustomer?: boolean;
 }) {
   const [customerId, setCustomerId] = useState(fixedCustomer?.id ?? "");
   const [customerOptions, setCustomerOptions] =
@@ -208,7 +210,7 @@ export function QuotationBuilder({
 
   return (
     <>
-      {mode === "create" ? <details className="mb-5 rounded-2xl border bg-[var(--surface)] p-4" open>
+      {mode === "create" && canCreateCustomer ? <details className="mb-5 rounded-2xl border bg-[var(--surface)] p-4" open>
         <summary className="cursor-pointer font-bold">Add a new customer</summary>
         <form
           key={customerState.customer?.id ?? "new-customer"}

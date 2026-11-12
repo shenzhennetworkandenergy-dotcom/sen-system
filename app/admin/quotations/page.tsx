@@ -5,6 +5,7 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { QuotationStatusBadge } from "@/components/quotations/QuotationStatusBadge";
 import { QuotationCustomerFilter } from "@/components/quotations/QuotationCustomerFilter";
 import type { CustomerSearchOption } from "@/lib/customers/search";
+import { getVisibleCustomerIds } from "@/lib/customers/visibility";
 import { requireQuotationView } from "@/lib/quotations/access";
 import { canOpenQuotationDocument } from "@/lib/quotations/access-policy";
 import { quotationCustomerOptions } from "@/lib/quotations/customer-options";
@@ -42,6 +43,7 @@ export default async function AdminQuotationsPage({
     }
   }
   const db = createSupabaseAdminClient();
+  const visibleCustomerIds = await getVisibleCustomerIds(profile);
   let query = db
     .from("quotation_requests")
     .select(
@@ -51,6 +53,9 @@ export default async function AdminQuotationsPage({
     .limit(100);
   if (quotationViewScope === "own") {
     query = query.eq("created_by", profile.id);
+  }
+  if (visibleCustomerIds !== null) {
+    query = query.in("profile_id", visibleCustomerIds.length ? visibleCustomerIds : ["00000000-0000-0000-0000-000000000000"]);
   }
   if (filters.status) query = query.eq("status", filters.status);
   if (filters.q) query = query.ilike("reference", literalQuotationPattern(filters.q));

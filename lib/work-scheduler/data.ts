@@ -1,4 +1,5 @@
 import "server-only";
+import { getVisibleCustomerIds, type CustomerVisibilityActor } from "@/lib/customers/visibility";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { buildOccurrenceDates, rotationEmployeeForOccurrence, WORK_SCHEDULER_TIMEZONE, type WorkSchedulerScheduleType } from "@/lib/work-scheduler/domain";
 
@@ -135,16 +136,19 @@ export async function getEmployeePendingWorkCount(profileId: string) {
   return count ?? 0;
 }
 
-export async function getAdminWorkDashboard() {
+export async function getAdminWorkDashboard(actor: CustomerVisibilityActor) {
   const today = todayInWorkSchedulerTimezone();
   const upcomingEnd = addDays(today, 30);
   await materializeWorkSchedulerOccurrences(today, upcomingEnd);
+  const visibleCustomerIds = await getVisibleCustomerIds(actor);
+  let customerQuery = createSupabaseAdminClient().from("profiles").select("id,full_name,email,phone,company_name,status").eq("role", "customer").eq("status", "active").order("full_name").limit(500);
+  if (visibleCustomerIds !== null) customerQuery = customerQuery.in("id", visibleCustomerIds.length ? visibleCustomerIds : ["00000000-0000-0000-0000-000000000000"]);
   const [assignments, schedules, employees, titles, customersResult] = await Promise.all([
     loadAssignments({ fromDate: today, toDate: upcomingEnd }),
     createSupabaseAdminClient().from("work_scheduler_schedules").select("id,work_item_id,schedule_type,start_date,end_date,is_active").order("start_date", { ascending: false }),
     createSupabaseAdminClient().from("profiles").select("id,full_name,email").eq("role", "employee").eq("status", "active").order("full_name"),
     createSupabaseAdminClient().from("work_scheduler_titles").select("id,title,is_active").eq("is_active", true).order("title"),
-    createSupabaseAdminClient().from("profiles").select("id,full_name,email,phone,company_name,status").eq("role", "customer").eq("status", "active").order("full_name").limit(500),
+    customerQuery,
   ]);
   if (schedules.error || employees.error || titles.error || customersResult.error) throw errorMessage(schedules.error ?? employees.error ?? titles.error ?? customersResult.error, "Unable to load Work Scheduler management data.");
   const customers: WorkSchedulerCustomer[] = customersResult.data ?? [];

@@ -6,6 +6,7 @@ import {
   QuotationBuilder,
 } from "@/components/quotations/QuotationBuilder";
 import { requirePermission } from "@/lib/auth/permissions";
+import { assertCustomerVisibleToActor } from "@/lib/customers/visibility";
 import { resolveQuotationViewScope } from "@/lib/quotations/access-policy";
 import {
   mapDraftQuotationEditInitialValues,
@@ -110,6 +111,11 @@ export default async function EditDraftQuotationPage({
     company_name: string | null;
   } | null;
   if (!customer) notFound();
+  try {
+    await assertCustomerVisibleToActor(profile, customer.id);
+  } catch {
+    notFound();
+  }
   const { fixedCustomer, draft: initialDraft } =
     mapDraftQuotationEditInitialValues({
       ...quotation,

@@ -5,6 +5,7 @@ import { requireAnyPermission, requirePermission } from "@/lib/auth/permissions"
 import { writeAuditLog } from "@/lib/audit/log";
 import { captureMutationOutcome } from "@/lib/actions/mutation-outcome";
 import { normalizeCurrencyCode } from "@/lib/currency/currencies";
+import { assertCustomerVisibleToActor } from "@/lib/customers/visibility";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { addressFromForm, jsonArray, optionalString, uuid } from "@/lib/orders/validation";
 import { moneyFromForm, parseMoney, parseWholeNumber } from "@/lib/validation/numbers";
@@ -16,6 +17,7 @@ export async function createOrderAction(form: FormData) {
   const { profile } = await requirePermission("orders.create");
   const outcome = await captureMutationOutcome(async () => {
     const customerId = uuid(form.get("customer_id"), "Customer"), warehouseId = uuid(form.get("warehouse_id"), "Warehouse"), addressId = String(form.get("address_id") ?? "").trim();
+    await assertCustomerVisibleToActor(profile, customerId);
     const requestedAddress = addressId ? {} : addressFromForm(form);
     const items = jsonArray(form, "items").map((item, index) => ({
       ...item,

@@ -7,6 +7,7 @@ import { SaleBuilder } from "@/components/sales/SaleBuilder";
 import { SourceQuotationSummary } from "@/components/sales/SourceQuotationSummary";
 import { requireAllPermissions, requirePermission } from "@/lib/auth/permissions";
 import { getCustomerClassificationOptions } from "@/lib/customers/classification-server";
+import { getAssignableCustomerCategorySlugs } from "@/lib/customers/visibility";
 import { getOrderCreationOptions } from "@/lib/orders/data";
 import {
   loadAccessibleConvertedSaleDestination,
@@ -52,7 +53,7 @@ export default async function NewSalePage({
     initialQuotation = loadedQuotation;
   }
 
-  const [options, classificationOptions] = await Promise.all([getOrderCreationOptions(initialQuotation ? {
+  const [options, classificationOptions, assignableCategorySlugs] = await Promise.all([getOrderCreationOptions(profile, initialQuotation ? {
     customerId: initialQuotation.customerId,
     addressIds: [
       initialQuotation.shippingAddressId,
@@ -62,7 +63,10 @@ export default async function NewSalePage({
       productId: line.productId,
       variationId: line.variationId,
     })),
-  } : undefined), getCustomerClassificationOptions()]);
+  } : undefined), getCustomerClassificationOptions(), getAssignableCustomerCategorySlugs(profile)]);
+  const customerCategoryOptions = assignableCategorySlugs === null
+    ? classificationOptions.categories
+    : classificationOptions.categories.filter((category) => assignableCategorySlugs.includes(category.slug));
   if (initialQuotation) {
     const customerAvailable = options.customers.some(
       (customer) => customer.id === initialQuotation.customerId,
@@ -94,7 +98,7 @@ export default async function NewSalePage({
       <summary className="cursor-pointer font-bold">Add a new customer</summary>
       <form action={createBasicCustomerAction} className="mt-3 grid gap-3 md:grid-cols-5">
         <BasicCustomerFields fieldClassName="rounded-lg border px-3 py-2" />
-        <fieldset className="md:col-span-3"><legend className="text-sm font-semibold">Business Categories (required)</legend><div className="mt-1 grid gap-2 sm:grid-cols-2">{classificationOptions.categories.map((category) => <label key={category.id} className="flex items-center gap-2 text-sm"><input type="checkbox" name="customer_category_slugs" value={category.slug}/>{category.name}</label>)}</div></fieldset>
+        <fieldset className="md:col-span-3"><legend className="text-sm font-semibold">Business Categories (required)</legend><div className="mt-1 grid gap-2 sm:grid-cols-2">{customerCategoryOptions.map((category) => <label key={category.id} className="flex items-center gap-2 text-sm"><input type="checkbox" name="customer_category_slugs" value={category.slug}/>{category.name}</label>)}</div></fieldset>
         <label className="text-sm font-semibold">District (required)<select name="customer_district_code" required className="mt-1 w-full rounded-lg border px-3 py-2"><option value="">Select district</option>{classificationOptions.districts.map((district) => <option key={district.code} value={district.code}>{district.name}</option>)}</select></label>
         <button className="rounded-lg bg-[var(--primary)] px-4 py-2 font-semibold text-[var(--primary-foreground)]">Add customer</button>
         <p className="text-xs text-[var(--muted-text)] md:col-span-5">A default delivery address is created from the address above. The customer can add more details later in My Account.</p>

@@ -7,6 +7,7 @@ import { writeAuditLog } from "@/lib/audit/log";
 import { normalizeBasicCustomerInput } from "@/lib/customers/basic";
 import { createBasicCustomerRecord } from "@/lib/customers/create-basic";
 import { customerPrimaryName } from "@/lib/customers/search";
+import { assertCustomerCategoriesAssignableToActor, assertCustomerVisibleToActor } from "@/lib/customers/visibility";
 import { optionalString, uuid } from "@/lib/orders/validation";
 import { resolveQuotationViewScope } from "@/lib/quotations/access-policy";
 import { QUOTATION_SALE_CONVERSION_PERMISSIONS } from "@/lib/quotations/sale-conversion-types";
@@ -265,6 +266,11 @@ export async function createSaleAction(form: FormData) {
   }
   if (profile.role !== "admin" && input.hasPriceOverride && !permissions.has("sales.change_price")) redirect("/admin/sales/new?error=Price%20override%20permission%20is%20required.");
   if (profile.role !== "admin" && input.hasDiscount && !permissions.has("sales.apply_discount")) redirect("/admin/sales/new?error=Discount%20permission%20is%20required.");
+  try {
+    await assertCustomerVisibleToActor(profile, input.customerId);
+  } catch (error) {
+    redirect(`/admin/sales/new?error=${encodeURIComponent(error instanceof Error ? error.message : "Customer access denied.")}`);
+  }
   const db = createSupabaseAdminClient();
   const result = await db.rpc(
     "create_minimal_sale",
@@ -295,6 +301,7 @@ export async function createSaleFromQuotationAction(form: FormData) {
   let input;
   try {
     input = parseDraftSaleInput(form, { mode: "quotation" });
+    await assertCustomerVisibleToActor(profile, input.customerId);
   } catch (error) {
     redirect(`${formTarget}&error=${encodeURIComponent(error instanceof Error ? error.message : "Sale details are invalid.")}`);
   }
@@ -425,6 +432,8 @@ export async function createBasicCustomerAction(form: FormData) {
   let input;
   let customer;
   try {
+    const categorySlugs = form.getAll("customer_category_slugs").map(String);
+    await assertCustomerCategoriesAssignableToActor(profile, categorySlugs);
     input = normalizeBasicCustomerInput({
       fullName: form.get("full_name"),
       companyName: form.get("company_name"),
@@ -433,7 +442,7 @@ export async function createBasicCustomerAction(form: FormData) {
       addressLine1: form.get("address_line_1"),
     });
     customer = await createBasicCustomerRecord(input, {
-      categorySlugs: form.getAll("customer_category_slugs").map(String),
+      categorySlugs,
       districtCode: String(form.get("customer_district_code") ?? "").trim() || null,
     });
   } catch (error) {

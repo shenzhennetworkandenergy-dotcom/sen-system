@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requirePermission } from "@/lib/auth/permissions";
+import { assertCustomerVisibleToActor } from "@/lib/customers/visibility";
 import { writeAuditLog } from "@/lib/audit/log";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -62,6 +63,11 @@ export async function createWorkScheduleAction(form: FormData) {
   let customerSnapshot: { id: string; name: string; contact_name: string | null; phone: string | null; address: string | null } | null = null;
   if (isDelivery && deliveryFor === "CUSTOMER") {
     if (!customerId) errorRedirect("Please select an existing CRM customer.");
+    try {
+      await assertCustomerVisibleToActor(profile, customerId);
+    } catch (error) {
+      errorRedirect(error instanceof Error ? error.message : "Customer access denied.");
+    }
     const { data: customer, error: customerError } = await db.from("profiles").select("id,full_name,email,phone,company_name,status").eq("id", customerId).eq("role", "customer").eq("status", "active").maybeSingle();
     if (customerError || !customer) errorRedirect("Choose a valid existing SEN customer.");
     customerSnapshot = { id: customer.id, name: customer.company_name || customer.full_name || customer.email, contact_name: customer.full_name ?? null, phone: customer.phone ?? null, address: null };

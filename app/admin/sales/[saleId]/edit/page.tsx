@@ -5,6 +5,7 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { SaleBuilder } from "@/components/sales/SaleBuilder";
 import type { SaleEditInitial } from "@/components/sales/sale-builder-state";
 import { requirePermission } from "@/lib/auth/permissions";
+import { assertCustomerVisibleToActor } from "@/lib/customers/visibility";
 import { getOrderCreationOptions } from "@/lib/orders/data";
 import { getSale, getSaleAccessOwner } from "@/lib/sales/data";
 import {
@@ -44,9 +45,14 @@ export default async function EditSalePage({
   if (!canAccessSaleUnderScope(scope, saleAccess.createdBy)) notFound();
   const data = await getSale(saleId);
   if (!data || data.order.status !== "draft") notFound();
+  try {
+    await assertCustomerVisibleToActor(profile, data.order.customer_profile_id);
+  } catch {
+    notFound();
+  }
 
   const { order, items } = data;
-  const options = await getOrderCreationOptions({
+  const options = await getOrderCreationOptions(profile, {
     customerId: order.customer_profile_id,
     addressIds: [order.shipping_address_id, order.billing_address_id]
       .filter((id): id is string => Boolean(id)),

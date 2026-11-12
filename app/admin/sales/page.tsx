@@ -12,7 +12,7 @@ export default async function SalesPage({searchParams}:{searchParams:Promise<{q?
   await connection();
   const {profile,permissions}=await requireAnyPermission(["sales.view","sales.view_all","sales.view_own"]);
   const params=await searchParams,own=profile.role==="employee"&&!permissions.has("sales.view_all")&&!permissions.has("sales.view")?profile.id:undefined;
-  const data=await getSalesDashboard({...params,ownProfileId:own});
+  const data=await getSalesDashboard({...params,ownProfileId:own},profile);
   const canCreateFromQuotation=profile.role==="admin"||(permissions.has("sales.create")&&permissions.has("quotations.convert_to_sale"));
   const cards=[["Today's sales",money(data.metrics.today)],["This month",money(data.metrics.month)],["Pending",data.metrics.pending],["Awaiting payment",data.metrics.awaitingPayment],["Partially paid",data.metrics.partiallyPaid],["Ready to ship",data.metrics.readyToShip],["Completed",data.metrics.completed],["Outstanding",money(data.metrics.outstanding)]];
   return <DashboardShell admin={profile.role==="admin"} employeePermissions={profile.role==="employee"?permissions:undefined} title="Sales" subtitle="Customer sales, payments, stock reservation and fulfilment in one operational view.">

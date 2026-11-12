@@ -14,7 +14,7 @@ const statusTone: Record<string, string> = {
 
 export default async function WorkSchedulerAdminPage({ searchParams }: { searchParams: Promise<{ success?: string; error?: string; titleId?: string }> }) {
   const { profile, permissions } = await requirePermission("work_scheduler.manage");
-  const [data, params] = await Promise.all([getAdminWorkDashboard(), searchParams]);
+  const [data, params] = await Promise.all([getAdminWorkDashboard(profile), searchParams]);
   const today = data.assignments.filter((assignment) => assignment.occurrence_date === data.today);
   const counts = {
     pending: today.filter((item) => item.status === "PENDING").length,
