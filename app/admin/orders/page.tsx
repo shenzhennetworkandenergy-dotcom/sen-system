@@ -11,8 +11,8 @@ export const dynamic="force-dynamic";
 const statuses=["draft","confirmed","processing","partially_allocated","allocated","packing","partially_shipped","shipped","delivered","cancelled"];
 
 export default async function OrdersPage({searchParams}:{searchParams:Promise<{q?:string;status?:string;page?:string;success?:string;error?:string}>}){
-  await connection();await requirePermission("orders.view");
-  const params=await searchParams,{orders,count,page,size}=await getOrders(params);
+  await connection();const {profile}=await requirePermission("orders.view");
+  const params=await searchParams,{orders,count,page,size}=await getOrders(params,undefined,profile);
   return <DashboardShell admin title="Orders" subtitle="Create, reserve, allocate, pack and ship customer orders.">
     {params.success?<p className="mb-4 rounded-xl bg-emerald-50 p-4 text-emerald-900">{params.success}</p>:null}
     {params.error?<p className="mb-4 rounded-xl bg-red-50 p-4 text-red-900">{params.error}</p>:null}

@@ -3,6 +3,11 @@ import {
   mergeRequiredOrderCreationOptions,
   type RequiredOrderCreationOptions,
 } from "@/lib/orders/creation-options";
+import type { CustomerVisibilityActor } from "@/lib/customers/visibility";
+import {
+  customerIdIsVisible,
+  getVisibleCustomerIds,
+} from "@/lib/customers/visibility";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 function fail(context: string, error: { code?: string; message?: string; details?: string } | null) {
@@ -11,16 +16,27 @@ function fail(context: string, error: { code?: string; message?: string; details
 }
 
 export async function getOrderCreationOptions(
+  actor: CustomerVisibilityActor,
   required?: RequiredOrderCreationOptions,
 ) {
   const db = createSupabaseAdminClient();
+  const visibleCustomerIds = await getVisibleCustomerIds(actor);
+  if (required && !customerIdIsVisible(visibleCustomerIds, required.customerId)) {
+    throw new Error("Required customer is outside your assigned business categories.");
+  }
+  let customerQuery = db.from("profiles").select("id,email,full_name,phone,company_name,status").eq("role", "customer").eq("status", "active").order("full_name").limit(200);
+  let addressQuery = db.from("customer_addresses").select("*").order("is_default_shipping", { ascending: false }).order("updated_at", { ascending: false }).limit(1000);
+  if (visibleCustomerIds !== null) {
+    customerQuery = customerQuery.in("id", visibleCustomerIds.length ? visibleCustomerIds : ["00000000-0000-0000-0000-000000000000"]);
+    addressQuery = addressQuery.in("profile_id", visibleCustomerIds.length ? visibleCustomerIds : ["00000000-0000-0000-0000-000000000000"]);
+  }
   const [customers, products, variations, balances, warehouses, addresses] = await Promise.all([
-    db.from("profiles").select("id,email,full_name,phone,company_name,status").eq("role", "customer").eq("status", "active").order("full_name").limit(200),
+    customerQuery,
     db.from("products").select("id,name,sku,model_number,brand_id,product_type,status,regular_price,sale_price,currency,serial_tracking_required").eq("status", "active").order("name").limit(500),
     db.from("product_variations").select("id,product_id,name:combination_key,sku,regular_price,sale_price,status").eq("status", "active").order("combination_key").limit(1000),
     db.from("inventory_balances").select("product_id,variation_id,warehouse_id,available").gt("available", 0).limit(2000),
     db.from("warehouses").select("id,code,name,country_code").eq("is_active", true).order("name"),
-    db.from("customer_addresses").select("*").order("is_default_shipping", { ascending: false }).order("updated_at", { ascending: false }).limit(1000),
+    addressQuery,
   ]);
   for (const [name, result] of Object.entries({ customers, products, variations, balances, warehouses, addresses })) fail(`Unable to load ${name}.`, result.error);
   const bounded = { customers: customers.data ?? [], products: products.data ?? [], variations: variations.data ?? [], balances: balances.data ?? [], warehouses: warehouses.data ?? [], addresses: addresses.data ?? [] };
@@ -63,10 +79,14 @@ export async function getOrderCreationOptions(
   return merged;
 }
 
-export async function getOrders(params: { q?: string; status?: string; customer?: string; page?: string }, customerProfileId?: string) {
+export async function getOrders(params: { q?: string; status?: string; customer?: string; page?: string }, customerProfileId?: string, actor?: CustomerVisibilityActor) {
   const db = createSupabaseAdminClient(), page = Math.max(1, Number.parseInt(params.page ?? "1") || 1), size = 20;
   let query = db.from("sales_orders").select("*,profiles!sales_orders_customer_profile_id_fkey(full_name,email,phone,company_name)", { count: "exact" });
   if (customerProfileId) query = query.eq("customer_profile_id", customerProfileId);
+  if (actor) {
+    const visibleCustomerIds = await getVisibleCustomerIds(actor);
+    if (visibleCustomerIds !== null) query = query.in("customer_profile_id", visibleCustomerIds.length ? visibleCustomerIds : ["00000000-0000-0000-0000-000000000000"]);
+  }
   if (params.status) query = query.eq("status", params.status);
   if (params.customer) query = query.eq("customer_profile_id", params.customer);
   if (params.q?.trim()) query = query.ilike("order_number", `%${params.q.trim().slice(0, 80)}%`);
@@ -74,10 +94,14 @@ export async function getOrders(params: { q?: string; status?: string; customer?
   fail("Unable to load orders.", error); return { orders: data ?? [], count: count ?? 0, page, size };
 }
 
-export async function getOrder(orderId: string, customerProfileId?: string) {
+export async function getOrder(orderId: string, customerProfileId?: string, actor?: CustomerVisibilityActor) {
   const db = createSupabaseAdminClient();
   let orderQuery = db.from("sales_orders").select("*,profiles!sales_orders_customer_profile_id_fkey(id,full_name,email,phone,company_name),warehouses(id,code,name)").eq("id", orderId);
   if (customerProfileId) orderQuery = orderQuery.eq("customer_profile_id", customerProfileId);
+  if (actor) {
+    const visibleCustomerIds = await getVisibleCustomerIds(actor);
+    if (visibleCustomerIds !== null) orderQuery = orderQuery.in("customer_profile_id", visibleCustomerIds.length ? visibleCustomerIds : ["00000000-0000-0000-0000-000000000000"]);
+  }
   const orderResult = await orderQuery.maybeSingle(); fail("Unable to load order.", orderResult.error); if (!orderResult.data) return null;
   const [items, reservations, allocations, packages, packed, shipments, tracking, documents] = await Promise.all([
     db.from("sales_order_items").select("*").eq("order_id", orderId).order("created_at"),

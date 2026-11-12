@@ -1,4 +1,5 @@
 import "server-only";
+import { getVisibleCustomerIds, type CustomerVisibilityActor } from "@/lib/customers/visibility";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { normalizeSalePaymentAccountingLink } from "@/lib/sales/payment-accounting";
 import type { QuotationTraceabilityLookup } from "@/lib/quotations/access-policy";
@@ -12,10 +13,17 @@ function assertResult(context: string, error: { code?: string; message?: string;
   throw new Error(context);
 }
 
-export async function getSalesDashboard(filters: SalesFilters) {
+export async function getSalesDashboard(filters: SalesFilters, actor: CustomerVisibilityActor) {
   const db = createSupabaseAdminClient();
+  const visibleCustomerIds = await getVisibleCustomerIds(actor);
+  const scopedCustomerIds = visibleCustomerIds === null
+    ? null
+    : visibleCustomerIds.length
+      ? visibleCustomerIds
+      : ["00000000-0000-0000-0000-000000000000"];
   const page = Math.max(1, Number.parseInt(filters.page ?? "1") || 1), size = 20;
   let query = db.from("sales_orders").select("*,customer:profiles!sales_orders_customer_profile_id_fkey(id,full_name,email,company_name),employee:profiles!sales_orders_created_by_fkey(id,full_name,email),shipments(id,status)", { count: "exact" });
+  if (scopedCustomerIds) query = query.in("customer_profile_id", scopedCustomerIds);
   if (filters.ownProfileId) query = query.eq("created_by", filters.ownProfileId);
   if (filters.customer) query = query.eq("customer_profile_id", filters.customer);
   if (filters.employee) query = query.eq("created_by", filters.employee);
@@ -28,11 +36,21 @@ export async function getSalesDashboard(filters: SalesFilters) {
 
   const now = new Date(), today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString(), month = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
   const scope = filters.ownProfileId ? { created_by: filters.ownProfileId } : {};
+  let todaySalesQuery = db.from("sales_orders").select("total_amount").match(scope).gte("created_at", today).neq("status", "cancelled");
+  let monthSalesQuery = db.from("sales_orders").select("total_amount").match(scope).gte("created_at", month).neq("status", "cancelled");
+  let allSalesQuery = db.from("sales_orders").select("status,payment_status,total_amount,paid_amount").match(scope).limit(5000);
+  if (scopedCustomerIds) {
+    todaySalesQuery = todaySalesQuery.in("customer_profile_id", scopedCustomerIds);
+    monthSalesQuery = monthSalesQuery.in("customer_profile_id", scopedCustomerIds);
+    allSalesQuery = allSalesQuery.in("customer_profile_id", scopedCustomerIds);
+  }
+  let customerQuery = db.from("profiles").select("id,full_name,email").eq("role", "customer").eq("status", "active").order("full_name").limit(500);
+  if (visibleCustomerIds !== null) customerQuery = customerQuery.in("id", visibleCustomerIds.length ? visibleCustomerIds : ["00000000-0000-0000-0000-000000000000"]);
   const [todaySales, monthSales, allSales, customers, employees] = await Promise.all([
-    db.from("sales_orders").select("total_amount").match(scope).gte("created_at", today).neq("status", "cancelled"),
-    db.from("sales_orders").select("total_amount").match(scope).gte("created_at", month).neq("status", "cancelled"),
-    db.from("sales_orders").select("status,payment_status,total_amount,paid_amount").match(scope).limit(5000),
-    db.from("profiles").select("id,full_name,email").eq("role", "customer").eq("status", "active").order("full_name").limit(500),
+    todaySalesQuery,
+    monthSalesQuery,
+    allSalesQuery,
+    customerQuery,
     db.from("profiles").select("id,full_name,email").in("role", ["employee", "admin"]).eq("status", "active").order("full_name").limit(500),
   ]);
   for (const [name, result] of Object.entries({ todaySales, monthSales, allSales, customers, employees })) assertResult(`Unable to load sales ${name}.`, result.error);

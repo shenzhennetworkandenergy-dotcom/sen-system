@@ -3,6 +3,7 @@ import { connection } from "next/server";
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { QuotationBuilder } from "@/components/quotations/QuotationBuilder";
 import { requirePermission } from "@/lib/auth/permissions";
+import { getVisibleCustomerIds } from "@/lib/customers/visibility";
 import { defaultQuotationExpiration } from "@/lib/quotations/validity";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -17,19 +18,24 @@ export default async function NewQuotationPage({
   const { profile, permissions } = await requirePermission("quotations.create");
   const params = await searchParams;
   const db = createSupabaseAdminClient();
+  const visibleCustomerIds = await getVisibleCustomerIds(profile);
+  let customerQuery = db
+    .from("profiles")
+    .select("id,full_name,email,phone,company_name")
+    .eq("role", "customer")
+    .eq("status", "active")
+    .order("full_name")
+    .limit(500);
+  if (visibleCustomerIds !== null) {
+    customerQuery = customerQuery.in("id", visibleCustomerIds.length ? visibleCustomerIds : ["00000000-0000-0000-0000-000000000000"]);
+  }
 
   const [
     { data: customers, error: customerError },
     { data: products, error: productError },
     { data: variations, error: variationError },
   ] = await Promise.all([
-    db
-      .from("profiles")
-      .select("id,full_name,email,phone,company_name")
-      .eq("role", "customer")
-      .eq("status", "active")
-      .order("full_name")
-      .limit(500),
+    customerQuery,
     db
       .from("products")
       .select(
@@ -74,6 +80,7 @@ export default async function NewQuotationPage({
           products={products ?? []}
           variations={variations ?? []}
           defaultExpiration={defaultQuotationExpiration()}
+          canCreateCustomer={profile.role === "admin"}
         />
       )}
     </DashboardShell>

@@ -10,6 +10,7 @@ import {
   type CreatedBasicCustomer,
 } from "@/lib/customers/create-basic";
 import { customerPrimaryName } from "@/lib/customers/search";
+import { assertCustomerVisibleToActor } from "@/lib/customers/visibility";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit/log";
 import { resolveQuotationViewScope } from "@/lib/quotations/access-policy";
@@ -35,6 +36,13 @@ export async function createQuotationCustomerAction(
   form: FormData,
 ): Promise<QuotationCustomerActionState> {
   const { profile } = await requirePermission("quotations.create");
+  if (profile.role !== "admin") {
+    return {
+      status: "error",
+      message: "Ask an administrator to create and classify a new customer before using it in a quotation.",
+      customer: null,
+    };
+  }
   try {
     const input = normalizeBasicCustomerInput({
       fullName: form.get("full_name"),
@@ -99,6 +107,11 @@ export async function createQuotationAction(form: FormData) {
   const db = createSupabaseAdminClient();
   if (!customerId) {
     redirect("/admin/quotations/new?error=Choose%20a%20customer.");
+  }
+  try {
+    await assertCustomerVisibleToActor(profile, customerId);
+  } catch (error) {
+    redirect(`/admin/quotations/new?error=${encodeURIComponent(error instanceof Error ? error.message : "Customer access denied.")}`);
   }
   const { data: customer } = await db
     .from("profiles")
@@ -328,6 +341,11 @@ export async function updateDraftQuotationAction(
       "This quotation is no longer a Draft and cannot be edited.",
       "transition",
     );
+  }
+  try {
+    await assertCustomerVisibleToActor(profile, quotation.profile_id);
+  } catch (error) {
+    failDraftEdit(quotationId, error instanceof Error ? error.message : "Customer access denied.");
   }
 
   const existingLineKeys = new Set(
