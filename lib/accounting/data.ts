@@ -2,6 +2,19 @@ import "server-only";
 import { normalizeCashbookDate, summarizeCashbookEntries } from "@/lib/accounting/cashbook";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
+export async function getPersonalCashbookCorrections(ownerId: string) {
+  const { data, error } = await createSupabaseAdminClient()
+    .from("cashbook_days")
+    .select("cashbook_day_id,business_date,correction_reason")
+    .eq("cashbook_scope", "PERSONAL")
+    .eq("cashbook_owner_id", ownerId)
+    .eq("is_closed", true)
+    .eq("audit_status", "CORRECTION_REQUIRED")
+    .order("business_date", { ascending: false });
+  if (error) throw new Error("Unable to load your cashbook correction requests.");
+  return data ?? [];
+}
+
 export async function getBlockingPersonalCashbookDate(cashbookOwnerId: string, selectedDate: string): Promise<string | null> {
   const date = normalizeCashbookDate(selectedDate, "");
   if (!cashbookOwnerId || !date) return null;
@@ -44,10 +57,10 @@ export async function getAccountingDashboard(
   const cashbookDayId = options.cashbookDayId ?? null;
   if (!cashbookOwnerId && !cashbookDayId) throw new Error("Cashbook identity is required.");
   const emptyResult = Promise.resolve({ data: [], error: null });
-  const dayFields = "cashbook_day_id,cashbook_scope,cashbook_owner_id,business_date,opening_balance,closing_balance,is_closed,closed_at,closed_by,audit_status,reviewed_at,reviewed_by,review_comment,correction_reason,correction_requested_at,correction_requested_by";
+  const dayFields = "cashbook_day_id,cashbook_scope,cashbook_owner_id,business_date,opening_balance,closing_balance,is_closed,closed_at,closed_by,audit_status,reviewed_at,reviewed_by,review_comment,correction_reason,correction_requested_at,correction_requested_by,updated_at";
   let cashbookDaysQuery = db.from("cashbook_days").select(dayFields);
   let cashbookEntriesQuery = db.from("cashbook_entries")
-    .select("id,cashbook_day_id,cashbook_scope,cashbook_owner_id,transaction_type,amount,payment_method,transaction_at,business_date,journal_entry_id,remark,sale_payment_id,source_payment_method,cashbook_descriptions(name),journal_entries!cashbook_entries_journal_entry_id_fkey(entry_number)");
+    .select("id,cashbook_day_id,cashbook_scope,cashbook_owner_id,description_id,transaction_type,amount,payment_method,transaction_at,business_date,journal_entry_id,remark,sale_payment_id,source_payment_method,cashbook_descriptions(name),journal_entries!cashbook_entries_journal_entry_id_fkey(entry_number,reference_type,reference_id,reversal_of,status)");
   if (cashbookDayId) {
     cashbookDaysQuery = cashbookDaysQuery.eq("cashbook_day_id", cashbookDayId).limit(1);
     cashbookEntriesQuery = cashbookEntriesQuery.eq("cashbook_day_id", cashbookDayId).order("transaction_at", { ascending: false });
@@ -84,9 +97,10 @@ export async function getAccountingDashboard(
   }
   const dailyEntries = (cashbookEntries.data ?? []).map((entry) => {
     const relatedDescription = entry.cashbook_descriptions as unknown as { name: string } | { name: string }[] | null;
-    const relatedJournal = entry.journal_entries as unknown as { entry_number: string } | { entry_number: string }[] | null;
+    const journal = Array.isArray(entry.journal_entries) ? entry.journal_entries[0] : entry.journal_entries;
     return {
       id: entry.id,
+      descriptionId: entry.description_id,
       transactionType: entry.transaction_type as "income" | "expense",
       amount: Number(entry.amount),
       paymentMethod: entry.payment_method as "cash" | "bank" | "mfs",
@@ -94,9 +108,9 @@ export async function getAccountingDashboard(
       remark: entry.remark ?? "",
       businessDate: entry.business_date,
       journalEntryId: entry.journal_entry_id,
-      journalEntryNumber: Array.isArray(relatedJournal)
-        ? relatedJournal[0]?.entry_number ?? null
-        : relatedJournal?.entry_number ?? null,
+      journalEntryNumber: journal?.entry_number ?? null,
+      canCorrect: !entry.sale_payment_id && !entry.source_payment_method && journal?.status === "posted"
+        && journal.reference_type === "manual" && journal.reference_id === entry.id && !journal.reversal_of,
       salePaymentId: entry.sale_payment_id ?? null,
       sourcePaymentMethod: entry.source_payment_method ?? null,
       description: Array.isArray(relatedDescription)
@@ -144,6 +158,8 @@ export async function getAccountingDashboard(
       entries: dailyEntries,
       summary,
       day: {
+        id: selectedDay?.cashbook_day_id ?? null,
+        updatedAt: selectedDay?.updated_at ?? null,
         businessDate: selectedDay?.business_date ?? selectedDate,
         openingBalance,
         closingBalance: selectedDay?.is_closed ? Number(selectedDay.closing_balance) : summary.closing,

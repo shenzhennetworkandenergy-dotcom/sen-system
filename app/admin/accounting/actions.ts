@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { parseCashbookDayId } from "@/lib/accounting/audit";
 import {
   normalizeCashbookDate,
   normalizeCashbookDescriptionInput,
@@ -133,6 +134,64 @@ export async function createCashbookEntryAction(form: FormData) {
   if (failure) redirect(destination("error", failure, selectedDate));
   revalidatePath(path);
   redirect(destination("success", "Cashbook entry saved and posted to the ledger.", selectedDate));
+}
+
+export async function resubmitCashbookCorrectionAction(
+  _previous: { error: string },
+  form: FormData,
+): Promise<{ error: string }> {
+  const { profile } = await requireAnyPermission(cashbookEditPermissions);
+  const date = normalizeCashbookDate(form.get("cashbook_date"), "");
+  const dayId = parseCashbookDayId(form.get("cashbook_day_id"));
+  const version = String(form.get("statement_version") ?? "");
+  if (!date || !dayId || !version) return { error: "Open the returned cashbook day again before submitting." };
+
+  let openingBalance: number;
+  let changes: object[];
+  try {
+    const openingValue = String(form.get("opening_balance") ?? "").trim();
+    if (!openingValue) throw new Error("Enter the opening cash balance.");
+    openingBalance = normalizeOpeningBalance(openingValue);
+    const submitted = JSON.parse(String(form.get("changes") ?? "")) as unknown;
+    if (!Array.isArray(submitted) || submitted.length > 1000) throw new Error("Invalid cashbook correction entries.");
+    changes = submitted.map((change) => {
+      if (!change || typeof change !== "object") throw new Error("Invalid cashbook correction entry.");
+      const entryId = change.entryId == null ? null : parseCashbookDayId(change.entryId);
+      if (change.entryId != null && !entryId) throw new Error("Invalid cashbook entry.");
+      if (change.operation === "remove" && entryId) return { operation: "remove", entry_id: entryId };
+      if (change.operation !== "save") throw new Error("Invalid cashbook correction operation.");
+      const entry = normalizeCashbookEntryInput(change);
+      if (!entry.occurredAt || entry.amount <= 0) throw new Error("Enter the time and an amount of at least ৳0.01 for each entry.");
+      return {
+        operation: "save",
+        entry_id: entryId,
+        description_id: entry.descriptionId,
+        amount: entry.amount,
+        payment_method: entry.paymentMethod,
+        occurred_at: toCashbookTimestamp(entry.occurredAt, date),
+        remark: entry.remark,
+      };
+    });
+  } catch (error) {
+    return { error: error instanceof SyntaxError ? "Invalid cashbook correction entries." : actionErrorMessage(error) ?? "Check the correction details." };
+  }
+
+  const { error } = await createSupabaseAdminClient().rpc("resubmit_cashbook_correction", {
+    actor_profile_id: profile.id,
+    requested_cashbook_day_id: dayId,
+    requested_business_date: date,
+    expected_updated_at: version,
+    requested_opening_balance: openingBalance,
+    requested_changes: changes,
+  });
+  if (error) {
+    console.error("Cashbook correction submission failed", { code: error.code });
+    return { error: error.code === "P0001" ? actionErrorMessage(error) ?? "Unable to submit the correction." : "Unable to submit the correction. Check the entries and try again." };
+  }
+  revalidatePath(path);
+  revalidatePath(`${path}/audit`);
+  revalidatePath(`${path}/audit/${date}`);
+  redirect(destination("success", "Corrected cashbook submitted for Admin audit.", date));
 }
 
 export async function createJournalAction(form: FormData) {

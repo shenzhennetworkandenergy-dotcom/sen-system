@@ -1,4 +1,5 @@
 import { connection } from "next/server";
+import Link from "next/link";
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { JournalForm } from "@/components/accounting/JournalForm";
 import { QuickCashbook } from "@/components/accounting/QuickCashbook";
@@ -10,7 +11,7 @@ import {
   normalizeCashbookDate,
 } from "@/lib/accounting/cashbook";
 import { requireAnyPermission } from "@/lib/auth/permissions";
-import { getAccountingDashboard, getBlockingPersonalCashbookDate } from "@/lib/accounting/data";
+import { getAccountingDashboard, getBlockingPersonalCashbookDate, getPersonalCashbookCorrections } from "@/lib/accounting/data";
 import { postJournalAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -24,10 +25,13 @@ export default async function AccountingPage({ searchParams }: { searchParams: P
   const currentBusinessDateTime = getBusinessDateTimeLocal();
   const selectedDate = normalizeCashbookDate(params.cashbook_date, today);
   const canViewLedger = profile.role === "admin" || permissions.has("accounting.view");
-  const data = await getAccountingDashboard(selectedDate, {
-    includeLedger: canViewLedger,
-    cashbookOwnerId: profile.id,
-  });
+  const [data, correctionRequests] = await Promise.all([
+    getAccountingDashboard(selectedDate, {
+      includeLedger: canViewLedger,
+      cashbookOwnerId: profile.id,
+    }),
+    getPersonalCashbookCorrections(profile.id),
+  ]);
   const errorMessage = isPersonalCashbookPredecessorError(params.error)
     ? formatCashbookPredecessorError(params.error, await getBlockingPersonalCashbookDate(profile.id, selectedDate))
     : params.error;
@@ -38,7 +42,22 @@ export default async function AccountingPage({ searchParams }: { searchParams: P
   return <DashboardShell admin={profile.role === "admin"} employeePermissions={profile.role === "employee" ? permissions : undefined} title="Accounting" subtitle={canViewLedger ? "Chart of accounts, balanced journals and an auditable general-ledger foundation." : "কুইক ক্যাশবুক ও ক্যাশ ক্লোজিং সিস্টেম"}>
     {params.success ? <p className="mb-4 rounded-lg border border-green-200 bg-green-50 p-3 text-green-900">{params.success}</p> : null}
     {errorMessage ? <p className="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-red-900">{errorMessage}</p> : null}
+    <details className="mb-4 rounded-xl border border-amber-300 bg-amber-50 p-4 print:hidden" open={correctionRequests.length > 0}>
+      <summary className="cursor-pointer font-bold text-amber-950">Correction Requests ({correctionRequests.length})</summary>
+      {correctionRequests.length ? <ul className="mt-3 divide-y divide-amber-200">
+        {correctionRequests.map((request) => <li key={request.cashbook_day_id} className="flex flex-wrap items-center justify-between gap-2 py-2">
+          <div className="min-w-0">
+            <p className="font-semibold">{request.business_date} · Pending Correction</p>
+            <p className="whitespace-pre-wrap break-words text-sm">{request.correction_reason}</p>
+          </div>
+          <Link href={`/admin/accounting?cashbook_date=${request.business_date}`} className="rounded-lg border border-amber-700 px-3 py-2 text-sm font-semibold text-amber-950 hover:bg-amber-100">
+            {canManageCashbook ? "Open for Correction" : "View Returned Day"}
+          </Link>
+        </li>)}
+      </ul> : <p className="mt-2 text-sm">No cashbook days are waiting for correction.</p>}
+    </details>
     <QuickCashbook
+      key={selectedDate}
       selectedDate={selectedDate}
       defaultOccurredAt={selectedDate === today ? currentBusinessDateTime : `${selectedDate}T12:00`}
       statementGeneratedAt={currentBusinessDateTime}

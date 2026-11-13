@@ -90,15 +90,17 @@ export function CashbookAuditReview({ day, statement }: { day: CashbookAuditDay;
         <form action={approveCashbookAuditAction}>
           <input type="hidden" name="cashbook_day_id" value={day.cashbookDayId} />
           <input type="hidden" name="business_date" value={day.businessDate} />
+          <input type="hidden" name="statement_version" value={day.updatedAt} />
           <button className="rounded-lg bg-emerald-700 px-4 py-3 font-bold text-white hover:bg-emerald-800">Approve</button>
         </form>
-        <form action={requestCashbookCorrectionAction} className="flex min-w-[min(100%,32rem)] flex-1 flex-wrap gap-2">
+        {day.cashbookScope === "PERSONAL" ? <form action={requestCashbookCorrectionAction} className="flex min-w-[min(100%,32rem)] flex-1 flex-wrap gap-2">
           <input type="hidden" name="cashbook_day_id" value={day.cashbookDayId} />
           <input type="hidden" name="business_date" value={day.businessDate} />
+          <input type="hidden" name="statement_version" value={day.updatedAt} />
           <label className="sr-only" htmlFor="cashbook-correction-reason">Correction reason</label>
           <textarea id="cashbook-correction-reason" name="reason" required minLength={1} maxLength={1000} rows={2} placeholder="Required correction reason" className="min-w-0 flex-1 rounded-lg border px-3 py-2" />
-          <button className="self-end rounded-lg border border-amber-600 px-4 py-2.5 font-bold text-amber-800 hover:bg-amber-50">Request Correction</button>
-        </form>
+          <button className="self-end rounded-lg border border-amber-600 px-4 py-2.5 font-bold text-amber-800 hover:bg-amber-50">Return for Correction</button>
+        </form> : null}
       </div>
     </section> : null}
   </>;
