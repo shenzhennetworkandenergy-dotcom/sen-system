@@ -16,6 +16,7 @@ export type CashbookScope = "LEGACY_GLOBAL" | "LEGACY_ATTRIBUTED" | "PERSONAL";
 export type CashbookAuditActor = { id: string | null; name: string };
 export type CashbookAuditDay = {
   cashbookDayId: string;
+  updatedAt: string;
   cashbookScope: CashbookScope;
   cashbookOwner: CashbookAuditActor;
   businessDate: string;
@@ -54,6 +55,7 @@ type CashbookDayRow = {
   correction_reason: string | null;
   correction_requested_at: string | null;
   correction_requested_by: string | null;
+  updated_at: string;
 };
 
 type CashbookAmountRow = {
@@ -86,6 +88,7 @@ const DAY_FIELDS = [
   "correction_reason",
   "correction_requested_at",
   "correction_requested_by",
+  "updated_at",
 ].join(",");
 
 /** Return null for malformed dates so callers never silently audit today's date. */
@@ -153,6 +156,7 @@ function toAuditDay(
     : actor(row.cashbook_owner_id, people);
   return {
     cashbookDayId: row.cashbook_day_id,
+    updatedAt: row.updated_at,
     cashbookScope: row.cashbook_scope,
     cashbookOwner,
     businessDate: row.business_date,
@@ -217,17 +221,21 @@ export async function getCashbookAuditDay(
   if (!cashbookDayId || !date) return null;
 
   const db = createSupabaseAdminClient();
-  const [{ data, error }, dashboard] = await Promise.all([
-    db.from("cashbook_days")
-      .select(DAY_FIELDS)
-      .eq("cashbook_day_id", cashbookDayId)
-      .eq("business_date", date)
-      .maybeSingle(),
-    getAccountingDashboard(date, { includeLedger: false, cashbookDayId }),
-  ]);
+  const { data, error } = await db.from("cashbook_days")
+    .select(DAY_FIELDS)
+    .eq("cashbook_day_id", cashbookDayId)
+    .eq("business_date", date)
+    .maybeSingle();
   if (error || !data || !(data as unknown as CashbookDayRow).is_closed) return null;
 
   const row = data as unknown as CashbookDayRow;
+  const dashboard = await getAccountingDashboard(date, { includeLedger: false, cashbookDayId });
+  const latest = await db.from("cashbook_days").select("updated_at")
+    .eq("cashbook_day_id", cashbookDayId).single();
+  if (latest.error) throw new Error("Unable to verify the cashbook statement.");
+  if (row.updated_at !== latest.data.updated_at) {
+    throw new Error("This cashbook submission changed while loading. Reload the latest statement.");
+  }
   const people = await peopleFor([
     row.cashbook_owner_id,
     row.closed_by,
