@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { allocateByOwnership, calculateDistributableAmount } from "../lib/murshida-manzil/calculations.ts";
 import { buildExpense, buildOwnerAllocationRows, buildRentAllocationRows } from "../lib/murshida-manzil/expense-allocation.ts";
-import { persistRentAndAllocations } from "../lib/murshida-manzil/rent-allocation.ts";
 import { buildOwnerRentAccountReport } from "../lib/murshida-manzil/reports.ts";
 
 test("standalone advance receipts are excluded and applied advance is counted once", () => {
@@ -48,20 +47,6 @@ test("rent allocation plan snapshots active ownership and reconciles eligible re
   assert.deepEqual(rows.map((row) => row.allocated_amount), [28000, 21000, 21000]);
   assert.deepEqual(rows.map((row) => row.ownership_percentage_snapshot), [40, 30, 30]);
   assert.equal(rows.reduce((sum, row) => sum + Number(row.allocated_amount), 0), 70000);
-});
-
-test("rent persistence path inserts rent then allocation rows and rolls back on allocation failure", async () => {
-  const events: string[] = [];
-  const id = await persistRentAndAllocations({ total_rent_settled: 70000 }, [
-    { id: "a", ownership_percentage: 40 }, { id: "b", ownership_percentage: 30 }, { id: "c", ownership_percentage: 30 },
-  ], {
-    insertRentTransaction: async () => { events.push("rent"); return "rent-1"; },
-    hasOwnerAllocationsForSource: async () => false,
-    insertOwnerAllocations: async (rows) => { events.push(`alloc:${rows.reduce((sum, row) => sum + Number(row.allocated_amount), 0)}`); },
-    deleteRentTransaction: async () => { events.push("rollback"); },
-  });
-  assert.equal(id, "rent-1");
-  assert.deepEqual(events, ["rent", "alloc:70000"]);
 });
 
 test("allocation persistence uses one atomic bulk insert", () => {

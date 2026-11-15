@@ -5,12 +5,13 @@ import { redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth/session";
 import { validateOwnershipPercentages, validateOwnershipPercentagesForSetup } from "@/lib/murshida-manzil/calculations";
 import { normalizeOwnerName, normalizeOwnerPhone, normalizeUnitCode } from "@/lib/murshida-manzil/master-data";
-import { deleteOwner, deleteRentTransaction, deleteTenant, deleteUnit, getTenantAdvanceState, getTenantUnit, hasOwnerAllocationsForSource, insertAdvancePayment, insertOwner, insertOwnerAllocations, insertRentTransaction, insertTenant, insertUnit, listActiveOwners, listOwners, recordExpenseWithAllocations, setTenantActive, setUnitActive, updateOwner, updateTenant, updateTenantDefaultAdvanceAdjustment, updateTenantUnit, updateUnit } from "@/lib/murshida-manzil/repository";
-import { buildAdvancePayment, buildRentTransaction, validateAdvanceAdjustment, validateTenantInput } from "@/lib/murshida-manzil/tenant-rent";
+import { allocateRentOwnerShares, changeRentReceipt, deleteOwner, deleteTenant, deleteUnit, getExpense, getTenantUnit, insertAdvancePayment, insertOwner, insertOwnerAllocations, insertTenant, insertUnit, listActiveOwners, listOwners, recordExpenseWithAllocations, recordRentReceipt, setTenantActive, setUnitActive, updateOwner, updateTenant, updateTenantDefaultAdvanceAdjustment, updateTenantUnit, updateUnit } from "@/lib/murshida-manzil/repository";
+import { buildAdvancePayment, buildRentTransaction, parseRentReceiptChange, validateTenantInput } from "@/lib/murshida-manzil/tenant-rent";
 import { buildExpense, buildOwnerAllocationRows } from "@/lib/murshida-manzil/expense-allocation";
-import { persistRentAndAllocations } from "@/lib/murshida-manzil/rent-allocation";
 
 const path = "/admin/murshida-manzil";
+const rentHistory = `${path}/history/rent`;
+const uuidPattern = /^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i;
 const ownerValidationError = (error: unknown): never => {
   const message = error instanceof Error ? error.message : "Owner validation failed.";
   redirect(`${path}?error=${encodeURIComponent(message)}`);
@@ -116,18 +117,46 @@ async function getTenantUnitForAssignment(unitId: string) {
 }
 
 export async function createRentTransactionAction(form: FormData) {
-  await requireProfile(["admin"]);
-  const id = crypto.randomUUID();
-  const activeOwners = await listActiveOwners();
-  const tenant = await getTenantUnit(text(form, "tenant_id"));
-  const advanceState = await getTenantAdvanceState(tenant.tenantId);
-  const monthlyRent = Number(text(form, "monthly_rent")) || tenant.monthlyRent;
-  const advanceAdjusted = validateAdvanceAdjustment(Number(text(form, "advance_adjusted")), advanceState.availableBalance, monthlyRent);
-  const enteredAmount = text(form, "actual_money_received");
-  const actualMoneyReceived = enteredAmount ? Number(enteredAmount) : monthlyRent - advanceAdjusted;
-  const rentPayload = buildRentTransaction({ tenantId: tenant.tenantId, unitId: tenant.unitId, unitCode: tenant.unitCode, unitDescription: tenant.unitDescription, rentYear: Number(text(form, "rent_year")), rentMonth: Number(text(form, "rent_month")), monthlyRent, actualMoneyReceived, advanceAdjusted, advanceBalanceBefore: advanceState.availableBalance, paymentDate: text(form, "payment_date"), paymentMethod: text(form, "payment_method"), moneyReceiptNumber: `MM-MR-${id}`, rentReceiptNumber: `MM-RR-${id}` });
-  const transactionId = await persistRentAndAllocations(rentPayload, activeOwners, { insertRentTransaction, hasOwnerAllocationsForSource, insertOwnerAllocations, deleteRentTransaction });
-  revalidatePath(path); redirect(`${path}?message=${encodeURIComponent("Rent recorded.")}&rentReceipt=${transactionId}`);
+  const { profile } = await requireProfile(["admin"]);
+  const submittedId = text(form, "receipt_request_id");
+  const id = uuidPattern.test(submittedId) ? submittedId : crypto.randomUUID();
+  let transactionId: string;
+  try {
+    const tenant = await getTenantUnit(text(form, "tenant_id"));
+    const monthlyRent = Number(text(form, "monthly_rent")) || tenant.monthlyRent;
+    const advanceAdjusted = Number(text(form, "advance_adjusted"));
+    const enteredAmount = text(form, "actual_money_received");
+    const actualMoneyReceived = enteredAmount ? Number(enteredAmount) : Math.round((monthlyRent - advanceAdjusted) * 100) / 100;
+    const rentPayload = buildRentTransaction({
+      tenantId: tenant.tenantId, unitId: tenant.unitId, unitCode: tenant.unitCode, unitDescription: tenant.unitDescription,
+      rentYear: Number(text(form, "rent_year")), rentMonth: Number(text(form, "rent_month")),
+      monthlyRent, actualMoneyReceived, advanceAdjusted, paymentDate: text(form, "payment_date"),
+      paymentMethod: text(form, "payment_method"), moneyReceiptNumber: `MM-MR-${id}`, rentReceiptNumber: `MM-RR-${id}`,
+    });
+    transactionId = await recordRentReceipt(profile.id, rentPayload);
+  } catch (error) {
+    redirect(`${path}?error=${encodeURIComponent(error instanceof Error ? error.message : "Unable to record rent.")}`);
+  }
+  revalidatePath(path, "layout");
+  redirect(`${path}?message=${encodeURIComponent("Rent recorded.")}&rentReceipt=${transactionId}`);
+}
+
+export async function changeRentReceiptAction(id: string, operation: "edit" | "delete", form: FormData) {
+  const { profile } = await requireProfile(["admin"]);
+  const updatedAt = text(form, "updated_at");
+  if (!uuidPattern.test(id) || !updatedAt || !Number.isFinite(Date.parse(updatedAt))) {
+    redirect(`${rentHistory}?error=${encodeURIComponent("Open the receipt again before trying this change.")}`);
+  }
+  if (operation !== "edit" && operation !== "delete") redirect(rentHistory);
+  try {
+    const changes = operation === "edit" ? parseRentReceiptChange(form) : null;
+    await changeRentReceipt(profile.id, id, updatedAt, changes);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to change the rent receipt.";
+    redirect(`${path}/${id}/rent-receipt/${operation}?error=${encodeURIComponent(message)}`);
+  }
+  revalidatePath(path, "layout");
+  redirect(`${rentHistory}?message=${encodeURIComponent(operation === "edit" ? "Rent receipt updated." : "Rent receipt deleted.")}`);
 }
 
 export async function createAdvancePaymentAction(form: FormData) {
@@ -152,16 +181,28 @@ export async function createExpenseAction(form: FormData) {
 
 export async function createOwnerAllocationAction(form: FormData) {
   await requireProfile(["admin"]);
+  const sourceType = text(form, "source_type");
+  const sourceId = text(form, "source_id");
+  const amount = Number(text(form, "amount"));
+  if (sourceType === "rent_income") {
+    try {
+      await allocateRentOwnerShares(sourceId, amount);
+    } catch (error) {
+      ownerValidationError(error);
+    }
+    revalidatePath(path);
+    redirect(path);
+  }
+  if (sourceType !== "expense") throw new Error("Invalid allocation source.");
+  const expense = await getExpense(sourceId);
+  if (expense.rent_advance_receipt_id) ownerValidationError(new Error("This advance adjustment expense is already distributed by its rent receipt."));
   const owners = (await listActiveOwners()).map((owner) => ({ id: owner.id, percentage: Number(owner.ownership_percentage) }));
   try {
     validateOwnershipPercentages(owners);
   } catch {
     ownerValidationError(new Error("Active ownership percentages must total exactly 100% before allocation."));
   }
-  const sourceType = text(form, "source_type");
-  if (sourceType !== "rent_income" && sourceType !== "expense") throw new Error("Invalid allocation source.");
-  if (sourceType === "rent_income" && await hasOwnerAllocationsForSource(sourceType, text(form, "source_id"))) throw new Error("This rent transaction already has owner allocations.");
-  const rows = buildOwnerAllocationRows(sourceType, text(form, "source_id"), Number(text(form, "amount")), owners);
+  const rows = buildOwnerAllocationRows(sourceType, sourceId, amount, owners);
   await insertOwnerAllocations(rows);
   revalidatePath(path); redirect(path);
 }
