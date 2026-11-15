@@ -35,8 +35,9 @@ export function buildMonthlyOwnerIncomeReport(input: { rents: Record<string, unk
   const getMonth = (key: string) => months.get(key) ?? (() => { const value = { rentIncome: 0, expenses: 0, payments: 0, owners: new Map<string, { name: string; percentage: number; amount: number }>() }; months.set(key, value); return value; })();
   for (const rent of input.rents) { const month = getMonth(monthOf(rent.payment_date)); month.rentIncome += Number(rent.total_rent_settled ?? 0); month.payments += 1; }
   for (const expense of input.expenses) getMonth(monthOf(expense.expense_date)).expenses += Number(expense.amount ?? 0);
+  const rentDates = new Map(input.rents.map((rent) => [rent.id, rent.payment_date]));
   for (const allocation of input.allocations) {
-    const month = getMonth(monthOf(allocation.created_at));
+    const month = getMonth(monthOf(rentDates.get(allocation.source_id) ?? allocation.created_at));
     const ownerId = String(allocation.owner_id);
     const existing = month.owners.get(ownerId) ?? { name: String(allocation.owner_name ?? ""), percentage: Number(allocation.ownership_percentage_snapshot ?? 0), amount: 0 };
     existing.amount += Number(allocation.allocated_amount ?? 0);

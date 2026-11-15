@@ -95,10 +95,10 @@ export async function updateTenant(id: string, input: TenantInput) {
   if (error) throw new Error(error.message || "Unable to update tenant.");
 }
 
-export async function insertRentTransaction(input: Record<string, unknown>) {
-  const { data, error } = await db().from("rent_transactions").insert(input).select("id").single();
+export async function recordRentReceipt(actorId: string, input: Record<string, unknown>) {
+  const { data, error } = await db().rpc("record_rent_receipt", { actor_id: actorId, requested_rent: input });
   if (error || !data) throw new Error(error?.message || "Unable to create rent transaction.");
-  return data.id as string;
+  return String(data);
 }
 
 export async function insertAdvancePayment(input: Record<string, unknown>) {
@@ -115,9 +115,17 @@ export async function getTenantUnit(tenantId: string) {
   return { tenantId: data.id as string, tenantName: String(data.name ?? ""), phoneNumber: data.phone_number ? String(data.phone_number) : null, unitId: data.unit_id as string, unitCode: unit.unit_code, unitDescription: String(data.unit_description ?? unit.unit_code), monthlyRent: Number(data.monthly_rent), defaultMonthlyAdvanceAdjustment: Number(data.default_monthly_advance_adjustment ?? 0) };
 }
 
-export async function deleteRentTransaction(id: string) {
-  const { error } = await db().from("rent_transactions").delete().eq("id", id);
-  if (error) throw new Error(error.message || "Unable to roll back rent transaction.");
+export async function changeRentReceipt(actorId: string, id: string, updatedAt: string, changes: Record<string, unknown> | null) {
+  const { error } = await db().rpc("change_rent_receipt", {
+    actor_id: actorId,
+    receipt_id: id,
+    expected_updated_at: updatedAt,
+    changes,
+  });
+  if (error) {
+    console.error("Murshida Manzil rent receipt change failed", { code: error.code });
+    throw new Error(error.code === "P0001" ? error.message : "Unable to save the rent receipt change.");
+  }
 }
 
 export async function updateTenantDefaultAdvanceAdjustment(id: string, value: number) {
@@ -189,8 +197,9 @@ export async function listOwnerAllocations() {
 }
 
 export async function getRentTransaction(id: string) {
-  const { data, error } = await db().from("rent_transactions").select("id,money_receipt_number,rent_receipt_number,rent_month,rent_year,monthly_rent,actual_money_received,advance_adjusted,total_rent_settled,advance_balance_before,advance_balance_after,payment_date,payment_method,notes,tenant_id,unit_code_snapshot,unit_description_snapshot,tenants:tenant_id(name,phone_number)").eq("id", id).maybeSingle();
-  if (error || !data) throw new Error("Rent transaction was not found.");
+  const { data, error } = await db().from("rent_transactions").select("id,money_receipt_number,rent_receipt_number,rent_month,rent_year,monthly_rent,actual_money_received,advance_adjusted,total_rent_settled,advance_balance_before,advance_balance_after,payment_date,payment_method,notes,reference_number,updated_at,auto_advance_expense,tenant_id,unit_code_snapshot,unit_description_snapshot,tenants:tenant_id(name,phone_number)").eq("id", id).maybeSingle();
+  if (error) throw new Error("Unable to load rent receipt.");
+  if (!data) return null;
   const tenant = data.tenants as { name?: string; phone_number?: string | null } | null;
   return { ...data, tenantName: tenant?.name ?? "", tenantPhone: tenant?.phone_number ?? null, receiptNumber: data.money_receipt_number, rentReceiptNumber: data.rent_receipt_number };
 }
@@ -211,10 +220,9 @@ export async function recordExpenseWithAllocations(input: Record<string, unknown
   return String(data);
 }
 
-export async function hasOwnerAllocationsForSource(sourceType: "rent_income" | "expense", sourceId: string) {
-  const { data, error } = await db().from("owner_allocations").select("id").eq("source_type", sourceType).eq("source_id", sourceId).limit(1);
-  if (error) throw new Error(error.message || "Unable to check existing owner allocations.");
-  return (data ?? []).length > 0;
+export async function allocateRentOwnerShares(receiptId: string, expectedAmount: number) {
+  const { error } = await db().rpc("allocate_rent_owner_shares", { receipt_id: receiptId, expected_amount: expectedAmount });
+  if (error) throw new Error(error.message || "Unable to allocate rent owner shares.");
 }
 
 export async function listOwnerRentAccountOwners() {
@@ -231,23 +239,26 @@ export async function listOwnerRentAccountOwners() {
 }
 
 export async function getExpense(id: string) {
-  const { data, error } = await db().from("expenses").select("id,expense_date,description,amount,category,paid_to,payment_method,notes,voucher_number,owner_allocation_mode").eq("id", id).maybeSingle();
+  const { data, error } = await db().from("expenses").select("id,expense_date,description,amount,category,paid_to,payment_method,notes,voucher_number,owner_allocation_mode,rent_advance_receipt_id").eq("id", id).maybeSingle();
   if (error || !data) throw new Error("Expense was not found.");
   return data;
 }
 
 export async function getOwnerIncomeReport(from?: string, to?: string) {
-  let allocationQuery = db().from("owner_allocations").select("id,owner_id,source_type,source_id,ownership_percentage_snapshot,allocated_amount,created_at,owners:owner_id(name)").eq("source_type", "rent_income").order("created_at");
-  if (from) allocationQuery = allocationQuery.gte("created_at", `${from}T00:00:00.000Z`);
-  if (to) allocationQuery = allocationQuery.lte("created_at", `${to}T23:59:59.999Z`);
-  const { data: allocations, error } = await allocationQuery;
-  if (error) throw new Error("Unable to load owner income report.");
-  let rentQuery = db().from("rent_transactions").select("payment_date,total_rent_settled");
+  let rentQuery = db().from("rent_transactions").select("id,payment_date,total_rent_settled");
   if (from) rentQuery = rentQuery.gte("payment_date", from);
   if (to) rentQuery = rentQuery.lte("payment_date", to);
   const { data: rents, error: rentError } = await rentQuery;
   if (rentError) throw new Error("Unable to load rent income report.");
-  const rows = (allocations ?? []).map((row) => ({ ...row, owner_name: (row.owners as { name?: string } | null)?.name ?? "" }));
+  const rentIds = (rents ?? []).map((rent) => rent.id);
+  const rows = [];
+  for (let i = 0; i < rentIds.length; i += 100) {
+    const { data, error } = await db().from("owner_allocations")
+      .select("id,owner_id,source_type,source_id,ownership_percentage_snapshot,allocated_amount,created_at,owners:owner_id(name)")
+      .eq("source_type", "rent_income").in("source_id", rentIds.slice(i, i + 100)).order("created_at");
+    if (error) throw new Error("Unable to load owner income report.");
+    rows.push(...(data ?? []).map((row) => ({ ...row, owner_name: (row.owners as { name?: string } | null)?.name ?? "" })));
+  }
   let expenseQuery = db().from("expenses").select("expense_date,amount");
   if (from) expenseQuery = expenseQuery.gte("expense_date", from);
   if (to) expenseQuery = expenseQuery.lte("expense_date", to);
@@ -274,7 +285,7 @@ export async function getOwnerRentAccountData(ownerId: string) {
 }
 
 export async function listRentReportRows() {
-  const { data, error } = await db().from("rent_transactions").select("id,rent_receipt_number,payment_date,payment_method,monthly_rent,tenant_id,unit_id,unit_code_snapshot,unit_description_snapshot,rent_month,rent_year,total_rent_settled,actual_money_received,advance_adjusted,advance_balance_before,advance_balance_after,tenants:tenant_id(name,phone_number)").order("payment_date", { ascending: false });
+  const { data, error } = await db().from("rent_transactions").select("id,rent_receipt_number,payment_date,payment_method,monthly_rent,tenant_id,unit_id,unit_code_snapshot,unit_description_snapshot,rent_month,rent_year,total_rent_settled,actual_money_received,advance_adjusted,advance_balance_before,advance_balance_after,tenants:tenant_id(name,phone_number)").order("payment_date", { ascending: false }).order("created_at", { ascending: false }).order("id", { ascending: false });
   if (error) throw new Error("Unable to load rent report.");
   return (data ?? []).map((row) => ({ ...row, tenant_name: (row.tenants as { name?: string } | null)?.name ?? "", tenant_phone: (row.tenants as { phone_number?: string | null } | null)?.phone_number ?? null }));
 }
@@ -286,7 +297,7 @@ export async function listAdvanceReportRows() {
 }
 
 export async function listExpenseReportRows() {
-  const { data, error } = await db().from("expenses").select("id,expense_date,description,amount,category,paid_to,payment_method,notes,voucher_number,owner_allocation_mode").order("expense_date", { ascending: false });
+  const { data, error } = await db().from("expenses").select("id,expense_date,description,amount,category,paid_to,payment_method,notes,voucher_number,owner_allocation_mode,rent_advance_receipt_id").order("expense_date", { ascending: false });
   if (error) throw new Error("Unable to load expense report.");
   return data ?? [];
 }
