@@ -25,6 +25,7 @@ export const CUSTOMER_AGING_BUCKETS = [
 
 export type CustomerReceivablesListParams = {
   q?: string;
+  customer?: string;
   page?: string;
   pageSize?: string;
   paymentStatus?: string;

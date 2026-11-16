@@ -1,6 +1,7 @@
 import "server-only";
 
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import type { CustomerSearchOption } from "@/lib/customers/search";
 import {
   mergeCustomerMetricRows,
   mergeCustomerSummaryRows,
@@ -531,12 +532,19 @@ export async function getReceivablesDashboard(access: ReceivablesAccess) {
 
 export async function getCustomerReceivables(
   params: CustomerReceivablesListParams,
-  access: Pick<ReceivablesAccess, "canViewCustomer" | "salesScope">,
+  access: Pick<ReceivablesAccess, "canViewCustomer" | "salesScope"> & {
+    visibleCustomerIds: string[] | null;
+  },
 ) {
   const filters = normalizeCustomerReceivablesParams(params);
   const salesScope = access.salesScope ?? { kind: "none" as const };
-  if (!access.canViewCustomer || salesScope.kind === "none") {
-    return { rows: [], count: 0, ...filters };
+  const customerId = typeof params.customer === "string" && UUID_PATTERN.test(params.customer)
+    ? params.customer.toLowerCase()
+    : "";
+  const visible = access.visibleCustomerIds;
+  if (!access.canViewCustomer || salesScope.kind === "none" || visible?.length === 0 ||
+    (params.customer && (!customerId || (visible !== null && !visible.includes(customerId))))) {
+    return { rows: [], count: 0, customerId, ...filters };
   }
   const db = createSupabaseAdminClient();
   let query = db
@@ -545,6 +553,8 @@ export async function getCustomerReceivables(
   if (salesScope.kind === "own") {
     query = query.eq("responsible_profile_id", salesScope.profileId);
   }
+  if (customerId) query = query.eq("customer_id", customerId);
+  else if (visible !== null) query = query.in("customer_id", visible);
   if (filters.search) {
     query = query.or(
       [
@@ -569,6 +579,7 @@ export async function getCustomerReceivables(
   const result = await query
     .order("outstanding_amount", { ascending: false })
     .order("issue_date", { ascending: false })
+    .order("source_id")
     .range(
       (filters.page - 1) * filters.pageSize,
       filters.page * filters.pageSize - 1,
@@ -583,6 +594,7 @@ export async function getCustomerReceivables(
   return {
     rows: ((result.data ?? []) as unknown as CustomerDetailViewRow[]).map(mapCustomerRow),
     count: result.count ?? 0,
+    customerId,
     ...filters,
   };
 }
@@ -611,36 +623,56 @@ async function getRecentCustomerReceivables(salesScope: SalesVisibilityScope) {
   return ((result.data ?? []) as unknown as CustomerDetailViewRow[]).map(mapCustomerRow);
 }
 
-export async function getCustomerReceivableSummaries(
+export async function getCustomerReceivableOverview(
   salesScope: SalesVisibilityScope,
+  visibleCustomerIds: string[] | null,
 ) {
-  if (salesScope.kind === "none") return [];
+  const customers = new Map<string, CustomerSearchOption>();
+  const summaries: CustomerSummary[] = [];
+  if (salesScope.kind === "none" || visibleCustomerIds?.length === 0) {
+    return { customers: [], summaries };
+  }
   const db = createSupabaseAdminClient();
-  let query = db.from("customer_receivables_summary_v").select("*");
-  if (salesScope.kind === "own") {
-    query = query.eq("responsible_profile_id", salesScope.profileId);
+  const visible = visibleCustomerIds === null ? null : new Set(visibleCustomerIds);
+  const pageSize = 500;
+  for (let offset = 0; ; offset += pageSize) {
+    let query = db.from("customer_receivables_summary_v").select("*");
+    if (salesScope.kind === "own") query = query.eq("responsible_profile_id", salesScope.profileId);
+    const result = await query.order("customer_id").order("currency").order("responsible_profile_id")
+      .range(offset, offset + pageSize - 1);
+    if (result.error) {
+      console.error("Customer Receivables summary query failed", {
+        code: result.error.code,
+        message: result.error.message,
+      });
+      throw new Error("Unable to load Customer Receivables summaries.");
+    }
+    const rows = result.data ?? [];
+    for (const row of rows) {
+      const customerId = String(row.customer_id);
+      if (visible !== null && !visible.has(customerId)) continue;
+      const customerName = row.customer_name ? String(row.customer_name) : null;
+      const companyName = row.company_name ? String(row.company_name) : null;
+      customers.set(customerId, {
+        id: customerId,
+        full_name: customerName ?? row.party_name,
+        company_name: companyName,
+        email: row.customer_email,
+        phone: row.customer_phone,
+      });
+      summaries.push({
+        customerId, customerName, companyName,
+        currency: String(row.currency),
+        totalInvoiced: Number(row.total_invoiced),
+        totalPaid: Number(row.total_paid),
+        totalOutstanding: Number(row.total_outstanding),
+        totalOverdue: Number(row.total_overdue),
+        receivableCount: Number(row.sale_count),
+      });
+    }
+    if (rows.length < pageSize) break;
   }
-  const result = await query.order("total_outstanding", { ascending: false });
-  if (result.error) {
-    console.error("Customer Receivables summary query failed", {
-      code: result.error.code,
-      message: result.error.message,
-    });
-    throw new Error("Unable to load Customer Receivables summaries.");
-  }
-  return mergeCustomerSummaryRows(
-    (result.data ?? []).map((row) => ({
-      customerId: String(row.customer_id),
-      customerName: row.customer_name ? String(row.customer_name) : null,
-      companyName: row.company_name ? String(row.company_name) : null,
-      currency: String(row.currency),
-      totalInvoiced: Number(row.total_invoiced),
-      totalPaid: Number(row.total_paid),
-      totalOutstanding: Number(row.total_outstanding),
-      totalOverdue: Number(row.total_overdue),
-      receivableCount: Number(row.sale_count),
-    } satisfies CustomerSummary)),
-  );
+  return { customers: [...customers.values()], summaries: mergeCustomerSummaryRows(summaries) };
 }
 
 async function getCustomerReceivableMetrics(salesScope: SalesVisibilityScope) {

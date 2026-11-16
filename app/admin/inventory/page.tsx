@@ -130,6 +130,7 @@ const quickActions: readonly InventoryAction[] = [
   { label: "Manage attributes", href: "/admin/attributes", icon: "attributes", tone: "violet" },
   { label: "Transfer stock", href: "/admin/inventory/adjustments/new", icon: "transfer", tone: "amber" },
   { label: "Manage warehouses", href: "/admin/warehouses", icon: "warehouse", tone: "navy" },
+  { label: "Warehouse Stock Report", href: "/admin/inventory/warehouse-report", icon: "list", tone: "blue" },
 ];
 
 const metricTone: Record<InventoryMetric, { icon: InventoryIconName; accent: string; iconSurface: string; iconText: string }> = {
