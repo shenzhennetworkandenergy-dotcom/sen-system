@@ -181,7 +181,7 @@
 
 .reportControls {
   display: grid;
-  grid-template-columns: minmax(180px, 1.5fr) repeat(3, minmax(130px, 1fr)) auto auto auto;
+  grid-template-columns: minmax(165px, 1.5fr) repeat(3, minmax(116px, 1fr)) auto auto auto;
   align-items: end;
   gap: 10px;
   margin-bottom: 18px;
@@ -199,6 +199,7 @@
 .printAction { position: relative; z-index: 2; }
 .document > .printAction { position: absolute; top: 22px; right: 26px; }
 .printAction button { min-height: 42px; border-radius: 8px; background: #073f6b; }
+.reportControls .printAction button { font-size: 13px; white-space: nowrap; }
 
 .ownerInfo { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
 .infoCard { min-height: 92px; padding: 13px; }
@@ -221,6 +222,14 @@
 .reportTable td { padding: 10px 8px; border-top: 1px solid #b8dcef; color: #183f5b; vertical-align: top; }
 .reportTable th:nth-last-child(-n+3), .reportTable td:nth-last-child(-n+3) { text-align: right; }
 .monthlyTotal { margin: 0; padding: 10px 14px; border-top: 1px solid #9ed3ed; color: #073f6b; background: #f4fbff; font-weight: 900; text-align: right; }
+
+.balanceDates { margin: 0 0 10px; color: #52758e; font-size: 12px; }
+.ownerBalanceTable th:first-child { text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.ownerBalanceTable tbody th { padding: 10px 8px; border-top: 1px solid #b8dcef; background: #fff; }
+.ownerBalanceTable td { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ownerBalanceTable tfoot th,
+.ownerBalanceTable tfoot td { background: #e0f3ff; color: #073f6b; font-weight: 900; }
+.ownerBalanceTable tr { break-inside: avoid; }
 
 .grandTotal {
   display: flex;
@@ -270,13 +279,16 @@
   text-align: right;
 }
 
+@media (max-width: 1120px) {
+  .reportControls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 @media (max-width: 980px) {
   .documentScreen { padding: 10px; overflow-x: auto; }
   .letterhead { grid-template-columns: 86px 130px minmax(240px, 1fr); }
   .generated { grid-column: 1 / -1; justify-self: end; }
   .seal { width: 80px; height: 80px; }
   .architecture { height: 90px; }
-  .reportControls { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ownerInfo { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .voucherDetails { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -334,6 +346,8 @@
   .tableWrap { overflow: visible; }
   .reportTable { font-size: 10px; }
   .reportTable th, .reportTable td { padding: 4px 6px; }
+  .ownerBalanceTable tbody th { padding: 4px 6px; }
+  .ownerBalanceTable tfoot { display: table-row-group; }
   .monthlyTotal { padding: 6px 10px; }
   .grandTotal { margin-top: 8px; padding: 8px 12px; font-size: 14px; break-inside: auto; }
   .grandTotal strong { min-width: 180px; padding: 6px 14px; font-size: 20px; }

@@ -23,7 +23,7 @@ test("owner rent account keeps its controls and data while using formal print st
   assert.match(ownerPage, /murshida-architecture\.png/);
   assert.match(ownerPage, /মালিক ভাড়া হিসাব বিবরণী/);
   for (const control of ["owner", "year", "from", "to"]) assert.match(ownerPage, new RegExp(`name="${control}"`));
-  assert.match(ownerPage, /\?owner=\$\{selectedOwner\.id\}&beginning=1/);
+  assert.match(ownerPage, /\?owner=\$\{selection\}&beginning=1/);
   assert.match(ownerPage, /transaction\.eligibleRentIncome/);
   assert.match(ownerPage, /transaction\.ownerPercentage/);
   assert.match(ownerPage, /transaction\.ownerShare/);
