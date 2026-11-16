@@ -1,11 +1,15 @@
 import { connection } from "next/server";
+import Link from "next/link";
 
+import { CustomerFilter } from "@/components/customers/CustomerFilter";
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { ReceivablesNavigation } from "@/components/receivables/ReceivablesNavigation";
 import { requireAllPermissions } from "@/lib/auth/permissions";
+import { customerPrimaryName } from "@/lib/customers/search";
+import { getVisibleCustomerIds } from "@/lib/customers/visibility";
 import {
   getCustomerReceivables,
-  getCustomerReceivableSummaries,
+  getCustomerReceivableOverview,
 } from "@/lib/receivables/data";
 import { formatCommercialTerms } from "@/lib/sales/commercial-terms";
 import { resolveSalesVisibilityScope } from "@/lib/sales/visibility";
@@ -42,14 +46,20 @@ export default async function CustomerReceivablesPage({
     profileId: profile.id,
     permissions,
   });
-  const [data, summaries] = await Promise.all([
-    getCustomerReceivables(params, { canViewCustomer: true, salesScope }),
-    getCustomerReceivableSummaries(salesScope),
+  const visibleCustomerIds = salesScope.kind === "none" ? [] : await getVisibleCustomerIds(profile);
+  const [data, overview] = await Promise.all([
+    getCustomerReceivables(params, { canViewCustomer: true, salesScope, visibleCustomerIds }),
+    getCustomerReceivableOverview(salesScope, visibleCustomerIds),
   ]);
+  const selected = overview.customers.find((customer) => customer.id === data.customerId);
+  const summaries = params.customer
+    ? overview.summaries.filter((summary) => summary.customerId === data.customerId)
+    : overview.summaries.slice(0, 6);
   const canViewLoans = isAdmin || permissions.has("receivables.view_loans");
   const pageHref = (page: number) => {
     const query = new URLSearchParams();
     if (data.search) query.set("q", data.search);
+    if (data.customerId) query.set("customer", data.customerId);
     if (data.paymentStatus) query.set("paymentStatus", data.paymentStatus);
     if (data.receivablesStatus) query.set("receivablesStatus", data.receivablesStatus);
     if (data.agingBucket) query.set("agingBucket", data.agingBucket);
@@ -57,6 +67,7 @@ export default async function CustomerReceivablesPage({
     if (data.dueTo) query.set("dueTo", data.dueTo);
     if (data.salesperson) query.set("salesperson", data.salesperson);
     if (data.outstandingOnly) query.set("outstandingOnly", "1");
+    if (data.pageSize !== 25) query.set("pageSize", String(data.pageSize));
     query.set("page", String(page));
     return `?${query.toString()}`;
   };
@@ -79,9 +90,12 @@ export default async function CustomerReceivablesPage({
       ) : null}
       {summaries.length ? (
         <section className="mb-4 rounded-2xl border bg-white p-4 shadow-sm">
-          <h2 className="text-lg font-semibold text-[var(--primary)]">Customer outstanding summary</h2>
+          <h2 className="text-lg font-semibold text-[var(--primary)]">
+            {selected ? `Total outstanding for ${customerPrimaryName(selected)}` : "Customer outstanding summary"}
+          </h2>
+          {selected ? <p className="mt-1 text-sm text-[var(--muted-text)]">Totals cover all visible bills for this customer. The filters below refine the bill list.</p> : null}
           <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {summaries.slice(0, 6).map((summary) => (
+            {summaries.map((summary) => (
               <article key={`${summary.customerId}-${summary.currency}`} className="rounded-xl border bg-[var(--muted-surface)] p-3">
                 <div className="flex items-start justify-between gap-3">
                   <div>
@@ -93,7 +107,7 @@ export default async function CustomerReceivablesPage({
                 <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
                   <div><dt className="text-[var(--muted-text)]">Invoiced</dt><dd className="font-semibold">{money(summary.totalInvoiced, summary.currency)}</dd></div>
                   <div><dt className="text-[var(--muted-text)]">Paid</dt><dd className="font-semibold text-green-800">{money(summary.totalPaid, summary.currency)}</dd></div>
-                  <div><dt className="text-[var(--muted-text)]">Outstanding</dt><dd className="font-bold text-[var(--primary)]">{money(summary.totalOutstanding, summary.currency)}</dd></div>
+                  <div><dt className="text-[var(--muted-text)]">Outstanding</dt><dd className={selected ? "text-xl font-bold text-[var(--primary)]" : "font-bold text-[var(--primary)]"}>{money(summary.totalOutstanding, summary.currency)}</dd></div>
                   <div><dt className="text-[var(--muted-text)]">Overdue</dt><dd className="font-bold text-red-700">{money(summary.totalOverdue, summary.currency)}</dd></div>
                 </dl>
               </article>
@@ -102,6 +116,7 @@ export default async function CustomerReceivablesPage({
         </section>
       ) : null}
       <form className="mb-4 grid gap-2 rounded-xl border bg-white p-3 md:grid-cols-2 xl:grid-cols-4">
+        <CustomerFilter key={selected?.id} customers={overview.customers} initialCustomerId={selected?.id} />
         <input
           name="q"
           defaultValue={data.search}
@@ -151,7 +166,7 @@ export default async function CustomerReceivablesPage({
                 <td className="p-3">{row.daysOverdue ?? "—"}</td>
                 <td className="p-3">{label(row.agingBucket)}</td>
                 <td className="p-3">{row.lastPaymentDate ?? "—"}</td>
-                <td className="p-3"><a href={`/admin/sales/${row.sourceId}`} className="rounded-lg border px-3 py-2 font-semibold">Open Sale</a></td>
+                <td className="p-3"><Link href={`/admin/sales/${row.sourceId}`} className="rounded-lg border px-3 py-2 font-semibold">Open Sale</Link></td>
               </tr>
             ))}
           </tbody>

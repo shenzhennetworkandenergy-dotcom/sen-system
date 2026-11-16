@@ -1,0 +1,130 @@
+.report {
+  color: #14253a;
+  background: white;
+  border: 1px solid #cbd5e1;
+  border-radius: 1rem;
+}
+
+.printReport {
+  max-width: 870px;
+  margin-inline: auto;
+}
+
+.reportHeader {
+  padding: 1.4rem;
+  border-bottom: 2px solid #23456d;
+}
+
+.company {
+  color: #284b73;
+  font-weight: 700;
+}
+
+.reportHeader h2 {
+  font-size: 1.55rem;
+  font-weight: 800;
+  margin: 0.2rem 0 0.7rem;
+}
+
+.metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1.5rem;
+  font-size: 0.875rem;
+}
+
+.metadata dt { font-weight: 700; }
+.metadata dd { overflow-wrap: anywhere; }
+
+.tableWrapper { overflow-x: auto; }
+
+.stockTable {
+  width: 100%;
+  min-width: 600px;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.productColumn { width: 40%; }
+.quantityColumn { width: 11%; }
+.priceColumn { width: 19%; }
+
+.stockTable th,
+.stockTable td {
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid #cbd5e1;
+  vertical-align: top;
+  text-align: right;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+.stockTable thead th { background: #e8eff7; }
+.stockTable th:first-child { text-align: left; }
+.stockTable tbody th span {
+  display: block;
+  font-weight: 400;
+  font-size: 0.8em;
+  color: #46566c;
+}
+
+.stockTable .empty { text-align: center; padding: 1.3rem; }
+.reportFooter { padding: 1.2rem 1.4rem; }
+.totals { max-width: 440px; margin-left: auto; }
+.totals h3 { font-weight: 800; margin-bottom: 0.65rem; }
+.totals dl div { display: flex; justify-content: space-between; gap: 1rem; padding: 0.2rem 0; }
+.totals dd { font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+.totals p { margin-top: 0.6rem; font-size: 0.82em; color: #46566c; }
+.valueTotal { border-top: 1px solid #cbd5e1; }
+
+.signature {
+  width: 15rem;
+  max-width: 100%;
+  margin-top: 3.2rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid #14253a;
+  font-size: 0.85em;
+}
+
+.signature strong { display: block; overflow-wrap: anywhere; }
+
+@page warehouse-stock {
+  size: A4 portrait;
+  margin: 14mm;
+}
+
+@media print {
+  :global(html):has(.printReport),
+  :global(body):has(.printReport) {
+    display: block;
+    min-height: 0;
+    height: auto;
+  }
+
+  .printReport {
+    page: warehouse-stock;
+    max-width: none;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    print-color-adjust: exact;
+  }
+
+  .printReport .reportHeader {
+    padding: 0 0 3mm;
+    break-inside: avoid;
+    break-after: avoid;
+  }
+
+  .printReport .reportHeader h2 { font-size: 19pt; }
+  .printReport .metadata { font-size: 9pt; }
+  .printReport .tableWrapper { overflow: visible; }
+  .printReport .stockTable { min-width: 0; font-size: 9pt; }
+  .printReport .stockTable thead { display: table-header-group; }
+  .printReport .stockTable tr { break-inside: avoid; }
+  .printReport .stockTable th,
+  .printReport .stockTable td { padding: 1.6mm 2mm; }
+  .printReport .reportFooter { padding: 4mm 0 0; break-inside: avoid; }
+  .printReport .signature { margin-top: 13mm; }
+}

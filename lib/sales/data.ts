@@ -1,4 +1,5 @@
 import "server-only";
+import type { CustomerSearchOption } from "@/lib/customers/search";
 import { getVisibleCustomerIds, type CustomerVisibilityActor } from "@/lib/customers/visibility";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { normalizeSalePaymentAccountingLink } from "@/lib/sales/payment-accounting";
@@ -13,6 +14,24 @@ function assertResult(context: string, error: { code?: string; message?: string;
   throw new Error(context);
 }
 
+async function getSalesFilterCustomers(visibleCustomerIds: string[] | null) {
+  if (visibleCustomerIds?.length === 0) return [];
+  const visible = visibleCustomerIds === null ? null : new Set(visibleCustomerIds);
+  const customers: CustomerSearchOption[] = [];
+  const pageSize = 500;
+  const db = createSupabaseAdminClient();
+  for (let offset = 0; ; offset += pageSize) {
+    const result = await db.from("profiles")
+      .select("id,full_name,company_name,email,phone")
+      .eq("role", "customer").eq("status", "active").is("archived_at", null)
+      .order("full_name").order("id").range(offset, offset + pageSize - 1);
+    assertResult("Unable to load sales customers.", result.error);
+    const rows = result.data ?? [];
+    customers.push(...rows.filter((customer) => visible === null || visible.has(customer.id)));
+    if (rows.length < pageSize) return customers;
+  }
+}
+
 export async function getSalesDashboard(filters: SalesFilters, actor: CustomerVisibilityActor) {
   const db = createSupabaseAdminClient();
   const visibleCustomerIds = await getVisibleCustomerIds(actor);
@@ -25,7 +44,12 @@ export async function getSalesDashboard(filters: SalesFilters, actor: CustomerVi
   let query = db.from("sales_orders").select("*,customer:profiles!sales_orders_customer_profile_id_fkey(id,full_name,email,company_name),employee:profiles!sales_orders_created_by_fkey(id,full_name,email),shipments(id,status)", { count: "exact" });
   if (scopedCustomerIds) query = query.in("customer_profile_id", scopedCustomerIds);
   if (filters.ownProfileId) query = query.eq("created_by", filters.ownProfileId);
-  if (filters.customer) query = query.eq("customer_profile_id", filters.customer);
+  if (filters.customer) {
+    const customerId = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(filters.customer)
+      ? filters.customer
+      : "00000000-0000-0000-0000-000000000000";
+    query = query.eq("customer_profile_id", customerId);
+  }
   if (filters.employee) query = query.eq("created_by", filters.employee);
   if (filters.status) query = query.eq("status", filters.status);
   if (filters.payment) query = query.eq("payment_status", filters.payment);
@@ -44,16 +68,14 @@ export async function getSalesDashboard(filters: SalesFilters, actor: CustomerVi
     monthSalesQuery = monthSalesQuery.in("customer_profile_id", scopedCustomerIds);
     allSalesQuery = allSalesQuery.in("customer_profile_id", scopedCustomerIds);
   }
-  let customerQuery = db.from("profiles").select("id,full_name,email").eq("role", "customer").eq("status", "active").order("full_name").limit(500);
-  if (visibleCustomerIds !== null) customerQuery = customerQuery.in("id", visibleCustomerIds.length ? visibleCustomerIds : ["00000000-0000-0000-0000-000000000000"]);
   const [todaySales, monthSales, allSales, customers, employees] = await Promise.all([
     todaySalesQuery,
     monthSalesQuery,
     allSalesQuery,
-    customerQuery,
+    getSalesFilterCustomers(visibleCustomerIds),
     db.from("profiles").select("id,full_name,email").in("role", ["employee", "admin"]).eq("status", "active").order("full_name").limit(500),
   ]);
-  for (const [name, result] of Object.entries({ todaySales, monthSales, allSales, customers, employees })) assertResult(`Unable to load sales ${name}.`, result.error);
+  for (const [name, result] of Object.entries({ todaySales, monthSales, allSales, employees })) assertResult(`Unable to load sales ${name}.`, result.error);
   const all = allSales.data ?? [], sum = (rows: { total_amount: number | string }[]) => rows.reduce((total, row) => total + Number(row.total_amount), 0);
   const metrics = {
     today: sum(todaySales.data ?? []),
@@ -65,7 +87,7 @@ export async function getSalesDashboard(filters: SalesFilters, actor: CustomerVi
     completed: all.filter((sale) => sale.status === "delivered").length,
     outstanding: all.filter((sale) => sale.status !== "cancelled").reduce((total, sale) => total + Math.max(Number(sale.total_amount) - Number(sale.paid_amount), 0), 0),
   };
-  return { sales: list.data ?? [], count: list.count ?? 0, page, size, metrics, customers: customers.data ?? [], employees: employees.data ?? [] };
+  return { sales: list.data ?? [], count: list.count ?? 0, page, size, metrics, customers, employees: employees.data ?? [] };
 }
 
 export async function getSaleAccessOwner(saleId: string) {
