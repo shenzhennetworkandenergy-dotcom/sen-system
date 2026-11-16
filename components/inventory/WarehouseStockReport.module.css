@@ -62,6 +62,7 @@
 
 .stockTable thead th { background: #e8eff7; }
 .stockTable th:first-child { text-align: left; }
+.stockTable tbody th[scope="row"] { white-space: normal; }
 .stockTable tbody th span {
   display: block;
   font-weight: 400;
