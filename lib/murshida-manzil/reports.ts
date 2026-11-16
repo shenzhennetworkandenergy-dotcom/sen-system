@@ -49,14 +49,16 @@ export function buildMonthlyOwnerIncomeReport(input: { rents: Record<string, unk
   return { monthly, ownerTotals: Array.from(ownerTotals.values()), totalRentIncome: monthly.reduce((sum, row) => sum + row.rentIncome, 0), totalDistributableIncome: monthly.reduce((sum, row) => sum + row.distributableIncome, 0), totalAllocated: monthly.reduce((sum, row) => sum + row.ownerTotal, 0), paymentCount: monthly.reduce((sum, row) => sum + row.payments, 0) };
 }
 
-export function buildOwnerRentAccountReport(input: {
+type OwnerRentAccountInput = {
   owner: { id: string; name: string; phone_number?: string | null; is_active: boolean; ownership_percentage: number };
   allocations: Record<string, unknown>[];
   rents: Record<string, unknown>[];
   expenses?: Record<string, unknown>[];
   from?: string;
   to?: string;
-}) {
+};
+
+export function buildOwnerRentAccountReport(input: OwnerRentAccountInput) {
   const rentsById = new Map(input.rents.map((rent) => [String(rent.id), rent]));
   const expensesById = new Map((input.expenses ?? []).map((expense) => [String(expense.id), expense]));
   const inRange = (date: string) => (!input.from || date >= input.from) && (!input.to || date <= input.to);
@@ -126,4 +128,23 @@ export function buildOwnerRentAccountReport(input: {
     fromBeginningExpenseShare,
     fromBeginningNetBalance: fromBeginningGrossRentShare - fromBeginningExpenseShare,
   };
+}
+
+export function buildAllOwnersRentAccountReport(
+  accounts: Omit<OwnerRentAccountInput, "from" | "to">[],
+  asOf: string,
+  period?: { from: string; to: string },
+) {
+  let periodTotalCents = 0;
+  let outstandingTotalCents = 0;
+  const rows = accounts.map((account) => {
+    const outstandingCents = Math.round(buildOwnerRentAccountReport({ ...account, to: asOf }).selectedPeriodNetBalance * 100) || 0;
+    const periodCents = period
+      ? Math.round(buildOwnerRentAccountReport({ ...account, ...period }).selectedPeriodNetBalance * 100) || 0
+      : outstandingCents;
+    periodTotalCents += periodCents;
+    outstandingTotalCents += outstandingCents;
+    return { owner: account.owner, periodBalance: periodCents / 100, outstandingBalance: outstandingCents / 100 };
+  });
+  return { rows, periodTotal: periodTotalCents / 100, outstandingTotal: outstandingTotalCents / 100 };
 }

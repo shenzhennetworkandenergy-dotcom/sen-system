@@ -225,14 +225,27 @@ export async function allocateRentOwnerShares(receiptId: string, expectedAmount:
   if (error) throw new Error(error.message || "Unable to allocate rent owner shares.");
 }
 
-export async function listOwnerRentAccountOwners() {
-  const [ownersResult, allocationsResult] = await Promise.all([
-    db().from("owners").select("id,name,phone_number,ownership_percentage,is_active").order("name"),
-    db().from("owner_allocations").select("owner_id").eq("source_type", "rent_income"),
-  ]);
-  if (ownersResult.error || allocationsResult.error) throw new Error("Unable to load owner rent account owners.");
-  const historicalIds = new Set((allocationsResult.data ?? []).map((row) => String(row.owner_id)));
-  return (ownersResult.data ?? []).filter((row) => Boolean(row.is_active) || historicalIds.has(String(row.id))).map((row) => ({
+async function readOwnerAccountPages<T>(
+  load: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
+  message: string,
+) {
+  const pageSize = 500;
+  const rows: T[] = [];
+  for (let offset = 0; ; offset += pageSize) {
+    const { data, error } = await load(offset, offset + pageSize - 1);
+    if (error || !data) throw new Error(message);
+    rows.push(...data);
+    if (data.length < pageSize) return rows;
+  }
+}
+
+export async function listOwnerRentAccountOwners(): Promise<OwnerRecord[]> {
+  const owners = await readOwnerAccountPages(
+    (from, to) => db().from("owners").select("id,name,phone_number,ownership_percentage,is_active,owner_allocations(id)")
+      .limit(1, { referencedTable: "owner_allocations" }).order("name").order("id").range(from, to),
+    "Unable to load owner rent account owners.",
+  );
+  return owners.filter((row) => row.is_active || row.owner_allocations.length > 0).map((row) => ({
     id: String(row.id), name: String(row.name), phone_number: row.phone_number ? String(row.phone_number) : null,
     ownership_percentage: Number(row.ownership_percentage), is_active: Boolean(row.is_active),
   }));
@@ -267,21 +280,47 @@ export async function getOwnerIncomeReport(from?: string, to?: string) {
   return { allocations: rows, rents: rents ?? [], expenses: expenses ?? [], eligibleRentIncome: (rents ?? []).reduce((sum, row) => sum + Number(row.total_rent_settled ?? 0), 0) };
 }
 
-export async function getOwnerRentAccountData(ownerId: string) {
-  const [ownerResult, allocationResult] = await Promise.all([
-    db().from("owners").select("id,name,phone_number,ownership_percentage,is_active").eq("id", ownerId).maybeSingle(),
-    db().from("owner_allocations").select("owner_id,source_type,source_id,ownership_percentage_snapshot,allocated_amount,created_at").eq("owner_id", ownerId).in("source_type", ["rent_income", "expense"]).order("created_at"),
+async function readOwnerAccountSources<T>(
+  ids: string[],
+  load: (ids: string[]) => PromiseLike<{ data: T[] | null; error: unknown }>,
+  message: string,
+) {
+  const rows: T[] = [];
+  for (let index = 0; index < ids.length; index += 100) {
+    const { data, error } = await load(ids.slice(index, index + 100));
+    if (error || !data) throw new Error(message);
+    rows.push(...data);
+  }
+  return rows;
+}
+
+export async function getOwnerRentAccountData(owners: OwnerRecord[]) {
+  if (!owners.length) return [];
+  const byOwner = new Map(owners.map((owner) => [owner.id, { owner, allocations: [] as Record<string, unknown>[] }]));
+  const query = db().from("owner_allocations")
+    .select("owner_id,source_type,source_id,ownership_percentage_snapshot,allocated_amount")
+    .order("created_at").order("id");
+  if (owners.length === 1) query.eq("owner_id", owners[0].id);
+  const allocations = await readOwnerAccountPages((from, to) => query.range(from, to), "Unable to load owner allocations.");
+  const rentIds = new Set<string>();
+  const expenseIds = new Set<string>();
+  for (const allocation of allocations) {
+    const account = byOwner.get(allocation.owner_id);
+    if (!account) continue;
+    account.allocations.push(allocation);
+    if (allocation.source_type === "rent_income") rentIds.add(allocation.source_id);
+    if (allocation.source_type === "expense") expenseIds.add(allocation.source_id);
+  }
+  const [rentRows, expenses] = await Promise.all([
+    readOwnerAccountSources([...rentIds], (ids) => db().from("rent_transactions")
+      .select("id,payment_date,rent_month,rent_year,total_rent_settled,unit_code_snapshot,unit_description_snapshot,tenants:tenant_id(name)").in("id", ids),
+    "Unable to load owner rent transactions."),
+    readOwnerAccountSources([...expenseIds], (ids) => db().from("expenses")
+      .select("id,expense_date,description,amount,category").in("id", ids),
+    "Unable to load owner expense allocations."),
   ]);
-  if (ownerResult.error || !ownerResult.data || allocationResult.error) throw new Error("Unable to load owner rent account.");
-  const allocationRows = allocationResult.data ?? [];
-  const rentIds = allocationRows.filter((row) => row.source_type === "rent_income").map((row) => String(row.source_id));
-  const expenseIds = allocationRows.filter((row) => row.source_type === "expense").map((row) => String(row.source_id));
-  const rentResult = rentIds.length ? await db().from("rent_transactions").select("id,payment_date,rent_month,rent_year,total_rent_settled,unit_code_snapshot,unit_description_snapshot,tenants:tenant_id(name,phone_number)").in("id", rentIds) : { data: [], error: null };
-  if (rentResult.error) throw new Error("Unable to load owner rent transactions.");
-  const expenseResult = expenseIds.length ? await db().from("expenses").select("id,expense_date,description,amount,category,paid_to,voucher_number").in("id", expenseIds) : { data: [], error: null };
-  if (expenseResult.error) throw new Error("Unable to load owner expense allocations.");
-  const rents = (rentResult.data ?? []).map((row) => ({ ...row, tenant_name: (row.tenants as { name?: string } | null)?.name ?? "", tenant_phone: (row.tenants as { phone_number?: string | null } | null)?.phone_number ?? null }));
-  return { owner: { id: String(ownerResult.data.id), name: String(ownerResult.data.name), phone_number: ownerResult.data.phone_number ? String(ownerResult.data.phone_number) : null, ownership_percentage: Number(ownerResult.data.ownership_percentage), is_active: Boolean(ownerResult.data.is_active) }, allocations: allocationRows, rents, expenses: expenseResult.data ?? [] };
+  const rents = rentRows.map((row) => ({ ...row, tenant_name: (row.tenants as { name?: string } | null)?.name ?? "" }));
+  return [...byOwner.values()].map((account) => ({ ...account, rents, expenses }));
 }
 
 export async function listRentReportRows() {
