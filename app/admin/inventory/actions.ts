@@ -2,6 +2,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requirePermission } from "@/lib/auth/permissions";
+import { requireProfile } from "@/lib/auth/session";
+import type { QuotationStockResult, QuotationStockTarget } from "@/lib/inventory/quotation-stock";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { parseSignedWholeNumber, wholeNumberFromForm } from "@/lib/validation/numbers";
 import { writeAuditLog } from "@/lib/audit/log";
@@ -11,19 +13,92 @@ const serials = (form: FormData) => [...new Set(String(form.get("serials") ?? ""
 const destination = (type: "success" | "error", message: string, productId?: string | null) => `/admin/inventory/adjustments/new?${productId ? `product=${encodeURIComponent(productId)}&` : ""}${type}=${encodeURIComponent(message)}`;
 async function resolveSerializedInput(db:ReturnType<typeof createSupabaseAdminClient>,input:string[]){if(!input.length)return[];const normalized=input.map((value)=>value.replace(/[^A-Za-z0-9]/g,"").toUpperCase());const[senResult,manufacturerResult]=await Promise.all([db.from("serial_numbers").select("id,sen_serial,manufacturer_serial_normalized").in("sen_serial",input).limit(500),db.from("serial_numbers").select("id,sen_serial,manufacturer_serial_normalized").in("manufacturer_serial_normalized",normalized).limit(500)]);if(senResult.error||manufacturerResult.error)throw new Error("Unable to validate selected serials.");return [...new Map([...(senResult.data??[]),...(manufacturerResult.data??[])].map((item)=>[item.id,item])).values()];}
 
+async function recordStockAdjustment(
+  actorId: string,
+  form: FormData,
+  target?: QuotationStockTarget,
+): Promise<{ id: string; error: null } | { id: null; error: string }> {
+  const warehouse = target?.warehouseId ?? uuidOrNull(form.get("warehouse_id"));
+  const product = target?.productId ?? uuidOrNull(form.get("product_id"));
+  const variation = target ? target.variationId : uuidOrNull(form.get("variation_id"));
+  const reason = uuidOrNull(form.get("reason_id"));
+  const notes = String(form.get("notes") ?? "").slice(0, 1000);
+  let change: number;
+  try {
+    change = parseSignedWholeNumber(form.get("quantity_change"), "Quantity", { required: true })!;
+  } catch (error) {
+    return { id: null, error: error instanceof Error ? error.message : "Quantity is invalid." };
+  }
+  if (!warehouse || !product || !reason) {
+    return { id: null, error: "Warehouse, product, reason, and nonzero quantity are required." };
+  }
+
+  const db = createSupabaseAdminClient();
+  const input = serials(form);
+  const { data: productRecord, error: productError } = await db.from("products")
+    .select("serial_tracking_required").eq("id", product).maybeSingle();
+  if (productError || !productRecord) return { id: null, error: "Unable to validate the selected product." };
+
+  const args = {
+    actor_profile_id: actorId,
+    requested_warehouse_id: warehouse,
+    requested_product_id: product,
+    requested_variation_id: variation,
+    quantity_change: change,
+    requested_reason_id: reason,
+    requested_notes: notes,
+  };
+  let result;
+  if (productRecord.serial_tracking_required) {
+    if (target && change > 0) return { id: null, error: "Use the serialized stock receipt form to add units." };
+    let selected: Array<{ id: string }>;
+    try {
+      selected = await resolveSerializedInput(db, input);
+    } catch {
+      return { id: null, error: "Unable to validate selected serials." };
+    }
+    if (change < 0 && selected.length !== Math.abs(change)) {
+      return { id: null, error: "Resolve and select exactly one existing serial for every removed unit." };
+    }
+    result = await db.rpc("admin_adjust_serialized_inventory", {
+      ...args,
+      requested_serial_ids: selected.map((item) => item.id),
+      requested_manufacturer_serials: selected.length ? [] : input,
+    });
+  } else {
+    result = await db.rpc("admin_adjust_inventory", { ...args, requested_serials: input });
+  }
+  if (result.error || !result.data) {
+    const message = result.error?.message ?? "";
+    console.error("Inventory adjustment failed", { code: result.error?.code, message });
+    const safe = /serial|Insufficient|Quantity|reason.*direction|reason only permits|Active adjustment reason|Invalid variation/i.test(message)
+      ? message : "Unable to adjust inventory.";
+    return { id: null, error: safe };
+  }
+
+  revalidatePath("/admin/inventory");
+  revalidatePath("/admin/products");
+  revalidatePath(`/admin/products/${product}`);
+  revalidatePath("/products");
+  return { id: result.data, error: null };
+}
+
 export async function adjustInventoryAction(form: FormData) {
   const { profile } = await requirePermission("inventory.adjust_stock");
-  const warehouse = uuidOrNull(form.get("warehouse_id")), product = uuidOrNull(form.get("product_id")), variation = uuidOrNull(form.get("variation_id")), reason = uuidOrNull(form.get("reason_id")), notes = String(form.get("notes") ?? "").slice(0, 1000);
-  let change:number;try{change=parseSignedWholeNumber(form.get("quantity_change"),"Quantity",{required:true})!;}catch(error){redirect(destination("error",error instanceof Error?error.message:"Quantity is invalid.",product));}
-  if (!warehouse || !product || !reason) redirect(destination("error", "Warehouse, product, reason, and nonzero quantity are required.", product));
-  const db = createSupabaseAdminClient();
-  const input=serials(form);const{data:productRecord,error:productError}=await db.from("products").select("serial_tracking_required").eq("id",product).maybeSingle();if(productError||!productRecord)redirect(destination("error","Unable to validate the selected product.",product));let data,error;if(productRecord.serial_tracking_required){if(!Number.isInteger(change))redirect(destination("error","Serialized quantity must be a whole number.",product));let selected:Array<{id:string}>=[];try{selected=await resolveSerializedInput(db,input);}catch{redirect(destination("error","Unable to validate selected serials.",product));}if(change<0&&selected.length!==Math.abs(change))redirect(destination("error","Resolve and select exactly one existing serial for every removed unit.",product));const result=await db.rpc("admin_adjust_serialized_inventory",{actor_profile_id:profile.id,requested_warehouse_id:warehouse,requested_product_id:product,requested_variation_id:variation,quantity_change:change,requested_reason_id:reason,requested_notes:notes,requested_serial_ids:selected.map((item)=>item.id),requested_manufacturer_serials:selected.length?[]:input});data=result.data;error=result.error;}else{const result=await db.rpc("admin_adjust_inventory", { actor_profile_id: profile.id, requested_warehouse_id: warehouse, requested_product_id: product, requested_variation_id: variation, quantity_change: change, requested_reason_id: reason, requested_notes: notes, requested_serials: input });data=result.data;error=result.error;}
-  if (error) {
-    console.error("Inventory adjustment failed", { code: error.code, message: error.message });
-    const safe = /serial|Insufficient|Quantity|reason only permits|Active adjustment reason|Invalid variation/i.test(error.message) ? error.message : "Unable to adjust inventory.";
-    redirect(destination("error", safe, product));
-  }
-  revalidatePath("/admin/inventory"); revalidatePath("/admin/products"); revalidatePath(`/admin/products/${product}`); revalidatePath("/products"); redirect(`/admin/inventory/movements/${data}?success=${encodeURIComponent("Inventory adjusted.")}`);
+  const result = await recordStockAdjustment(profile.id, form);
+  if (result.id === null) redirect(destination("error", result.error, uuidOrNull(form.get("product_id"))));
+  redirect(`/admin/inventory/movements/${result.id}?success=${encodeURIComponent("Inventory adjusted.")}`);
+}
+
+export async function adjustQuotedStockAction(
+  target: QuotationStockTarget,
+  _previous: QuotationStockResult,
+  form: FormData,
+): Promise<QuotationStockResult> {
+  const { profile } = await requireProfile(["admin"]);
+  const result = await recordStockAdjustment(profile.id, form, target);
+  if (result.id === null) return { status: "error", message: result.error };
+  return { status: "success", message: "Inventory adjusted.", detailsHref: `/admin/inventory/movements/${result.id}` };
 }
 
 export async function transferInventoryAction(form: FormData) {

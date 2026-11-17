@@ -2,6 +2,8 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requirePermission } from "@/lib/auth/permissions";
+import { requireProfile } from "@/lib/auth/session";
+import type { QuotationStockResult, QuotationStockTarget } from "@/lib/inventory/quotation-stock";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { uuidOrNull } from "@/lib/inventory/validation";
 
@@ -78,4 +80,58 @@ export async function updateManufacturerSerialAction(form: FormData) {
   revalidatePath(`/admin/serials/${id}`); redirect(`/admin/serials/${id}?success=${encodeURIComponent("Manufacturer serial updated.")}`);
 }
 
-export async function receiveSerializedStockAction(productId:string,form:FormData){const{profile}=await requirePermission("inventory.receive"),warehouse=uuidOrNull(form.get("warehouse_id")),quantity=Number(form.get("quantity"));if(!warehouse||!Number.isInteger(quantity)||quantity<1||quantity>200)redirect(`/admin/products/${productId}/stock/add?error=${encodeURIComponent("Choose a warehouse and quantity from 1 to 200.")}`);const manufacturers=String(form.get("manufacturer_serials")??"").split(/\r?\n/).map(x=>x.trim()).slice(0,quantity);while(manufacturers.length<quantity)manufacturers.push("");const db=createSupabaseAdminClient();const{data,error}=await db.rpc("phase3_receive_serialized_stock",{actor_profile_id:profile.id,requested_product_id:productId,requested_variation_id:uuidOrNull(form.get("variation_id")),requested_warehouse_id:warehouse,requested_quantity:quantity,requested_condition:String(form.get("condition")??"new").slice(0,80),requested_reason_id:uuidOrNull(form.get("reason_id")),requested_notes:[String(form.get("reference")??""),String(form.get("notes")??"")].filter(Boolean).join(" · ").slice(0,1000),requested_manufacturer_serials:manufacturers});if(error||!data){console.error("Serialized stock receipt failed",{code:error?.code,message:error?.message});redirect(`/admin/products/${productId}/stock/add?error=${encodeURIComponent(safeSerialError(error?.message??"Receipt failed"))}`)}revalidatePath(`/admin/products/${productId}`);revalidatePath("/admin/inventory");revalidatePath("/admin/serials");redirect(`/admin/products/${productId}/serials/new?batch=${data}&success=${encodeURIComponent(`${quantity} serialized unit(s) received into stock.`)}`);}
+async function recordSerializedStockReceipt(
+  actorId: string,
+  productId: string,
+  form: FormData,
+  target?: QuotationStockTarget,
+): Promise<{ id: string; error: null; quantity: number } | { id: null; error: string }> {
+  const warehouse = target?.warehouseId ?? uuidOrNull(form.get("warehouse_id"));
+  const quantity = Number(form.get("quantity"));
+  if (!warehouse || !Number.isInteger(quantity) || quantity < 1 || quantity > 200) {
+    return { id: null, error: "Choose a warehouse and quantity from 1 to 200." };
+  }
+  const manufacturers = String(form.get("manufacturer_serials") ?? "").split(/\r?\n/).map((item) => item.trim()).slice(0, quantity);
+  while (manufacturers.length < quantity) manufacturers.push("");
+  const { data, error } = await createSupabaseAdminClient().rpc("phase3_receive_serialized_stock", {
+    actor_profile_id: actorId,
+    requested_product_id: productId,
+    requested_variation_id: target ? target.variationId : uuidOrNull(form.get("variation_id")),
+    requested_warehouse_id: warehouse,
+    requested_quantity: quantity,
+    requested_condition: String(form.get("condition") ?? "new").slice(0, 80),
+    requested_reason_id: uuidOrNull(form.get("reason_id")),
+    requested_notes: [String(form.get("reference") ?? ""), String(form.get("notes") ?? "")].filter(Boolean).join(" · ").slice(0, 1000),
+    requested_manufacturer_serials: manufacturers,
+  });
+  if (error || !data) {
+    console.error("Serialized stock receipt failed", { code: error?.code, message: error?.message });
+    return { id: null, error: safeSerialError(error?.message ?? "Receipt failed") };
+  }
+  revalidatePath(`/admin/products/${productId}`);
+  revalidatePath("/admin/inventory");
+  revalidatePath("/admin/serials");
+  return { id: data, error: null, quantity };
+}
+
+export async function receiveSerializedStockAction(productId: string, form: FormData) {
+  const { profile } = await requirePermission("inventory.receive");
+  const result = await recordSerializedStockReceipt(profile.id, productId, form);
+  if (result.id === null) redirect(`/admin/products/${productId}/stock/add?error=${encodeURIComponent(result.error)}`);
+  redirect(`/admin/products/${productId}/serials/new?batch=${result.id}&success=${encodeURIComponent(`${result.quantity} serialized unit(s) received into stock.`)}`);
+}
+
+export async function receiveQuotedSerializedStockAction(
+  target: QuotationStockTarget,
+  _previous: QuotationStockResult,
+  form: FormData,
+): Promise<QuotationStockResult> {
+  const { profile } = await requireProfile(["admin"]);
+  const result = await recordSerializedStockReceipt(profile.id, target.productId, form, target);
+  if (result.id === null) return { status: "error", message: result.error };
+  return {
+    status: "success",
+    message: `${result.quantity} serialized unit(s) received into stock.`,
+    detailsHref: `/admin/products/${target.productId}/serials/new?batch=${result.id}`,
+  };
+}
