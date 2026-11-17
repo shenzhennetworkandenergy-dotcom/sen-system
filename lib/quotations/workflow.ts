@@ -71,19 +71,8 @@ export function canTransitionQuotation(
   );
 }
 
-export function isQuotationSaleEligible(
-  quotation: {
-    status: string;
-    expirationDate: string | null | undefined;
-    convertedOrderId: string | null;
-  },
-  today: string,
-) {
-  return (
-    quotation.status === "accepted" &&
-    quotation.convertedOrderId === null &&
-    !isQuotationExpired(quotation.expirationDate, today)
-  );
+export function isQuotationSaleEligible(quotation: { status: string; convertedOrderId: string | null }) {
+  return quotation.status === "accepted" && quotation.convertedOrderId === null;
 }
 
 export function isQuotationImmutable(status: string) {

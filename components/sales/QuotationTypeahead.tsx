@@ -4,6 +4,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { searchEligibleQuotationsAction } from "@/app/admin/sales/from-quotation/actions";
+import { QuotationCustomerFilter } from "@/components/quotations/QuotationCustomerFilter";
+import type { CustomerSearchOption } from "@/lib/customers/search";
 import {
   quotationSaleDestination,
   quotationTypeaheadKeyResult,
@@ -11,6 +13,7 @@ import {
   type EligibleQuotationOption,
   type QuotationTypeaheadState,
 } from "@/lib/quotations/sale-conversion-types";
+import { isQuotationExpired } from "@/lib/quotations/workflow";
 
 const money = (amount: number, currency: string) =>
   new Intl.NumberFormat("en-BD", {
@@ -19,7 +22,21 @@ const money = (amount: number, currency: string) =>
     maximumFractionDigits: 2,
   }).format(amount);
 
-export function QuotationTypeahead() {
+export function QuotationTypeahead({ customer, today }: { customer: CustomerSearchOption | null; today: string }) {
+  const router = useRouter();
+  return (
+    <div className="grid items-start gap-4 sm:grid-cols-2">
+      <QuotationCustomerFilter key={customer?.id ?? "all"} initialCustomer={customer}
+        onSelectionChange={(next) => {
+          const path = "/admin/sales/from-quotation";
+          router.push(next ? `${path}?${new URLSearchParams({ customer: next.id })}` : path);
+        }} />
+      <QuotationReferenceTypeahead today={today} />
+    </div>
+  );
+}
+
+function QuotationReferenceTypeahead({ today }: { today: string }) {
   const router = useRouter();
   const listboxId = useId();
   const requestId = useRef(0);
@@ -142,7 +159,7 @@ export function QuotationTypeahead() {
       {showResults ? (
         <div
           id={listboxId}
-          className="absolute z-30 mt-1 w-full overflow-hidden rounded-xl border bg-white text-slate-950 shadow-xl"
+          className="absolute z-30 mt-1 max-h-80 w-full overflow-auto rounded-xl border bg-white text-slate-950 shadow-xl"
           role="listbox"
         >
           {typeahead.options.map((option, index) => (
@@ -156,6 +173,9 @@ export function QuotationTypeahead() {
               className={`block w-full border-b px-3 py-3 text-left last:border-b-0 hover:bg-blue-50 ${typeahead.activeIndex === index ? "bg-blue-100" : ""}`}
             >
               <b>{option.reference}</b>
+              {isQuotationExpired(option.expirationDate, today) ? (
+                <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-900">Validity expired</span>
+              ) : null}
               <span className="block text-sm">
                 {option.customerName}
                 {option.customerCompany ? ` · ${option.customerCompany}` : ""}

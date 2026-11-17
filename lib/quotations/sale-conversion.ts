@@ -1,6 +1,7 @@
 import "server-only";
 
 import { requireAllPermissions } from "@/lib/auth/permissions";
+import { assertCustomerVisibleToActor } from "@/lib/customers/visibility";
 import { resolveQuotationViewScope } from "@/lib/quotations/access-policy";
 import {
   QUOTATION_SALE_CONVERSION_PERMISSIONS,
@@ -11,8 +12,6 @@ import {
   validateQuotationSaleAddresses,
 } from "@/lib/quotations/sale-conversion-types";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-
-const todayDate = () => new Date().toISOString().slice(0, 10);
 
 export async function loadAccessibleConvertedSaleDestination(
   quotationId: string,
@@ -66,18 +65,17 @@ export async function loadQuotationSaleInitial(
   if (!scope) return null;
 
   const db = createSupabaseAdminClient();
-  const today = todayDate();
   let quotationQuery = db
     .from("quotation_requests")
     .select(
-      "id,reference,profile_id,status,expiration_date,converted_order_id,billing_address_id,shipping_address_id,required_by,discount_amount,tax_amount,customer_notes,internal_notes,payment_terms,delivery_information,terms_and_conditions,profiles!quotation_requests_profile_id_fkey!inner(id,role,status)",
+      "id,reference,profile_id,status,converted_order_id,billing_address_id,shipping_address_id,required_by,discount_amount,tax_amount,customer_notes,internal_notes,payment_terms,delivery_information,terms_and_conditions,profiles!quotation_requests_profile_id_fkey!inner(id,role,status)",
     )
     .eq("id", quotationId)
     .eq("status", "accepted")
     .is("converted_order_id", null)
-    .or(`expiration_date.is.null,expiration_date.gte.${today}`)
     .eq("profiles.role", "customer")
-    .eq("profiles.status", "active");
+    .eq("profiles.status", "active")
+    .is("profiles.archived_at", null);
   if (scope === "own") {
     quotationQuery = quotationQuery.eq("created_by", profile.id);
   }
@@ -85,6 +83,11 @@ export async function loadQuotationSaleInitial(
     await quotationQuery.maybeSingle();
   if (quotationError || !quotation) {
     if (quotationError) console.error("Unable to load quotation sale prefill.");
+    return null;
+  }
+  try {
+    await assertCustomerVisibleToActor(profile, quotation.profile_id);
+  } catch {
     return null;
   }
 
@@ -107,12 +110,10 @@ export async function loadQuotationSaleInitial(
     !isEligibleQuotationSalePrefill(
       {
         status: quotation.status,
-        expirationDate: quotation.expiration_date,
         convertedOrderId: quotation.converted_order_id,
         customerRole: customer?.role,
         customerStatus: customer?.status,
       },
-      today,
     )
   ) {
     return null;

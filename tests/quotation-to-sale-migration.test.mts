@@ -6,8 +6,8 @@ const migrationPath =
   "supabase/migrations/202608230004_quotation_to_sale.sql";
 const migration = await readFile(migrationPath, "utf8").catch(() => "");
 
-function functionDefinition(name: string) {
-  const match = migration.match(
+function functionDefinition(name: string, sql = migration) {
+  const match = sql.match(
     new RegExp(
       `create\\s+or\\s+replace\\s+function\\s+public\\.${name}\\s*\\([\\s\\S]*?\\)\\s*returns[\\s\\S]*?\\bas\\s+\\$\\$[\\s\\S]*?\\$\\$\\s*;`,
       "i",
@@ -16,6 +16,26 @@ function functionDefinition(name: string) {
   assert.ok(match, `${name} must be defined by the additive migration.`);
   return match[0];
 }
+
+test("expiry migration only removes the conversion deadline and keeps search bounded and scoped", async () => {
+  const sql = await readFile("supabase/migrations/202611170001_accepted_quotation_sale_after_expiry.sql", "utf8");
+  const expiryGuard = "  if quotation.expiration_date is not null and quotation.expiration_date<current_date then\n" +
+    "    raise exception 'Expired quotation cannot be converted';\n  end if;\n";
+  const original = functionDefinition("create_sale_from_quotation");
+  assert.ok(original.includes(expiryGuard));
+  assert.equal(functionDefinition("create_sale_from_quotation", sql), original.replace(expiryGuard, ""));
+  assert.doesNotMatch(sql, /create or replace function public\.transition_quotation_business_status/);
+
+  const search = functionDefinition("search_eligible_quotations_for_sale", sql);
+  assert.match(search, /q\.status='accepted'/);
+  assert.match(search, /q\.converted_order_id is null/);
+  assert.match(search, /q\.profile_id=requested_customer_id/);
+  assert.match(search, /q\.profile_id=any\(requested_visible_customer_ids\)/);
+  assert.match(search, /q\.created_by=actor_profile_id/);
+  assert.match(search, /limit result_limit\s+offset greatest/);
+  assert.doesNotMatch(search, /expiration_date\s*>=/);
+  assert.match(sql, /revoke all on function public\.search_eligible_quotations_for_sale\(uuid,text,integer,uuid,integer,uuid\[\]\)\s+from public, anon, authenticated/);
+});
 
 function functionBody(name: string) {
   const definition = functionDefinition(name);

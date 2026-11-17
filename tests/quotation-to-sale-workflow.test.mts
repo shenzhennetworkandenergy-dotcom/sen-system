@@ -22,30 +22,14 @@ test("quotation transitions preserve staff approval and customer acceptance as s
   assert.equal(canTransitionQuotation("converted_to_sale", "convert"), false);
 });
 
-test("only accepted, current, unconverted quotations are sale eligible", () => {
+test("accepted unconverted quotations stay sale eligible after their validity date", () => {
   assert.equal(isQuotationExpired("2026-08-22", "2026-08-23"), true);
   assert.equal(isQuotationExpired("2026-08-23", "2026-08-23"), false);
-  assert.equal(
-    isQuotationSaleEligible(
-      { status: "accepted", expirationDate: "2026-08-24", convertedOrderId: null },
-      "2026-08-23",
-    ),
-    true,
-  );
-  assert.equal(
-    isQuotationSaleEligible(
-      { status: "accepted", expirationDate: "2026-08-22", convertedOrderId: null },
-      "2026-08-23",
-    ),
-    false,
-  );
-  assert.equal(
-    isQuotationSaleEligible(
-      { status: "accepted", expirationDate: "2026-08-24", convertedOrderId: "sale-1" },
-      "2026-08-23",
-    ),
-    false,
-  );
+  const expiredAcceptance = { status: "accepted", expirationDate: "2026-08-22", convertedOrderId: null };
+  assert.equal(isQuotationSaleEligible(expiredAcceptance), true);
+  assert.equal(isQuotationSaleEligible({ ...expiredAcceptance, status: "expired" }), false);
+  assert.equal(isQuotationSaleEligible({ ...expiredAcceptance, convertedOrderId: "sale-1" }), false);
+  assert.equal(canTransitionQuotation("quoted", "accept", "2026-08-22", "2026-08-23"), false);
   assert.equal(isQuotationImmutable("accepted"), true);
 });
 

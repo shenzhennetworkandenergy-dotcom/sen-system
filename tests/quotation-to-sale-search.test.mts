@@ -80,12 +80,16 @@ test("eligible search action reauthorizes both permissions, limits input, and de
   assert.match(actions, /if \(!scope\)/);
   assert.match(actions, /\.trim\(\)\.slice\(0, 80\)/);
   assert.match(actions, /if \(query\.length < 2\)/);
-  assert.match(actions, /requested_limit:\s*20/);
-  assert.match(actions, /search_eligible_quotations_for_sale/);
+  assert.match(actions, /getEligibleQuotationOptions\(profile, \{ query \}\)/);
+  const candidates = source("lib/quotations/sale-candidates.ts");
+  assert.match(candidates, /QUOTATION_CUSTOMER_PAGE_SIZE = 20/);
+  assert.match(candidates, /search_eligible_quotations_for_sale/);
+  assert.match(candidates, /getVisibleCustomerIds\(actor\)/);
+  assert.match(candidates, /requested_customer_id: customerId/);
   assert.doesNotMatch(actions, /error\.message/);
 });
 
-test("prefill loader is read-only, scope-aware, and only loads accepted unexpired unconverted active-customer quotations", () => {
+test("prefill loader is read-only and loads accepted unconverted quotations for visible active customers", () => {
   const loaderPath = "lib/quotations/sale-conversion.ts";
   assert.equal(existsSync(loaderPath), true);
   const loader = source(loaderPath);
@@ -96,7 +100,8 @@ test("prefill loader is read-only, scope-aware, and only loads accepted unexpire
   assert.match(loader, /if \(!scope\)/);
   assert.match(loader, /\.eq\("status", "accepted"\)/);
   assert.match(loader, /\.is\("converted_order_id", null\)/);
-  assert.match(loader, /expiration_date\.gte/);
+  assert.doesNotMatch(loader, /expiration_date\.gte/);
+  assert.match(loader, /assertCustomerVisibleToActor\(profile, quotation\.profile_id\)/);
   assert.match(loader, /\.eq\("created_by", profile\.id\)/);
   assert.match(
     loader,
@@ -218,9 +223,9 @@ test("quotation selection page and typeahead preserve a permission-gated read-on
   assert.doesNotMatch(typeahead, /error\.message/);
 });
 
-test("prefill eligibility requires an active customer and respects the date-only expiry boundary", () => {
+test("prefill eligibility requires an active customer and allows accepted expired quotations", () => {
   const isEligible = conversionFunction<
-    (value: unknown, today: string) => boolean
+    (value: unknown) => boolean
   >("isEligibleQuotationSalePrefill");
 
   assert.equal(
@@ -232,7 +237,6 @@ test("prefill eligibility requires an active customer and respects the date-only
         customerRole: "customer",
         customerStatus: "active",
       },
-      "2026-08-23",
     ),
     true,
   );
@@ -245,9 +249,8 @@ test("prefill eligibility requires an active customer and respects the date-only
         customerRole: "customer",
         customerStatus: "active",
       },
-      "2026-08-23",
     ),
-    false,
+    true,
   );
   assert.equal(
     isEligible(
@@ -258,7 +261,6 @@ test("prefill eligibility requires an active customer and respects the date-only
         customerRole: "employee",
         customerStatus: "active",
       },
-      "2026-08-23",
     ),
     false,
   );
@@ -271,7 +273,6 @@ test("prefill eligibility requires an active customer and respects the date-only
         customerRole: "customer",
         customerStatus: "inactive",
       },
-      "2026-08-23",
     ),
     false,
   );

@@ -133,16 +133,13 @@ export function accessibleConvertedSaleDestination(
   })}`;
 }
 
-export function isEligibleQuotationSalePrefill(value: unknown, today: string) {
-  if (!isRecord(value) || !datePattern.test(today)) return false;
-  const expirationDate = nullableDate(value.expirationDate);
+export function isEligibleQuotationSalePrefill(value: unknown) {
+  if (!isRecord(value)) return false;
   return (
     value.status === "accepted" &&
     value.convertedOrderId === null &&
     value.customerRole === "customer" &&
-    value.customerStatus === "active" &&
-    expirationDate !== undefined &&
-    (expirationDate === null || expirationDate >= today)
+    value.customerStatus === "active"
   );
 }
 
