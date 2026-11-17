@@ -127,10 +127,8 @@ export function QuotationOperations({
     isQuotationSaleEligible(
       {
         status: quotation.status,
-        expirationDate: quotation.expiration_date,
         convertedOrderId: quotation.converted_order_id,
       },
-      new Date().toISOString().slice(0, 10),
     );
   const canEditDraft = capabilities.edit && quotation.status === "draft";
 

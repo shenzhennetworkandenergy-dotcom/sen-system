@@ -53,6 +53,10 @@ const personalQuickCashbookMigrationUrl = new URL(
   "../supabase/migrations/202609200001_personal_quick_cashbook.sql",
   import.meta.url,
 );
+const acceptedQuotationExpiryMigrationUrl = new URL(
+  "../supabase/migrations/202611170001_accepted_quotation_sale_after_expiry.sql",
+  import.meta.url,
+);
 const outputUrl = new URL("../database/native/schema.sql", import.meta.url);
 const [
   raw,
@@ -69,6 +73,7 @@ const [
   payrollReceivablesMigration,
   receivablesAccountingMigration,
   personalQuickCashbookMigration,
+  acceptedQuotationExpiryMigration,
 ] = await Promise.all([
   readFile(rawUrl, "utf8"),
   readFile(purchaseCarrierMigrationUrl, "utf8"),
@@ -84,6 +89,7 @@ const [
   readFile(payrollReceivablesMigrationUrl, "utf8"),
   readFile(receivablesAccountingMigrationUrl, "utf8"),
   readFile(personalQuickCashbookMigrationUrl, "utf8"),
+  readFile(acceptedQuotationExpiryMigrationUrl, "utf8"),
 ]);
 
 const withoutAuthForeignKey = raw.replace(
@@ -111,7 +117,7 @@ const grants = `\n-- Native application service access. Browser users never rece
 
 await writeFile(
   outputUrl,
-  `${bootstrapWithExtensions}${nativeSchema.trim()}\n\n${purchaseCarrierMigration.trim()}\n\n${dailyClosingMigration.trim()}\n\n${stockOutMigration.trim()}\n\n${quotationViewOwnMigration.trim()}\n\n${quotationToSaleMigration.trim()}\n\n${stockOutReleaseQuantityMigration.trim()}\n\n${receivablesMigration.trim()}\n\n${customerReceivablesMigration.trim()}\n\n${draftQuotationEditingMigration.trim()}\n\n${nonSalesReceivablesMigration.trim()}\n\n${payrollReceivablesMigration.trim()}\n\n${receivablesAccountingMigration.trim()}\n\n${personalQuickCashbookMigration.trim()}\n${grants}`,
+  `${bootstrapWithExtensions}${nativeSchema.trim()}\n\n${purchaseCarrierMigration.trim()}\n\n${dailyClosingMigration.trim()}\n\n${stockOutMigration.trim()}\n\n${quotationViewOwnMigration.trim()}\n\n${quotationToSaleMigration.trim()}\n\n${stockOutReleaseQuantityMigration.trim()}\n\n${receivablesMigration.trim()}\n\n${customerReceivablesMigration.trim()}\n\n${draftQuotationEditingMigration.trim()}\n\n${nonSalesReceivablesMigration.trim()}\n\n${payrollReceivablesMigration.trim()}\n\n${receivablesAccountingMigration.trim()}\n\n${personalQuickCashbookMigration.trim()}\n\n${acceptedQuotationExpiryMigration.trim()}\n${grants}`,
   "utf8",
 );
 console.log("Native PostgreSQL schema generated without the Supabase Auth foreign key.");

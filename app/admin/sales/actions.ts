@@ -309,7 +309,7 @@ export async function createSaleFromQuotationAction(form: FormData) {
   const db = createSupabaseAdminClient();
   let quotationQuery = db
     .from("quotation_requests")
-    .select("id,status,expiration_date,converted_order_id")
+    .select("id,status,converted_order_id")
     .eq("id", quotationId);
   if (scope === "own") {
     quotationQuery = quotationQuery.eq("created_by", profile.id);
@@ -319,10 +319,8 @@ export async function createSaleFromQuotationAction(form: FormData) {
     console.error("Unable to verify quotation Sale conversion access.");
     redirect(`${formTarget}&error=${encodeURIComponent("Unable to verify the quotation right now.")}`);
   }
-  const today = new Date().toISOString().slice(0, 10);
   const eligible = quotation?.status === "accepted" &&
-    quotation.converted_order_id === null &&
-    (quotation.expiration_date === null || quotation.expiration_date >= today);
+    quotation.converted_order_id === null;
   const retry = quotation?.status === "converted_to_sale" &&
     typeof quotation.converted_order_id === "string";
   if (!eligible && !retry) {

@@ -4,7 +4,13 @@ import { useEffect, useId, useRef, useState } from "react";
 
 import { customerOptionLabel, type CustomerSearchOption } from "@/lib/customers/search";
 
-export function QuotationCustomerFilter({ initialCustomer }: { initialCustomer: CustomerSearchOption | null }) {
+export function QuotationCustomerFilter({
+  initialCustomer,
+  onSelectionChange,
+}: {
+  initialCustomer: CustomerSearchOption | null;
+  onSelectionChange?: (customer: CustomerSearchOption | null) => void;
+}) {
   const [selected, setSelected] = useState(initialCustomer);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -38,6 +44,7 @@ export function QuotationCustomerFilter({ initialCustomer }: { initialCustomer: 
   function choose(customer: CustomerSearchOption) {
     setSelected(customer); setQuery(""); setOpen(false); setActive(-1);
     input.current?.setCustomValidity("");
+    onSelectionChange?.(customer);
   }
 
   return <div className="relative min-w-0" onBlur={event => {
@@ -70,7 +77,7 @@ export function QuotationCustomerFilter({ initialCustomer }: { initialCustomer: 
           }
         }} />
       {selected || query ? <button type="button" aria-label="Clear customer" className="rounded-xl border px-3"
-        onClick={() => { setSelected(null); setQuery(""); setOpen(false); setActive(-1); input.current?.setCustomValidity(""); input.current?.focus(); }}>×</button> : null}
+        onClick={() => { setSelected(null); setQuery(""); setOpen(false); setActive(-1); input.current?.setCustomValidity(""); input.current?.focus(); onSelectionChange?.(null); }}>×</button> : null}
     </div>
     {expanded ? <div id={listId} role="listbox" aria-label="Matching customers"
       className="absolute z-30 mt-1 max-h-60 w-full overflow-auto rounded-xl border bg-white p-1 text-slate-950 shadow-xl">

@@ -334,5 +334,5 @@ test("existing quotation creation, printed-document, workflow, and Sale-conversi
   assert.match(createAction, /status:\s*"draft"/);
   assert.match(printRoute, /requireQuotationView/);
   assert.match(printRoute, /quotation_request_items/);
-  assert.match(saleAction, /search_eligible_quotations_for_sale/);
+  assert.match(saleAction, /getEligibleQuotationOptions/);
 });
