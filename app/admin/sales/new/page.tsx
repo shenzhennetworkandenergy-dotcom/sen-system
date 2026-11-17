@@ -108,6 +108,7 @@ export default async function NewSalePage({
       key={initialQuotation?.quotationId ?? "manual"}
       {...options}
       initialQuotation={initialQuotation}
+      canAdjustQuotationStock={profile.role === "admin" && Boolean(initialQuotation)}
     />
   </DashboardShell>;
 }

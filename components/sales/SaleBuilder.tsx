@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import {
   createSaleAction,
@@ -22,6 +23,7 @@ import {
   type SaleBuilderRow,
 } from "@/components/sales/sale-builder-state";
 import type { CustomerSearchOption } from "@/lib/customers/search";
+import { QUOTATION_STOCK_SAVED } from "@/lib/inventory/quotation-stock";
 import type { QuotationSaleInitial } from "@/lib/quotations/sale-conversion-types";
 import { roundMoney } from "@/lib/validation/numbers";
 
@@ -43,6 +45,7 @@ export function SaleBuilder({
   addresses,
   initialQuotation,
   initialSale,
+  canAdjustQuotationStock = false,
 }: {
   customers: Customer[];
   products: Product[];
@@ -52,7 +55,11 @@ export function SaleBuilder({
   addresses: Address[];
   initialQuotation?: QuotationSaleInitial;
   initialSale?: SaleEditInitial;
+  canAdjustQuotationStock?: boolean;
 }) {
+  const router = useRouter();
+  const stockPopup = useRef<Window | null>(null);
+  const [blockedStockPopupRow, setBlockedStockPopupRow] = useState("");
   const [initialState] = useState(() =>
     createSaleBuilderInitialState(initialQuotation, warehouses, () => crypto.randomUUID(), initialSale),
   );
@@ -69,6 +76,33 @@ export function SaleBuilder({
   const [discountReason, setDiscountReason] = useState(() => initialState.discountReason);
   const [customerNotes, setCustomerNotes] = useState(() => initialState.customerNotes);
   const [internalNotes, setInternalNotes] = useState(() => initialState.internalNotes);
+
+  useEffect(() => {
+    if (!canAdjustQuotationStock) return;
+    const refreshStock = (event: MessageEvent) => {
+      if (!stockPopup.current || event.origin !== window.location.origin ||
+          event.source !== stockPopup.current || event.data !== QUOTATION_STOCK_SAVED) return;
+      stockPopup.current = null;
+      router.refresh();
+    };
+    window.addEventListener("message", refreshStock);
+    return () => window.removeEventListener("message", refreshStock);
+  }, [canAdjustQuotationStock, router]);
+
+  function openStockPopup(row: SaleBuilderRow) {
+    if (stockPopup.current && !stockPopup.current.closed) {
+      stockPopup.current.focus();
+      return;
+    }
+    const query = new URLSearchParams({ from: "quotation-sale", warehouse: warehouseId });
+    if (row.variation_id) query.set("variation", row.variation_id);
+    stockPopup.current = window.open(
+      `/admin/products/${encodeURIComponent(row.product_id)}/stock/add?${query}`,
+      "_blank",
+      "popup,width=880,height=800",
+    );
+    setBlockedStockPopupRow(stockPopup.current ? "" : row.key);
+  }
 
   const customer = customers.find((item) => item.id === customerId);
   const customerAddresses = addresses.filter((item) => item.profile_id === customerId);
@@ -164,7 +198,19 @@ export function SaleBuilder({
           }}
         />
         <label className="text-xs font-semibold">Variation<select value={row.variation_id} disabled={rowControls.variationLocked} onChange={(event)=>{const variation=variations.find((item)=>item.id===event.target.value),price=roundMoney(Number(variation?.sale_price??variation?.regular_price??row.catalogue_price));update(row.key,{variation_id:event.target.value,unit_price:String(price),catalogue_price:row.source_quotation_item_id?row.catalogue_price:price,baseline_unit_price:row.source_quotation_item_id?row.baseline_unit_price:price})}} className={field}><option value="">None</option>{variations.filter((item)=>item.product_id===row.product_id).map((item)=><option key={item.id} value={item.id}>{item.name||item.sku}</option>)}</select></label>
-        <label className="text-xs font-semibold">Qty<input type="number" min="1" max={row.available} step="1" value={row.quantity} onChange={(event)=>update(row.key,{quantity:String(Math.max(1,Math.trunc(Number(event.target.value)||1)))})} className={field}/><span className={Number(row.quantity)>row.available?"text-red-700":"text-[var(--muted-text)]"}>Available {row.available}</span></label>
+        <div className="min-w-0 text-xs font-semibold">
+          <label>Qty<input type="number" min="1" max={row.available} step="1" value={row.quantity} onChange={(event)=>update(row.key,{quantity:String(Math.max(1,Math.trunc(Number(event.target.value)||1)))})} className={field}/></label>
+          <span aria-live="polite" className={Number(row.quantity)>row.available?"text-red-700":"text-[var(--muted-text)]"}>Available {row.available}</span>
+          {canAdjustQuotationStock && row.source_quotation_item_id && row.product && warehouseId ? (
+            <button type="button" onClick={() => openStockPopup(row)}
+              className="mt-1 block rounded-md border border-[var(--primary)] px-1.5 py-1 text-left text-[var(--primary)]"
+              title="Add or remove stock"
+              aria-label={`Add / remove stock for ${row.product.name}`}>
+              Adjust stock
+            </button>
+          ) : null}
+          {blockedStockPopupRow === row.key ? <p role="status" className="mt-1 text-red-700">Allow pop-ups for this site and try again.</p> : null}
+        </div>
         <label className="text-xs font-semibold">Unit BDT<input type="number" inputMode="decimal" min="0" step=".01" value={row.unit_price} onChange={(event)=>update(row.key,{unit_price:event.target.value})} onBlur={()=>update(row.key,{unit_price:String(roundMoney(Number(row.unit_price)||0))})} className={field}/></label>
         <label className="text-xs font-semibold">Discount %<input type="number" inputMode="decimal" min="0" max="100" step=".01" value={row.discount_percent} onChange={(event)=>update(row.key,{discount_percent:event.target.value,...(initialSale?{line_discount:"0"}:{})})} onBlur={()=>update(row.key,{discount_percent:String(roundMoney(Number(row.discount_percent)||0))})} className={field}/></label>
         <label className="text-xs font-semibold">Fixed discount<input type="number" inputMode="decimal" min="0" step=".01" value={row.line_discount} onChange={(event)=>update(row.key,{line_discount:event.target.value,...(initialSale?{discount_percent:"0"}:{})})} onBlur={()=>update(row.key,{line_discount:String(roundMoney(Number(row.line_discount)||0))})} className={field}/><span>Line {row.lineTotal.toFixed(2)}</span></label>

@@ -502,7 +502,18 @@ test("SaleBuilder wiring selects the conversion action only for quotation mode a
   assert.match(builder, /locked=\{rowControls\.productLocked\}/);
   assert.match(builder, /disabled=\{rowControls\.variationLocked\}/);
   assert.match(builder, /disabled=\{!rowControls\.removable/);
-  assert.doesNotMatch(builder, /useEffect|confirmSaleAction|confirm_sales_order|reserve|invoice|inventory|stock[_A-Z]|shipment/i);
+  assert.doesNotMatch(builder, /confirmSaleAction|confirm_sales_order|reserve|invoice|shipment|adjust(?:QuotedStock|Inventory)Action|receive(?:QuotedSerialized|Serialized)StockAction/i);
+});
+
+test("quotation stock controls and mutations require admin access", () => {
+  const newSale = readFileSync("app/admin/sales/new/page.tsx", "utf8");
+  const addStock = readFileSync("app/admin/products/[id]/stock/add/page.tsx", "utf8");
+  const adjustments = readFileSync("app/admin/inventory/actions.ts", "utf8");
+  const serials = readFileSync("app/admin/serials/actions.ts", "utf8");
+  assert.match(newSale, /canAdjustQuotationStock=\{profile\.role === "admin" && Boolean\(initialQuotation\)\}/);
+  assert.match(addStock, /async function QuotedProductStock[\s\S]*?await requireProfile\(\["admin"\]\)/);
+  assert.match(adjustments, /function adjustQuotedStockAction[\s\S]*?await requireProfile\(\["admin"\]\)/);
+  assert.match(serials, /function receiveQuotedSerializedStockAction[\s\S]*?await requireProfile\(\["admin"\]\)/);
 });
 
 test("locked customer and page/entry contracts preserve manual mode and authorize quotation mode", () => {
