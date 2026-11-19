@@ -7,7 +7,7 @@ test("Murshida Manzil route is Admin-only and correctly named", () => {
   const nav = readFileSync("lib/navigation/dashboard.ts", "utf8");
   const routes = readFileSync("lib/constants/routes.ts", "utf8");
   assert.equal(existsSync(layoutPath), true);
-  assert.match(readFileSync(layoutPath, "utf8"), /requireProfile\(\["admin"\]\)/);
+  assert.match(readFileSync(layoutPath, "utf8"), /requireMurshida(?:Access|Manager)\(\)/);
   assert.match(routes, /adminMurshidaManzil:\s*["']\/admin\/murshida-manzil["']/);
   assert.match(nav, /Murshida Manzil/);
   assert.match(nav, /employeeVisible:false/);

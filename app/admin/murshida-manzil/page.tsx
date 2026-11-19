@@ -1,17 +1,18 @@
 import Link from "next/link";
-import { DashboardShell } from "@/components/dashboard/Shell";
-import { requireProfile } from "@/lib/auth/session";
+import { MurshidaDashboardShell as DashboardShell } from "@/components/murshida-manzil/AccountsShell";
+import { requireMurshidaAccess } from "@/lib/murshida-manzil/accounts-session";
 import { createAdvancePaymentAction, createExpenseAction, createOwnerAction, createOwnerAllocationAction, createRentTransactionAction, createTenantAction, createUnitAction, deleteOwnerAction, deleteTenantAction, deleteUnitAction, updateOwnerAction, updateTenantAction, updateUnitAction } from "@/app/admin/murshida-manzil/actions";
 import { listAdvanceReportRows, listAllocationReportRows, listExpenseReportRows, listExpenses, listOwnerAllocations, listOwners, listRentReportRows, listTenants, listUnits } from "@/lib/murshida-manzil/repository";
 import { buildMurshidaSummary, filterByDateRange, mapAdvanceReport, mapAllocationReport, mapRentReport } from "@/lib/murshida-manzil/reports";
 import { LifecyclePanel } from "@/app/admin/murshida-manzil/_components/LifecyclePanelWithReport";
+import { ReadOnlyOverview } from "@/components/murshida-manzil/ReadOnlyOverview";
 
 export const dynamic = "force-dynamic";
 const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const today = new Date();
 
 export default async function MurshidaManzilPage({ searchParams }: { searchParams?: Promise<Record<string, string | undefined>> }) {
-  await requireProfile(["admin"]);
+  const { viewer } = await requireMurshidaAccess();
   const [owners, units, tenants, expenses, allocations, rentRows, advanceRows, expenseRows, allocationRows] = await Promise.all([listOwners(), listUnits(), listTenants(), listExpenses(), listOwnerAllocations(), listRentReportRows(), listAdvanceReportRows(), listExpenseReportRows(), listAllocationReportRows()]);
   const filters = await searchParams ?? {};
   const rents = filterByDateRange(rentRows, filters.from ?? "", filters.to ?? "");
@@ -19,6 +20,8 @@ export default async function MurshidaManzilPage({ searchParams }: { searchParam
   const reportExpenses = filterByDateRange(expenseRows, filters.from ?? "", filters.to ?? "", "expense_date");
   const reportAllocations = filterByDateRange(allocationRows, filters.from ?? "", filters.to ?? "", "created_at");
   const summary = buildMurshidaSummary({ activeUnits: units.filter((u) => u.is_active).length, activeTenants: tenants.filter((t) => t.is_active).length, rents, advances, expenses: reportExpenses, allocations: reportAllocations });
+  if (!viewer.canManage) return <ReadOnlyOverview summary={summary} administratorUnlinked={viewer.isSuperAdmin}
+    rents={rents.slice(0, 10).map(row => ({ id: String(row.id), date: String(row.payment_date), tenant: String(row.tenant_name), amount: Number(row.total_rent_settled) }))} />;
   const activeOwners = owners.filter((owner) => owner.is_active);
   const inactiveOwners = owners.filter((owner) => !owner.is_active);
   const activeTotal = activeOwners.reduce((sum, owner) => sum + Number(owner.ownership_percentage), 0);

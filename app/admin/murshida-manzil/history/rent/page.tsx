@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireProfile } from "@/lib/auth/session";
+import { requireMurshidaAccess } from "@/lib/murshida-manzil/accounts-session";
 import { listRentHistory } from "@/lib/murshida-manzil/repository";
 
 export const dynamic = "force-dynamic";
@@ -8,7 +8,7 @@ const modulePath = "/admin/murshida-manzil";
 const columns = ["Receipt", "Received Date", "Period", "Tenant", "Unit", "Monthly Rent", "Received", "Advance Adjusted", "Balance After", "Action"];
 
 export default async function RentHistoryPage({ searchParams }: { searchParams: Promise<{ message?: string; error?: string }> }) {
-  await requireProfile(["admin"]);
+  const { viewer } = await requireMurshidaAccess();
   const [rows, notices] = await Promise.all([listRentHistory(), searchParams]);
   return <main className="mx-auto max-w-6xl p-8">
     <Link href={modulePath} className="text-sm font-semibold underline">← Murshida Manzil</Link>
@@ -32,10 +32,10 @@ export default async function RentHistoryPage({ searchParams }: { searchParams: 
             <td className="p-2">{row.advance_balance_after ?? 0}</td>
             <td className="p-2">
               <Link className="underline" href={receipt}>View / Print Receipt</Link>
-              <div className="mt-1 flex gap-2 print:hidden">
+              {viewer.canManage ? <div className="mt-1 flex gap-2 print:hidden">
                 <Link className="font-semibold underline" href={`${receipt}/edit`}>Edit</Link>
                 <Link className="font-semibold text-red-800 underline" href={`${receipt}/delete`}>Delete</Link>
-              </div>
+              </div> : null}
             </td>
           </tr>;
         })}</tbody>

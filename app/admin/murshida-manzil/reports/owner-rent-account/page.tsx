@@ -1,4 +1,4 @@
-import { requireProfile } from "@/lib/auth/session";
+import { requireMurshidaAccess } from "@/lib/murshida-manzil/accounts-session";
 import { getOwnerRentAccountData, listOwnerRentAccountOwners } from "@/lib/murshida-manzil/repository";
 import { buildAllOwnersRentAccountReport, buildOwnerRentAccountReport } from "@/lib/murshida-manzil/reports";
 import { PrintButton } from "@/app/admin/murshida-manzil/_components/PrintButton";
@@ -11,7 +11,7 @@ const monthLabel = (value: string) => new Date(`${value}-01T00:00:00`).toLocaleD
 const dhakaDate = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Dhaka", year: "numeric", month: "2-digit", day: "2-digit" });
 
 export default async function OwnerRentAccountPage({ searchParams }: { searchParams?: Promise<{ owner?: string; year?: string; from?: string; to?: string; beginning?: string }> }) {
-  await requireProfile(["admin"]);
+  await requireMurshidaAccess();
   const filters = await searchParams ?? {};
   const owners = await listOwnerRentAccountOwners();
   const selectedOwner = owners.find((owner) => owner.id === filters.owner);

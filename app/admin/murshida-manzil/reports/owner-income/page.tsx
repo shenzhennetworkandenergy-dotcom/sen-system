@@ -1,10 +1,10 @@
-import { requireProfile } from "@/lib/auth/session";
+import { requireMurshidaAccess } from "@/lib/murshida-manzil/accounts-session";
 import { getOwnerIncomeReport } from "@/lib/murshida-manzil/repository";
 import { PrintButton } from "@/app/admin/murshida-manzil/_components/PrintButton";
 import { buildMonthlyOwnerIncomeReport } from "@/lib/murshida-manzil/reports";
 export const dynamic = "force-dynamic";
 export default async function OwnerIncomeReportPage({ searchParams }: { searchParams?: Promise<{ from?: string; to?: string }> }) {
-  await requireProfile(["admin"]);
+  await requireMurshidaAccess();
   const filters = await searchParams ?? {};
   const report = await getOwnerIncomeReport(filters.from, filters.to);
   const reportData = buildMonthlyOwnerIncomeReport({ rents: report.rents, expenses: report.expenses, allocations: report.allocations });

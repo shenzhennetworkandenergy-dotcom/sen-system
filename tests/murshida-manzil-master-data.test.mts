@@ -27,7 +27,7 @@ test("Murshida master-data actions and page are Admin-only and isolated", () => 
   const actions = readFileSync(actionsPath, "utf8");
   const repository = readFileSync("lib/murshida-manzil/repository.ts", "utf8");
   const page = readFileSync(pagePath, "utf8");
-  assert.match(actions, /requireProfile\(\["admin"\]\)/);
+  assert.match(actions, /requireMurshida(?:Access|Manager)\(\)/);
   assert.match(actions, /createUnitAction|updateUnitAction/);
   assert.match(actions, /createOwnerAction|updateOwnerAction/);
   assert.match(actions, /updateTenantUnitAction/);
