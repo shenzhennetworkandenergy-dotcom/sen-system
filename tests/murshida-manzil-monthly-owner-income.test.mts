@@ -33,7 +33,7 @@ test("monthly owner income report is read-only and uses a dedicated route", () =
   const page = readFileSync("app/admin/murshida-manzil/reports/monthly-owner-income/page.tsx", "utf8");
   assert.match(page, /owner-income\/page/);
   const implementation = readFileSync("app/admin/murshida-manzil/reports/owner-income/page.tsx", "utf8");
-  assert.match(implementation, /requireProfile\(\["admin"\]\)/);
+  assert.match(implementation, /requireMurshida(?:Access|Manager)\(\)/);
   assert.match(implementation, /buildMonthlyOwnerIncomeReport/);
   assert.match(implementation, /PrintButton/);
   assert.doesNotMatch(implementation, /insert|update|delete/i);
@@ -64,7 +64,7 @@ test("owner rent account groups persisted rent allocations by payment month and 
 test("owner rent account route is admin-only, printable, and exposed by a dedicated button", () => {
   const page = readFileSync("app/admin/murshida-manzil/reports/owner-rent-account/page.tsx", "utf8");
   const button = readFileSync("app/admin/murshida-manzil/_components/LifecyclePanelWithReport.tsx", "utf8");
-  assert.match(page, /requireProfile\(\["admin"\]\)/);
+  assert.match(page, /requireMurshida(?:Access|Manager)\(\)/);
   assert.match(page, /OWNER RENT ACCOUNT STATEMENT/);
   assert.match(page, /PrintButton/);
   assert.doesNotMatch(page, /insert|update|delete/i);

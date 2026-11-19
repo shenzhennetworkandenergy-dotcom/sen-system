@@ -61,7 +61,7 @@ test("all owners use their own rent and expense shares for both balances", () =>
 
 test("reporting page is admin-only, read-only, and isolated", () => {
   const page = readFileSync(new URL("../app/admin/murshida-manzil/page.tsx", import.meta.url), "utf8");
-  assert.match(page, /requireProfile\(\["admin"\]\)/);
+  assert.match(page, /requireMurshida(?:Access|Manager)\(\)/);
   assert.match(page, /method="get"/);
   assert.match(page, /listRentReportRows/);
   assert.doesNotMatch(page, /@\/lib\/(accounting|sales|cashbook|inventory)/);

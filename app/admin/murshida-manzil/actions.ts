@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { requireProfile } from "@/lib/auth/session";
+import { requireMurshidaManager } from "@/lib/murshida-manzil/accounts-session";
 import { validateOwnershipPercentages, validateOwnershipPercentagesForSetup } from "@/lib/murshida-manzil/calculations";
 import { normalizeOwnerName, normalizeOwnerPhone, normalizeUnitCode } from "@/lib/murshida-manzil/master-data";
 import { allocateRentOwnerShares, changeRentReceipt, deleteOwner, deleteTenant, deleteUnit, getExpense, getTenantUnit, insertAdvancePayment, insertOwner, insertOwnerAllocations, insertTenant, insertUnit, listActiveOwners, listOwners, recordExpenseWithAllocations, recordRentReceipt, setTenantActive, setUnitActive, updateOwner, updateTenant, updateTenantDefaultAdvanceAdjustment, updateTenantUnit, updateUnit } from "@/lib/murshida-manzil/repository";
@@ -31,7 +31,7 @@ async function validateFinalOwners(next: { id?: string; percentage: number; is_a
 }
 
 export async function createOwnerAction(form: FormData) {
-  await requireProfile(["admin"]);
+  await requireMurshidaManager();
   const input = { name: normalizeOwnerName(text(form, "name")), phone_number: normalizeOwnerPhone(text(form, "phone_number")), ownership_percentage: percentage(form), is_active: active(form) };
   try {
     await validateFinalOwners([{ percentage: input.ownership_percentage, is_active: input.is_active }]);
@@ -44,7 +44,7 @@ export async function createOwnerAction(form: FormData) {
 }
 
 export async function updateOwnerAction(id: string, form: FormData) {
-  await requireProfile(["admin"]);
+  await requireMurshidaManager();
   const input = { name: normalizeOwnerName(text(form, "name")), phone_number: normalizeOwnerPhone(text(form, "phone_number")), ownership_percentage: percentage(form), is_active: active(form) };
   try {
     await validateFinalOwners([{ id, percentage: input.ownership_percentage, is_active: input.is_active }]);
@@ -57,7 +57,7 @@ export async function updateOwnerAction(id: string, form: FormData) {
 }
 
 export async function deleteOwnerAction(id: string) {
-  await requireProfile(["admin"]);
+  await requireMurshidaManager();
   const result = await deleteOwner(id);
   const message = result === "archived" ? "This owner has historical records and was archived instead of deleted." : "Owner deleted.";
   revalidatePath(path);
@@ -65,28 +65,28 @@ export async function deleteOwnerAction(id: string) {
 }
 
 export async function createUnitAction(form: FormData) {
-  await requireProfile(["admin"]);
+  await requireMurshidaManager();
   await insertUnit({ unit_code: normalizeUnitCode(text(form, "unit_code")), is_active: active(form) });
   revalidatePath(path);
   redirect(path);
 }
 
 export async function updateUnitAction(id: string, form: FormData) {
-  await requireProfile(["admin"]);
+  await requireMurshidaManager();
   await updateUnit(id, { unit_code: normalizeUnitCode(text(form, "unit_code")), is_active: active(form) });
   revalidatePath(path);
   redirect(path);
 }
 
 export async function updateTenantUnitAction(tenantId: string, unitId: string | null) {
-  await requireProfile(["admin"]);
+  await requireMurshidaManager();
   await updateTenantUnit(tenantId, unitId);
   revalidatePath(path);
   redirect(path);
 }
 
 export async function createTenantAction(form: FormData) {
-  await requireProfile(["admin"]);
+  await requireMurshidaManager();
   const unitId = text(form, "unit_id") || null;
   const unit = unitId ? await getTenantUnitForAssignment(unitId) : null;
   const input = validateTenantInput({ name: text(form, "name"), phoneNumber: text(form, "phone_number") || null, unitId, unitCode: unit?.unitCode ?? "", monthlyRent: Number(text(form, "monthly_rent")), unitDescription: unit?.unitCode ?? "", isActive: active(form) });
@@ -95,7 +95,7 @@ export async function createTenantAction(form: FormData) {
 }
 
 export async function updateTenantAction(id: string, form: FormData) {
-  await requireProfile(["admin"]);
+  await requireMurshidaManager();
   const unitId = text(form, "unit_id") || null;
   const unit = unitId ? await getTenantUnitForAssignment(unitId) : null;
   const input = validateTenantInput({ name: text(form, "name"), phoneNumber: text(form, "phone_number") || null, unitId, unitCode: unit?.unitCode ?? "", monthlyRent: Number(text(form, "monthly_rent")), unitDescription: unit?.unitCode ?? "", isActive: active(form) });
@@ -103,11 +103,11 @@ export async function updateTenantAction(id: string, form: FormData) {
   revalidatePath(path); redirect(path);
 }
 
-export async function deleteTenantAction(idOrForm: string | FormData) { await requireProfile(["admin"]); const id = typeof idOrForm === "string" ? idOrForm : text(idOrForm, "id"); const result = await deleteTenant(id); revalidatePath(path); redirect(`${path}?message=${encodeURIComponent(result === "archived" ? "Tenant has historical records and was archived instead of deleted." : "Tenant deleted.")}`); }
-export async function setTenantActiveAction(id: string, isActive: boolean) { await requireProfile(["admin"]); try { await setTenantActive(id, isActive); } catch (error) { ownerValidationError(error); } revalidatePath(path); redirect(path); }
+export async function deleteTenantAction(idOrForm: string | FormData) { await requireMurshidaManager(); const id = typeof idOrForm === "string" ? idOrForm : text(idOrForm, "id"); const result = await deleteTenant(id); revalidatePath(path); redirect(`${path}?message=${encodeURIComponent(result === "archived" ? "Tenant has historical records and was archived instead of deleted." : "Tenant deleted.")}`); }
+export async function setTenantActiveAction(id: string, isActive: boolean) { await requireMurshidaManager(); try { await setTenantActive(id, isActive); } catch (error) { ownerValidationError(error); } revalidatePath(path); redirect(path); }
 
-export async function deleteUnitAction(idOrForm: string | FormData) { await requireProfile(["admin"]); const id = typeof idOrForm === "string" ? idOrForm : text(idOrForm, "id"); const result = await deleteUnit(id); revalidatePath(path); redirect(`${path}?message=${encodeURIComponent(result === "archived" ? "Unit has historical records and was archived instead of deleted." : "Unit deleted.")}`); }
-export async function setUnitActiveAction(id: string, isActive: boolean) { await requireProfile(["admin"]); await setUnitActive(id, isActive); revalidatePath(path); redirect(path); }
+export async function deleteUnitAction(idOrForm: string | FormData) { await requireMurshidaManager(); const id = typeof idOrForm === "string" ? idOrForm : text(idOrForm, "id"); const result = await deleteUnit(id); revalidatePath(path); redirect(`${path}?message=${encodeURIComponent(result === "archived" ? "Unit has historical records and was archived instead of deleted." : "Unit deleted.")}`); }
+export async function setUnitActiveAction(id: string, isActive: boolean) { await requireMurshidaManager(); await setUnitActive(id, isActive); revalidatePath(path); redirect(path); }
 
 async function getTenantUnitForAssignment(unitId: string) {
   const { listUnits } = await import("@/lib/murshida-manzil/repository");
@@ -117,7 +117,7 @@ async function getTenantUnitForAssignment(unitId: string) {
 }
 
 export async function createRentTransactionAction(form: FormData) {
-  const { profile } = await requireProfile(["admin"]);
+  const { profile } = await requireMurshidaManager();
   const submittedId = text(form, "receipt_request_id");
   const id = uuidPattern.test(submittedId) ? submittedId : crypto.randomUUID();
   let transactionId: string;
@@ -142,7 +142,7 @@ export async function createRentTransactionAction(form: FormData) {
 }
 
 export async function changeRentReceiptAction(id: string, operation: "edit" | "delete", form: FormData) {
-  const { profile } = await requireProfile(["admin"]);
+  const { profile } = await requireMurshidaManager();
   const updatedAt = text(form, "updated_at");
   if (!uuidPattern.test(id) || !updatedAt || !Number.isFinite(Date.parse(updatedAt))) {
     redirect(`${rentHistory}?error=${encodeURIComponent("Open the receipt again before trying this change.")}`);
@@ -160,7 +160,7 @@ export async function changeRentReceiptAction(id: string, operation: "edit" | "d
 }
 
 export async function createAdvancePaymentAction(form: FormData) {
-  await requireProfile(["admin"]);
+  await requireMurshidaManager();
   const tenant = await getTenantUnit(text(form, "tenant_id"));
   const defaultMonthlyAdjustment = Number(text(form, "default_monthly_advance_adjustment"));
   const id = await insertAdvancePayment(buildAdvancePayment({ tenantId: tenant.tenantId, unitId: tenant.unitId, unitCode: tenant.unitCode, unitDescription: tenant.unitDescription, amount: Number(text(form, "amount")), defaultMonthlyAdjustment, paymentDate: text(form, "payment_date") }));
@@ -169,7 +169,7 @@ export async function createAdvancePaymentAction(form: FormData) {
 }
 
 export async function createExpenseAction(form: FormData) {
-  await requireProfile(["admin"]);
+  await requireMurshidaManager();
   const input = buildExpense({
     expenseDate: text(form, "expense_date"), description: text(form, "description"), amount: Number(text(form, "amount")),
     category: text(form, "category"), paidTo: text(form, "paid_to"), paymentMethod: text(form, "payment_method"), notes: text(form, "notes"), voucherNumber: text(form, "voucher_number"),
@@ -180,7 +180,7 @@ export async function createExpenseAction(form: FormData) {
 }
 
 export async function createOwnerAllocationAction(form: FormData) {
-  await requireProfile(["admin"]);
+  await requireMurshidaManager();
   const sourceType = text(form, "source_type");
   const sourceId = text(form, "source_id");
   const amount = Number(text(form, "amount"));

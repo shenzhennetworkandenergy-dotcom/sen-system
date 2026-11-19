@@ -90,8 +90,8 @@ test("receipt routes are admin-only and print only the receipt document", () => 
   const rentRoute = readFileSync(new URL("../app/admin/murshida-manzil/[id]/rent-receipt/page.tsx", import.meta.url), "utf8");
   const advanceRoute = readFileSync(new URL("../app/admin/murshida-manzil/[id]/advance-receipt/page.tsx", import.meta.url), "utf8");
   const documents = readFileSync(new URL("../app/admin/murshida-manzil/_components/RentReceiptDocument.tsx", import.meta.url), "utf8") + readFileSync(new URL("../app/admin/murshida-manzil/_components/AdvanceMoneyReceiptDocument.tsx", import.meta.url), "utf8") + readFileSync(new URL("../app/admin/murshida-manzil/_components/PrintButton.tsx", import.meta.url), "utf8");
-  assert.match(rentRoute, /requireProfile\(\["admin"\]\)/);
-  assert.match(advanceRoute, /requireProfile\(\["admin"\]\)/);
+  assert.match(rentRoute, /requireMurshida(?:Access|Manager)\(\)/);
+  assert.match(advanceRoute, /requireMurshida(?:Access|Manager)\(\)/);
   assert.match(documents, /print:hidden/);
   assert.match(documents, /print:min-h/);
   assert.doesNotMatch(documents, /from ["']@\/lib\/(accounting|sales|cashbook)/);

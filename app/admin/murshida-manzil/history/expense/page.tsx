@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { requireProfile } from "@/lib/auth/session";
+import { requireMurshidaAccess } from "@/lib/murshida-manzil/accounts-session";
 import { listExpenseHistory } from "@/lib/murshida-manzil/repository";
 
 export const dynamic = "force-dynamic";
@@ -8,7 +8,7 @@ const modulePath = "/admin/murshida-manzil";
 const columns = ["Voucher", "Date", "Description", "Category", "Paid To", "Amount", "Payment Method", "Action"];
 
 export default async function ExpenseHistoryPage() {
-  await requireProfile(["admin"]);
+  await requireMurshidaAccess();
   const rows = await listExpenseHistory();
   return <main className="mx-auto max-w-6xl p-8">
     <Link href={modulePath} className="text-sm font-semibold underline">← Murshida Manzil</Link>

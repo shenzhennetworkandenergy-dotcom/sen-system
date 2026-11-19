@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { changeRentReceiptAction } from "@/app/admin/murshida-manzil/actions";
-import { requireProfile } from "@/lib/auth/session";
+import { requireMurshidaManager } from "@/lib/murshida-manzil/accounts-session";
 import { getRentTransaction } from "@/lib/murshida-manzil/repository";
 import { rentPaymentMethods } from "@/lib/murshida-manzil/tenant-rent";
 
@@ -15,7 +15,7 @@ export default async function ManageRentReceiptPage({ params, searchParams }: {
   params: Promise<{ id: string; operation: string }>;
   searchParams: Promise<{ error?: string }>;
 }) {
-  await requireProfile(["admin"]);
+  await requireMurshidaManager();
   const { id, operation } = await params;
   if ((operation !== "edit" && operation !== "delete") || !/^[a-f\d]{8}(?:-[a-f\d]{4}){3}-[a-f\d]{12}$/i.test(id)) notFound();
   const [rent, notice] = await Promise.all([getRentTransaction(id), searchParams]);

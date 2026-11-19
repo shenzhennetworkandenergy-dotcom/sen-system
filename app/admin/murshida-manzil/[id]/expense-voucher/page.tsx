@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { requireProfile } from "@/lib/auth/session";
+import { requireMurshidaAccess } from "@/lib/murshida-manzil/accounts-session";
 import { getExpense } from "@/lib/murshida-manzil/repository";
 import { PrintButton } from "@/app/admin/murshida-manzil/_components/PrintButton";
 import styles from "../../print-documents.module.css";
@@ -7,7 +7,7 @@ import styles from "../../print-documents.module.css";
 export const dynamic = "force-dynamic";
 
 export default async function ExpenseVoucherPage({ params }: { params: Promise<{ id: string }> }) {
-  await requireProfile(["admin"]);
+  await requireMurshidaAccess();
   const expense = await getExpense((await params).id).catch(() => null);
   if (!expense) notFound();
 

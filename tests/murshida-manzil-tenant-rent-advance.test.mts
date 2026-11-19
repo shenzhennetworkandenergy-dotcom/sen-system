@@ -56,7 +56,7 @@ test("advance adjustment defaults are additive Murshida-only schema fields", () 
 test("actions remain Admin-only and do not repurpose advance adjustments or SEN modules", () => {
   const actions = readFileSync("app/admin/murshida-manzil/actions.ts", "utf8");
   assert.match(actions, /createTenantAction|createRentTransactionAction|createAdvancePaymentAction/);
-  assert.match(actions, /requireProfile\(\["admin"\]\)/);
+  assert.match(actions, /requireMurshida(?:Access|Manager)\(\)/);
   assert.match(actions, /getTenantUnit/);
   assert.doesNotMatch(actions, /rent_advance_adjustments|journal_entries|cashbook_entries|sales_orders|inventory_movements/);
 });

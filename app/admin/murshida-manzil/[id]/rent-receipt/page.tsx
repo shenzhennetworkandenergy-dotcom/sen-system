@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { requireProfile } from "@/lib/auth/session";
+import { requireMurshidaAccess } from "@/lib/murshida-manzil/accounts-session";
 import { getRentTransaction } from "@/lib/murshida-manzil/repository";
 import { buildRentReceiptData, mapRentTransactionRowToSnapshot } from "@/lib/murshida-manzil/receipts";
 import { RentReceiptDocument } from "@/app/admin/murshida-manzil/_components/RentReceiptDocument";
@@ -7,7 +7,7 @@ import { RentReceiptDocument } from "@/app/admin/murshida-manzil/_components/Ren
 export const dynamic = "force-dynamic";
 
 export default async function RentReceiptPage({ params }: { params: Promise<{ id: string }> }) {
-  await requireProfile(["admin"]);
+  await requireMurshidaAccess();
   const transaction = await getRentTransaction((await params).id).catch(() => null);
   if (!transaction) notFound();
   const receiptSnapshot = mapRentTransactionRowToSnapshot({
