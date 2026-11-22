@@ -1,3 +1,5 @@
+import { MobileAppDownload } from "@/components/home/MobileAppDownload";
+import "./mobile.css";
 import { BusinessCategories } from "@/components/home/BusinessCategories";
 import { BrandsSection } from "@/components/home/BrandsSection";
 import { CapabilitiesSection } from "@/components/home/CapabilitiesSection";
@@ -15,5 +17,5 @@ import { PublicHeader } from "@/components/layout/PublicHeader";
 export const dynamic = "force-dynamic";
 
 export default function Home() {
-  return <div className="public-experience"><PublicHeader /><main><HeroSection /><BusinessCategories /><CompanyIntroduction /><FeaturedSolutions /><FeaturedProducts /><WhyChooseSen /><IndustriesSection /><ProjectWorkflow /><CapabilitiesSection /><BrandsSection /><FinalCta /></main><PublicFooter /></div>;
+  return <div className="public-experience"><PublicHeader /><main><HeroSection /><BusinessCategories /><CompanyIntroduction /><FeaturedSolutions /><FeaturedProducts /><WhyChooseSen /><IndustriesSection /><ProjectWorkflow /><CapabilitiesSection /><BrandsSection /><MobileAppDownload /><FinalCta /></main><PublicFooter /></div>;
 }

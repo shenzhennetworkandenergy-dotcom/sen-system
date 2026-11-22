@@ -29,4 +29,11 @@ yarn-error.log*
 .pnpm-debug.log*
 /.codex-logs/
 /.superpowers/
+/mobile/android/.gradle/
+/mobile/android/build/
+/mobile/android/app/build/
+/mobile/android/local.properties
+*.jks
+*.keystore
+*.p12
 
