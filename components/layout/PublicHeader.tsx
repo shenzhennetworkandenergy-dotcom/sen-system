@@ -88,9 +88,12 @@ export async function PublicHeader() {
         <div className="sen-header-shell">
           <div className="sen-announcement">
         <Container className="flex items-center justify-between gap-4 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] sm:text-xs">
-          <span>Enterprise technology · Energy · Medical · Global sourcing</span>
-          <span className="hidden text-cyan-300 md:inline">
-            China → Bangladesh → Worldwide
+          <span className="min-w-0 truncate">Enterprise technology · Energy · Medical · Global sourcing</span>
+          <span className="flex shrink-0 items-center gap-4">
+            <span className="hidden text-cyan-300 md:inline">China → Bangladesh → Worldwide</span>
+            <Link href="/app" className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-cyan-300/50 bg-cyan-300/10 px-3 text-[11px] font-bold normal-case tracking-normal text-cyan-100 transition hover:bg-cyan-300/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-300">
+              Download SEN App <span aria-hidden="true">↓</span>
+            </Link>
           </span>
         </Container>
           </div>
