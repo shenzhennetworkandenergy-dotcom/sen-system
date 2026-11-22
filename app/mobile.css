@@ -1,0 +1,21 @@
+.sen-app-page{background:linear-gradient(155deg,#eff9ff,#fff 48%,#f1f5fb);color:#10264c}
+.sen-app-hero{text-align:center}
+.sen-app-card{padding:clamp(1.3rem,4vw,2rem);border:1px solid #d7e4ee;border-radius:1.5rem;background:white;box-shadow:0 12px 32px #10264c08;color:#10264c}
+.sen-app-platform{display:inline-block;padding:.35rem .7rem;border-radius:99px;background:#e9f7fb;color:#08728a;font-size:.7rem;font-weight:800;letter-spacing:.13em}
+.sen-app-button{display:inline-flex;min-height:48px;justify-content:center;align-items:center;gap:.65rem;padding:.8rem 1.2rem;border:1px solid #1f3a5f;border-radius:.75rem;background:#1f3a5f;color:white!important;text-decoration:none;font-weight:700;line-height:1.4;text-align:center;cursor:pointer;transition:background .15s}
+.sen-app-button:hover{background:#155481}
+.sen-app-button:focus-visible{outline:3px solid #06b6d4;outline-offset:4px}
+.sen-app-button-secondary{background:#f0f6fc;color:#1f3a5f!important;border-color:#cadbe8}
+.sen-app-button-secondary:hover{background:#e0edf7}
+.sen-app-button-light{background:#fff;border-color:#fff;color:#10264c!important}
+.sen-app-button-light:hover{background:#e8f8ff}
+.sen-app-steps{counter-reset:steps;list-style:none;display:grid;gap:1rem;font-size:.9rem;line-height:1.65;color:#475569}
+.sen-app-steps li{position:relative;counter-increment:steps;padding-left:2.5rem}
+.sen-app-steps li::before{content:counter(steps);position:absolute;left:0;top:0;display:grid;place-items:center;height:1.7rem;width:1.7rem;border-radius:50%;background:#eff6ff;color:#155eef;font-weight:bold;font-size:.8rem}
+.sen-app-home{padding:2.5rem 1rem;background:#f0f7fc}
+.sen-app-home-inner{display:flex;flex-wrap:wrap;align-items:center;gap:1.5rem;max-width:76rem;margin:auto;padding:clamp(1.5rem,4vw,3rem);border-radius:1.5rem;background:linear-gradient(120deg,#07152f,#102b57 65%,#075985);box-shadow:0 20px 50px #10264c18}
+.sen-app-page .sen-floating-chat{display:none}
+@media screen and (max-width:767px){
+  .sen-app-home-inner{align-items:flex-start}.sen-app-home-inner>a{width:100%}
+  .sen-app-home-inner>div{flex-basis:calc(100% - 7rem)}
+}

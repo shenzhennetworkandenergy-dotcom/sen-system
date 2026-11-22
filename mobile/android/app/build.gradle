@@ -1,0 +1,54 @@
+plugins { id 'com.android.application' }
+
+def signingVariables = ['SEN_RELEASE_KEYSTORE', 'SEN_RELEASE_STORE_PASSWORD', 'SEN_RELEASE_KEY_ALIAS', 'SEN_RELEASE_KEY_PASSWORD']
+def signedRelease = signingVariables.every { System.getenv(it) }
+if (gradle.startParameter.taskNames.any { it.toLowerCase().contains('release') } && !signedRelease) {
+    throw new GradleException('Provide the existing SEN release signing key through environment variables.')
+}
+
+android {
+    namespace 'bd.com.sen.erp.mobile'
+    compileSdk 36
+    buildToolsVersion '36.0.0'
+    defaultConfig {
+        applicationId 'bd.com.sen.erp.mobile'
+        minSdk 26
+        targetSdk 36
+        versionCode 4
+        versionName '2.0.0'
+        manifestPlaceholders = [launchUrl: 'https://www.sen.com.bd/?source=android', launchHost: 'www.sen.com.bd', launchActivity: '.SenLauncherActivity']
+    }
+    signingConfigs {
+        if (signedRelease) {
+            senRelease {
+                storeFile file(System.getenv('SEN_RELEASE_KEYSTORE'))
+                storePassword System.getenv('SEN_RELEASE_STORE_PASSWORD')
+                keyAlias System.getenv('SEN_RELEASE_KEY_ALIAS')
+                keyPassword System.getenv('SEN_RELEASE_KEY_PASSWORD')
+                storeType 'PKCS12'
+            }
+        }
+    }
+    buildTypes {
+        debug {
+            applicationIdSuffix '.preview'
+            versionNameSuffix '-preview'
+            manifestPlaceholders = [launchUrl: 'http://127.0.0.1:3022/?source=android-preview', launchHost: '127.0.0.1', launchActivity: '.PreviewLauncherActivity']
+        }
+        release {
+            minifyEnabled true
+            shrinkResources true
+            if (signedRelease) signingConfig signingConfigs.senRelease
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.7.4'
+    testImplementation 'junit:junit:4.13.2'
+}

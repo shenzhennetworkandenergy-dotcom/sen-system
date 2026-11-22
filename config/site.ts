@@ -52,7 +52,7 @@ export const siteConfig = {
   footerGroups: [
     { title: "Company", links: [{ label: "About", href: routes.about }, { label: "Contact", href: routes.contact }, { label: "Careers", href: "/careers" }] },
     { title: "Solutions", links: [{ label: "Enterprise Network", href: "/solutions/enterprise-network" }, { label: "Data Center", href: "/solutions/data-center" }, { label: "Industrial Automation", href: "/solutions/industrial-automation" }, { label: "Sourcing and Procurement", href: "/solutions/sourcing-procurement" }] },
-    { title: "Support", links: [{ label: "Request a Quote", href: routes.requestQuote }, { label: "Customer Login", href: routes.login }, { label: "Order/serial tracking", href: "/tracking" }] },
+    { title: "Support", links: [{ label: "Request a Quote", href: routes.requestQuote }, { label: "Customer Login", href: routes.login }, { label: "Order/serial tracking", href: "/tracking" }, { label: "Get the SEN app", href: "/app" }] },
     { title: "Legal", links: [{ label: "Privacy Policy", href: "/privacy" }, { label: "Terms", href: "/terms" }] },
   ],
 } as const satisfies SiteConfig;

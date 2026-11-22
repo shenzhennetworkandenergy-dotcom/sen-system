@@ -1,0 +1,5 @@
+<resources>
+    <string name="asset_statements" translatable="false">[{\"relation\":[\"delegate_permission/common.handle_all_urls\"],\"target\":{\"namespace\":\"web\",\"site\":\"https://www.sen.com.bd\"}},{\"relation\":[\"delegate_permission/common.handle_all_urls\"],\"target\":{\"namespace\":\"web\",\"site\":\"https://sen.com.bd\"}}]</string>
+    <color name="sen_navy">#07152f</color>
+    <string-array name="additional_origins"><item>https://sen.com.bd</item></string-array>
+</resources>
