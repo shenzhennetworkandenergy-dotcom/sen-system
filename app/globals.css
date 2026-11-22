@@ -241,6 +241,7 @@ html { scroll-behavior: smooth; }
 @media (prefers-color-scheme: dark) {
   .sen-dashboard-shell {
     background: radial-gradient(circle at 92% 0%, rgb(6 182 212 / .12), transparent 28rem), #07101f;
+    color: #f8fafc;
   }
   .sen-dashboard-title {
     border-color: #334155;
@@ -251,6 +252,11 @@ html { scroll-behavior: smooth; }
   .sen-dashboard-content :where(section, article, form, details) > div:first-child :where(h2, h3) { color: #dbeafe; }
   .sen-dashboard-content :where(.rounded-xl, .rounded-2xl).border { border-color: #334155; background-color: #111827; background-image: linear-gradient(145deg, #111827, #0f1b30); }
   .sen-dashboard-content :where(input:not([type="checkbox"]):not([type="radio"]), select, textarea) { border-color: #475569; background: #111827; color: #f8fafc; }
+  /* Touch browsers can retain hover after tapping a field. Keep its dark surface. */
+  .sen-dashboard-content :where(input:not([type="checkbox"]):not([type="radio"]), select, textarea):hover { background-color: #111827; }
+  .sen-dashboard-content [role="listbox"] { color: #f8fafc; }
+  .sen-dashboard-content [role="option"]:is(:hover, :focus, [aria-selected="true"]) { background: #1f3a5f; color: #f8fafc; }
+  .sen-dashboard-content [role="listbox"] :where(.text-slate-500, .text-slate-600) { color: #cbd5e1; }
   .sen-dashboard-content table thead { color: #bfdbfe; background: linear-gradient(90deg, #172554, #13243d); }
   .sen-dashboard-content table tbody tr:nth-child(even) { background-color: rgb(15 23 42 / .45); }
   .sen-dashboard-content table tbody tr:hover { background: linear-gradient(90deg, rgb(30 58 138 / .38), rgb(15 23 42 / .65)); }
