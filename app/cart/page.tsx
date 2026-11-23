@@ -7,6 +7,7 @@ import { CheckoutConfirmation } from "@/components/cart/CheckoutConfirmation";
 import { Container } from "@/components/ui/Container";
 import { requireProfile } from "@/lib/auth/session";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { availableEpsGateway } from "@/lib/payments/eps-server";
 
 import { checkoutAction, updateCartAction } from "./actions";
 
@@ -39,6 +40,7 @@ export default async function CartPage({
   const { profile } = await requireProfile(["customer", "admin"]);
   const notice = await searchParams;
   const db = createSupabaseAdminClient();
+  const eps = await availableEpsGateway();
   const { data: cart } = await db
     .from("shopping_carts")
     .select("id")
@@ -66,7 +68,8 @@ export default async function CartPage({
 
   const total = (items ?? []).reduce((sum, item) => {
     const product = item.products as unknown as CartProduct;
-    const variation = item.product_variations as unknown as CartVariation | null;
+    const variation =
+      item.product_variations as unknown as CartVariation | null;
     return (
       sum +
       Number(item.quantity) *
@@ -83,7 +86,7 @@ export default async function CartPage({
   return (
     <>
       <PublicHeader />
-      <main className="min-h-[70vh] bg-slate-50 py-12">
+      <main className="min-h-[70vh] bg-slate-50 py-12 text-slate-950">
         <Container>
           <h1 className="text-4xl font-bold text-slate-950">Your cart</h1>
           {notice.success ? (
@@ -151,7 +154,7 @@ export default async function CartPage({
                       {new Intl.NumberFormat("en-BD", {
                         style: "currency",
                         currency: "BDT",
-                        maximumFractionDigits: 0,
+                        maximumFractionDigits: 2,
                       }).format(price * Number(item.quantity))}
                     </b>
                   </article>
@@ -160,10 +163,7 @@ export default async function CartPage({
               {!items?.length ? (
                 <p className="rounded-2xl border bg-white p-10 text-center">
                   Your cart is empty.{" "}
-                  <Link
-                    href="/products"
-                    className="font-bold text-blue-700"
-                  >
+                  <Link href="/products" className="font-bold text-blue-700">
                     Browse products
                   </Link>
                 </p>
@@ -177,7 +177,7 @@ export default async function CartPage({
                   {new Intl.NumberFormat("en-BD", {
                     style: "currency",
                     currency: "BDT",
-                    maximumFractionDigits: 0,
+                    maximumFractionDigits: 2,
                   }).format(total)}
                 </b>
               </p>
@@ -187,6 +187,9 @@ export default async function CartPage({
                   addresses={addresses ?? []}
                   email={profile.email ?? ""}
                   phone={profile.phone ?? ""}
+                  eps={eps ? { testMode: eps.test_mode } : null}
+                  operationId={crypto.randomUUID()}
+                  total={total}
                 />
               ) : null}
             </aside>

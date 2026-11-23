@@ -4,6 +4,7 @@ import { Container } from "@/components/ui/Container";
 import { siteConfig } from "@/config/site";
 import { getBusinessCategories } from "@/lib/catalog/business-categories";
 import { loadFooterProductLinks } from "@/lib/catalog/footer-product-links";
+import { PaymentMethods } from "@/components/payments/PaymentMethods";
 
 export async function PublicFooter() {
   const year = new Date().getFullYear();
@@ -69,6 +70,7 @@ export async function PublicFooter() {
           })}
         </div>
       </Container>
+      <Container><PaymentMethods/></Container>
       <Container className="flex flex-col gap-3 border-t border-white/10 py-5 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between">
         <span>
           © {year} {siteConfig.company.fullName}. All rights reserved.

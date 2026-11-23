@@ -5,6 +5,7 @@ import { connection } from "next/server";
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { OrderProgress } from "@/components/orders/OrderProgress";
 import { ShipmentTrackingCard } from "@/components/orders/ShipmentTrackingCard";
+import { OrderOnlinePayment } from "@/components/payments/OrderOnlinePayment";
 import { requireProfile } from "@/lib/auth/session";
 import { normalizeCustomerOrderStatus } from "@/lib/orders/customer-status";
 import { getOrder, getShipment } from "@/lib/orders/data";
@@ -56,6 +57,7 @@ export default async function CustomerOrderPage({
         </Link>
       </div>
       <OrderProgress status={customerStatus} />
+      <OrderOnlinePayment orderId={id} customerId={profile.id} total={data.order.total_amount} paid={data.order.paid_amount} />
       <section className="mt-5 grid gap-4 lg:grid-cols-[1.2fr_.8fr]">
         <div className="rounded-2xl border bg-[var(--surface)] p-5">
           <h2 className="text-xl font-semibold">Products</h2>

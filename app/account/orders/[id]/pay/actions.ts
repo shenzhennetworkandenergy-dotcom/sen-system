@@ -5,6 +5,8 @@ import { redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth/session";
 import { createGatewayCheckout } from "@/lib/payments/gateways";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getOrderEpsAttempts, reconcileEpsAttempt, startEpsPayment } from "@/lib/payments/eps-server";
+import { revalidatePath } from "next/cache";
 
 export async function beginPaymentAction(orderId: string, form: FormData) {
   const { profile } = await requireProfile(["customer", "admin"]);
@@ -39,6 +41,23 @@ export async function beginPaymentAction(orderId: string, form: FormData) {
   );
   if (amount <= 0) {
     redirect(`/account/orders/${orderId}?success=Order%20is%20already%20paid.`);
+  }
+
+  if (gateway.adapter === "eps") {
+    let checkoutUrl: string;
+    try { checkoutUrl = await startEpsPayment(orderId, profile.id); }
+    catch { redirect(`/account/orders/${orderId}/pay?error=Payment%20is%20not%20confirmed.%20Check%20payment%20status%20before%20trying%20again.`); }
+    redirect(checkoutUrl);
+  }
+
+  const { data: onlineOrder, error: onlineOrderError } = await db
+    .from("eps_checkout_requests")
+    .select("order_id")
+    .eq("order_id", orderId)
+    .eq("profile_id", profile.id)
+    .maybeSingle();
+  if (onlineOrder || onlineOrderError) {
+    redirect(`/account/orders/${orderId}/pay?error=Use%20the%20existing%20EPS%20payment%20for%20this%20online%20order.`);
   }
 
   const origin = String(form.get("origin") ?? "").replace(/\/$/, "");
@@ -111,4 +130,13 @@ export async function beginPaymentAction(orderId: string, form: FormData) {
     );
   }
   redirect(checkout.checkoutUrl);
+}
+
+export async function checkEpsPaymentAction(orderId: string) {
+  const {profile}=await requireProfile(["customer","admin"]);
+  const attempts=await getOrderEpsAttempts(orderId,profile.id);
+  for(const attempt of attempts.slice(0,3)) await reconcileEpsAttempt(attempt.id);
+  revalidatePath(`/account/orders/${orderId}`);
+  revalidatePath(`/account/orders/${orderId}/pay`);
+  redirect(`/account/orders/${orderId}/pay`);
 }
