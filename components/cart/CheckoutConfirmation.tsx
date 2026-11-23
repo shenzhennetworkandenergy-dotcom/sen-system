@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useRef, useState } from "react";
+import { useFormStatus } from "react-dom";
 
 type Address = {
   id: string;
@@ -46,26 +47,42 @@ export function CheckoutConfirmation({
   addresses,
   email: initialEmail,
   phone: initialPhone,
+  eps = null,
+  operationId,
+  total,
 }: {
   action: (formData: FormData) => void | Promise<void>;
   addresses: Address[];
   email: string;
   phone: string;
+  eps?: { testMode: boolean } | null;
+  operationId: string;
+  total: number;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
-  const defaultAddress = addresses.find((address) => address.is_default_shipping) ?? addresses[0];
+  const defaultAddress =
+    addresses.find((address) => address.is_default_shipping) ?? addresses[0];
   const [addressId, setAddressId] = useState(defaultAddress?.id ?? "");
   const selectedAddress = useMemo(
     () => addresses.find((address) => address.id === addressId) ?? null,
     [addressId, addresses],
   );
   const [email, setEmail] = useState(initialEmail);
-  const [phone, setPhone] = useState(initialPhone || selectedAddress?.phone || "");
+  const [phone, setPhone] = useState(
+    initialPhone || selectedAddress?.phone || "",
+  );
   const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("cash_on_delivery");
+  const online = paymentMethod === "eps";
 
   const validate = () => {
     if (!selectedAddress) return "Choose a saved shipping address.";
+    if (
+      online &&
+      (!selectedAddress.postal_code?.trim() || !selectedAddress.city?.trim())
+    )
+      return "Add a postcode and city to your shipping address for online payment.";
     if (!emailPattern.test(email.trim())) return "Enter a valid email address.";
     if (!validPhone(phone)) {
       return "Enter a valid Bangladesh phone number or an international number with country code.";
@@ -87,13 +104,15 @@ export function CheckoutConfirmation({
           value={addressId}
           onChange={(event) => {
             const nextId = event.target.value;
-            const nextAddress = addresses.find((address) => address.id === nextId);
+            const nextAddress = addresses.find(
+              (address) => address.id === nextId,
+            );
             setAddressId(nextId);
             if (nextAddress?.phone) setPhone(nextAddress.phone);
             setError("");
           }}
           required
-          className="mt-1 w-full rounded-xl border p-3"
+          className="mt-1 w-full rounded-xl border bg-white p-3 text-base text-slate-950"
         >
           <option value="">Choose saved address</option>
           {addresses.map((address) => (
@@ -104,11 +123,17 @@ export function CheckoutConfirmation({
         </select>
       </label>
       {!addresses.length ? (
-        <Link href="/account/addresses" className="block text-sm font-bold text-blue-700">
+        <Link
+          href="/account/addresses"
+          className="block text-sm font-bold text-blue-700"
+        >
           Add a shipping address first →
         </Link>
       ) : (
-        <Link href="/account/addresses" className="block text-sm font-bold text-blue-700">
+        <Link
+          href="/account/addresses"
+          className="block text-sm font-bold text-blue-700"
+        >
           Add or correct an address
         </Link>
       )}
@@ -118,14 +143,64 @@ export function CheckoutConfirmation({
           value={notes}
           onChange={(event) => setNotes(event.target.value.slice(0, 4000))}
           rows={3}
-          className="mt-1 w-full rounded-xl border p-3"
+          className="mt-1 w-full rounded-xl border bg-white p-3 text-base text-slate-950"
         />
       </label>
-      <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-950">
-        <b>Payment method:</b> Cash on delivery (COD)
-      </div>
+      <fieldset className="space-y-2">
+        <legend className="mb-2 text-sm font-bold">Payment method</legend>
+        {eps ? (
+          <label
+            className={`flex cursor-pointer items-start gap-3 rounded-xl border p-4 ${online ? "border-blue-600 bg-blue-50" : "bg-white"}`}
+          >
+            <input
+              className="mt-1"
+              type="radio"
+              name="payment_choice"
+              value="eps"
+              checked={online}
+              onChange={() => {
+                setPaymentMethod("eps");
+                setError("");
+              }}
+            />
+            <span>
+              <b className="block">
+                Pay online with EPS {eps.testMode ? "· Sandbox test" : ""}
+              </b>
+              <span className="mt-1 block text-sm text-slate-600">
+                Choose an available card, mobile banking or internet banking
+                method at secure checkout.
+              </span>
+            </span>
+          </label>
+        ) : null}
+        <label
+          className={`flex cursor-pointer items-start gap-3 rounded-xl border p-4 ${!online ? "border-blue-600 bg-blue-50" : "bg-white"}`}
+        >
+          <input
+            className="mt-1"
+            type="radio"
+            name="payment_choice"
+            value="cash_on_delivery"
+            checked={!online}
+            onChange={() => {
+              setPaymentMethod("cash_on_delivery");
+              setError("");
+            }}
+          />
+          <span>
+            <b className="block">Cash on delivery</b>
+            <span className="mt-1 block text-sm text-slate-600">
+              Pay when your order is delivered.
+            </span>
+          </span>
+        </label>
+      </fieldset>
       {error ? (
-        <p className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-900" role="alert">
+        <p
+          className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm font-semibold text-red-900"
+          role="alert"
+        >
           {error}
         </p>
       ) : null}
@@ -135,33 +210,44 @@ export function CheckoutConfirmation({
         onClick={openReview}
         className="w-full rounded-xl bg-slate-950 px-5 py-3 font-bold text-white disabled:opacity-40"
       >
-        Confirm Cash On Delivery Order
+        {online ? "Review & pay online" : "Confirm Cash On Delivery Order"}
       </button>
 
       <dialog
         ref={dialog}
         onClose={() => setError("")}
-        className="m-auto w-[min(94vw,42rem)] rounded-3xl border-0 bg-white p-0 text-slate-950 shadow-2xl backdrop:bg-slate-950/70"
+        className="m-auto max-h-[90dvh] w-[min(94vw,42rem)] overflow-hidden rounded-3xl border-0 bg-white p-0 text-slate-950 shadow-2xl backdrop:bg-slate-950/70"
       >
-        <form noValidate action={action} className="p-6 sm:p-8" onSubmit={(event) => {
-          const message = validate();
-          if (message) {
-            event.preventDefault();
-            setError(message);
-          }
-        }}>
+        <form
+          noValidate
+          action={action}
+          className="flex max-h-[90dvh] flex-col p-6 sm:p-8"
+          onSubmit={(event) => {
+            const message = validate();
+            if (message) {
+              event.preventDefault();
+              setError(message);
+            }
+          }}
+        >
           <input type="hidden" name="address_id" value={addressId} />
           <input type="hidden" name="notes" value={notes} />
-          <input type="hidden" name="payment_method" value="cash_on_delivery" />
+          <input type="hidden" name="payment_method" value={paymentMethod} />
+          <input type="hidden" name="operation_id" value={operationId} />
+          <input type="hidden" name="expected_total" value={total.toFixed(2)} />
           <input type="hidden" name="confirmed" value="yes" />
-          <div className="flex items-start justify-between gap-4">
+          <div className="flex shrink-0 items-start justify-between gap-4">
             <div>
               <p className="text-xs font-bold uppercase tracking-[.18em] text-cyan-700">
                 Final order confirmation
               </p>
-              <h2 className="mt-2 text-2xl font-bold">Check your billing information</h2>
+              <h2 className="mt-2 text-2xl font-bold">
+                Check your billing information
+              </h2>
               <p className="mt-1 text-sm text-slate-600">
-                We will use these details to confirm and deliver your COD order.
+                {online
+                  ? "Review your order before continuing to EPS secure checkout."
+                  : "We will use these details to confirm and deliver your COD order."}
               </p>
             </div>
             <button
@@ -174,7 +260,17 @@ export function CheckoutConfirmation({
             </button>
           </div>
 
-          <div className="mt-6 grid gap-4">
+          <div className="mt-6 grid min-h-0 flex-1 gap-4 overflow-y-auto overscroll-contain pr-1">
+            <p className="flex flex-wrap justify-between gap-2 rounded-xl border bg-slate-50 p-4 font-bold">
+              <span>Order total</span>
+              <span>
+                {new Intl.NumberFormat("en-BD", {
+                  style: "currency",
+                  currency: "BDT",
+                  maximumFractionDigits: 2,
+                }).format(total)}
+              </span>
+            </p>
             <label className="text-sm font-semibold">
               Billing email
               <input
@@ -186,7 +282,7 @@ export function CheckoutConfirmation({
                   setEmail(event.target.value);
                   setError("");
                 }}
-                className="mt-1 w-full rounded-xl border p-3"
+                className="mt-1 w-full rounded-xl border bg-white p-3 text-base text-slate-950"
               />
             </label>
             <label className="text-sm font-semibold">
@@ -201,7 +297,7 @@ export function CheckoutConfirmation({
                   setError("");
                 }}
                 placeholder="+8801XXXXXXXXX"
-                className="mt-1 w-full rounded-xl border p-3"
+                className="mt-1 w-full rounded-xl border bg-white p-3 text-base text-slate-950"
               />
             </label>
             <div className="rounded-2xl border bg-slate-50 p-4">
@@ -209,18 +305,32 @@ export function CheckoutConfirmation({
                 Delivery location
               </p>
               <p className="mt-2 font-semibold">
-                {selectedAddress ? addressLabel(selectedAddress) : "No address selected"}
+                {selectedAddress
+                  ? addressLabel(selectedAddress)
+                  : "No address selected"}
               </p>
             </div>
             <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-              <p className="font-bold text-emerald-950">Cash on delivery</p>
+              <p className="font-bold text-emerald-950">
+                {online
+                  ? `EPS secure online payment${eps?.testMode ? " · Sandbox" : ""}`
+                  : "Cash on delivery"}
+              </p>
               <p className="mt-1 text-sm text-emerald-900">
-                Payment will be collected when the order is delivered. No online payment is required now.
+                {online
+                  ? eps?.testMode
+                    ? "This is a test payment. No real money is collected and your order will not be marked paid."
+                    : "You will leave SEN to complete payment securely on EPS. Your order is marked paid only after verification."
+                  : "Payment will be collected when the order is delivered. No online payment is required now."}
               </p>
             </div>
-            {error ? <p className="text-sm font-semibold text-red-700" role="alert">{error}</p> : null}
+            {error ? (
+              <p className="text-sm font-semibold text-red-700" role="alert">
+                {error}
+              </p>
+            ) : null}
           </div>
-          <div className="mt-7 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+          <div className="mt-5 flex shrink-0 flex-col-reverse gap-3 sm:flex-row sm:justify-end">
             <button
               type="button"
               onClick={() => dialog.current?.close()}
@@ -228,12 +338,26 @@ export function CheckoutConfirmation({
             >
               Go back
             </button>
-            <button className="rounded-xl bg-slate-950 px-6 py-3 font-bold text-white">
-              Confirm
-            </button>
+            <CheckoutSubmit online={online} />
           </div>
         </form>
       </dialog>
     </div>
+  );
+}
+
+function CheckoutSubmit({ online }: { online: boolean }) {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      disabled={pending}
+      className="rounded-xl bg-slate-950 px-6 py-3 font-bold text-white disabled:opacity-50"
+    >
+      {pending
+        ? "Processing…"
+        : online
+          ? "Confirm & continue to EPS"
+          : "Confirm"}
+    </button>
   );
 }

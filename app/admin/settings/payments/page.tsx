@@ -4,6 +4,8 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { requireProfile } from "@/lib/auth/session";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { saveGatewayAction } from "./actions";
+import Link from "next/link";
+import { epsConfigured } from "@/lib/payments/eps-config";
 
 export const dynamic = "force-dynamic";
 
@@ -48,10 +50,9 @@ export default async function PaymentSettings({
         </p>
       ) : null}
       <p className="mt-4 rounded-xl border bg-amber-50 p-4 text-sm text-amber-950">
-        Provider API keys remain server-only environment variables. Configure
-        PREFIX_BASE_URL and PREFIX_API_KEY in local or Vercel settings before
-        enabling an online gateway.
+        Provider credentials remain private on the server. EPS uses separate sandbox and live connections. A live payment requires an enabled live connection and a receiving Admin.
       </p>
+      <Link href="/admin/settings/payments/eps" className="mt-4 inline-block rounded-xl border px-4 py-3 font-bold">EPS payment history & verification →</Link>
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
         {((data ?? []) as GatewayRow[]).map((gateway) => (
           <form
@@ -60,6 +61,7 @@ export default async function PaymentSettings({
             className="rounded-2xl border bg-[var(--surface)] p-5"
           >
             <h2 className="text-xl font-bold">{gateway.name}</h2>
+            {gateway.adapter==="eps"?<p className="mt-2 text-sm font-semibold">{epsConfigured(gateway.test_mode)?"Server connection configured":"Server connection not configured"} · {gateway.test_mode?"Sandbox":"Live"}</p>:null}
             <p className="text-sm text-[var(--muted-text)]">
               Adapter: {gateway.adapter} · Environment prefix:{" "}
               {gateway.secret_env_prefix}
@@ -102,7 +104,7 @@ export default async function PaymentSettings({
                   className="mt-1 w-full rounded-lg border p-2"
                 />
               </label>
-              <label className="text-sm font-semibold">
+              {gateway.adapter!=="eps"?<label className="text-sm font-semibold">
                 Checkout API path
                 <input
                   name="checkout_path"
@@ -111,7 +113,7 @@ export default async function PaymentSettings({
                   )}
                   className="mt-1 w-full rounded-lg border p-2"
                 />
-              </label>
+              </label>:null}
             </div>
             <button className="mt-4 rounded-lg bg-[var(--primary)] px-4 py-2 font-bold text-[var(--primary-foreground)]">
               Save gateway

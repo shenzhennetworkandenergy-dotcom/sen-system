@@ -6,6 +6,9 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { wholeNumberFromForm } from "@/lib/validation/numbers";
 import { checkoutErrorMessage, isExpectedCheckoutRejection } from "@/lib/orders/checkout-errors";
+import { createHash } from "node:crypto";
+import { availableEpsGateway, startEpsPayment } from "@/lib/payments/eps-server";
+import { bdtAmount } from "@/lib/payments/eps";
 
 const uuid=(value:unknown)=>{const id=String(value??"");if(!/^[0-9a-f-]{36}$/i.test(id))throw new Error("Invalid product.");return id;};
 async function addProductToCart(productId:string,form:FormData){
@@ -59,9 +62,28 @@ export async function checkoutAction(form:FormData){
   const normalizedPhone=phone.replace(/[()\s.-]/g,"");
   const validEmail=/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email);
   const validPhone=/^\+8801[3-9]\d{8}$/.test(normalizedPhone)||/^01[3-9]\d{8}$/.test(normalizedPhone)||/^\+[1-9]\d{6,14}$/.test(normalizedPhone);
-  if(form.get("confirmed")!=="yes"||form.get("payment_method")!=="cash_on_delivery")redirect("/cart?error=Review%20and%20confirm%20your%20billing%20information.");
+  const paymentMethod=String(form.get("payment_method")??"");
+  if(form.get("confirmed")!=="yes"||!["cash_on_delivery","eps"].includes(paymentMethod))redirect("/cart?error=Review%20and%20confirm%20your%20billing%20information.");
   if(!validEmail)redirect("/cart?error=Enter%20a%20valid%20billing%20email.");
   if(!validPhone)redirect("/cart?error=Enter%20a%20valid%20contact%20phone%20number.");
+  if(paymentMethod==="eps"){
+    const admin=createSupabaseAdminClient();
+    const gateway=await availableEpsGateway();
+    if(!gateway)redirect("/cart?error=Online%20payment%20is%20temporarily%20unavailable.");
+    const {data:address}=await admin.from("customer_addresses").select("postal_code,city").eq("id",addressId).eq("profile_id",profile.id).maybeSingle();
+    if(!address?.postal_code?.trim()||!address.city?.trim())redirect("/cart?error=Add%20a%20postcode%20and%20city%20to%20your%20shipping%20address%20for%20online%20payment.");
+    const operationId=uuid(form.get("operation_id"));
+    const notes=String(form.get("notes")??"").slice(0,4000);
+    let expectedTotal:string;
+    try{expectedTotal=bdtAmount(form.get("expected_total"));}catch{redirect("/cart?error=Review%20your%20current%20cart%20total%20before%20paying.");}
+    const fingerprint=createHash("sha256").update(JSON.stringify([profile.id,addressId,email,phone,notes,expectedTotal])).digest("hex");
+    const {data:orderId,error}=await admin.rpc("customer_checkout_cart_eps",{actor_profile_id:profile.id,requested_address_id:addressId,requested_notes:notes,requested_email:email,requested_phone:phone,requested_operation_id:operationId,requested_fingerprint:fingerprint,requested_expected_total:expectedTotal});
+    if(error||!orderId)redirect(`/cart?error=${encodeURIComponent(checkoutErrorMessage(error))}`);
+    revalidatePath("/cart");revalidatePath("/account/orders");
+    let checkoutUrl:string;
+    try{checkoutUrl=await startEpsPayment(orderId,profile.id);}catch{redirect(`/account/orders/${orderId}/pay?error=Payment%20has%20not%20been%20confirmed.%20Check%20the%20status%20before%20trying%20again.`);}
+    redirect(checkoutUrl);
+  }
   const {data:orderId,error}=await db.rpc("customer_checkout_cart_cod",{actor_profile_id:profile.id,requested_address_id:addressId,requested_notes:String(form.get("notes")??"").slice(0,4000),requested_email:email,requested_phone:phone});
   if(error||!orderId){
     if(!isExpectedCheckoutRejection(error)){

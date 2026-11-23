@@ -2,6 +2,7 @@ import "server-only";
 type Gateway={code:string;adapter:"uddoktapay"|"eps"|"manual";test_mode:boolean;public_config:Record<string,unknown>;secret_env_prefix:string};
 type Checkout={transactionId:string;checkoutUrl:string};
 export async function createGatewayCheckout(gateway:Gateway,input:{orderId:string;orderNumber:string;amount:number;currency:string;customerName:string;customerEmail:string;customerPhone?:string|null;returnUrl:string;cancelUrl:string}):Promise<Checkout|null>{
+  if(gateway.adapter==="eps")throw new Error("EPS requires the verified payment workflow.");
   if(gateway.adapter==="manual")return null;
   const prefix=gateway.secret_env_prefix,base=process.env[`${prefix}_BASE_URL`],apiKey=process.env[`${prefix}_API_KEY`];
   if(!base||!apiKey)throw new Error(`${gateway.code} is enabled but its server credentials are not configured.`);
