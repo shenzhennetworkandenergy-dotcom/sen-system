@@ -4,6 +4,7 @@ import { connection } from "next/server";
 import { PublicFooter } from "@/components/layout/PublicFooter";
 import { PublicHeader } from "@/components/layout/PublicHeader";
 import { CheckoutConfirmation } from "@/components/cart/CheckoutConfirmation";
+import { CartQuantityForm } from "@/components/cart/CartQuantityForm";
 import { Container } from "@/components/ui/Container";
 import { requireProfile } from "@/lib/auth/session";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -100,7 +101,7 @@ export default async function CartPage({
             </p>
           ) : null}
           <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_24rem]">
-            <section className="space-y-3">
+            <section className="min-w-0 space-y-3">
               {(items ?? []).map((item) => {
                 const product = item.products as unknown as CartProduct;
                 const variation =
@@ -117,7 +118,7 @@ export default async function CartPage({
                     key={item.id}
                     className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border bg-white p-5"
                   >
-                    <div>
+                    <div className="min-w-0 max-w-full [overflow-wrap:anywhere]">
                       <Link
                         href={`/products/${product.slug}`}
                         className="text-lg font-bold text-slate-950"
@@ -133,23 +134,12 @@ export default async function CartPage({
                         {variation?.sku ?? product.sku}
                       </p>
                     </div>
-                    <form
+                    <CartQuantityForm
                       action={updateCartAction}
-                      className="flex items-center gap-2"
-                    >
-                      <input type="hidden" name="item_id" value={item.id} />
-                      <input
-                        name="quantity"
-                        type="number"
-                        min="0"
-                        max="99"
-                        defaultValue={item.quantity}
-                        className="w-20 rounded-lg border p-2"
-                      />
-                      <button className="rounded-lg border px-3 py-2 font-semibold">
-                        Update
-                      </button>
-                    </form>
+                      itemId={item.id}
+                      quantity={Number(item.quantity)}
+                      productName={product.name}
+                    />
                     <b>
                       {new Intl.NumberFormat("en-BD", {
                         style: "currency",

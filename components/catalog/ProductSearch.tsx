@@ -15,19 +15,58 @@ export function ProductSearch({
   compact = false,
   className = "",
   defaultValue = "",
+  mobileFriendly = false,
 }: {
   compact?: boolean;
   className?: string;
   defaultValue?: string;
+  mobileFriendly?: boolean;
 }) {
   const [query, setQuery] = useState(defaultValue);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const request = useRef<AbortController | null>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const dismissed = useRef(false);
   const listId = useId();
 
   useEffect(() => {
+    if (!mobileFriendly) return;
+    const outside = (event: PointerEvent) => {
+      if (event.target instanceof Node && !root.current?.contains(event.target)) {
+        dismissed.current = true;
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, [mobileFriendly]);
+
+  useEffect(() => {
+    if (!mobileFriendly || !open) return;
+    const resize = () => {
+      const node = root.current;
+      if (!node) return;
+      const viewport = window.visualViewport;
+      const bottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
+      node.style.setProperty("--search-results-height", `${Math.max(64, bottom - node.getBoundingClientRect().bottom - 12)}px`);
+    };
+    resize();
+    window.addEventListener("resize", resize);
+    window.addEventListener("scroll", resize, true);
+    window.visualViewport?.addEventListener("resize", resize);
+    window.visualViewport?.addEventListener("scroll", resize);
+    return () => {
+      window.removeEventListener("resize", resize);
+      window.removeEventListener("scroll", resize, true);
+      window.visualViewport?.removeEventListener("resize", resize);
+      window.visualViewport?.removeEventListener("scroll", resize);
+    };
+  }, [mobileFriendly, open]);
+
+  useEffect(() => {
+    if (mobileFriendly) request.current?.abort();
     const value = query.trim();
     if (!value) {
       request.current?.abort();
@@ -44,23 +83,32 @@ export function ProductSearch({
           signal: controller.signal,
         });
         const body = (await response.json()) as { products?: Suggestion[] };
+        if (mobileFriendly && controller.signal.aborted) return;
         setSuggestions(response.ok ? body.products ?? [] : []);
-        setOpen(true);
+        setOpen(!mobileFriendly || (!dismissed.current && Boolean(root.current?.contains(document.activeElement))));
       } catch (error) {
         if ((error as Error).name !== "AbortError") {
           setSuggestions([]);
-          setOpen(true);
+          setOpen(!mobileFriendly || (!dismissed.current && Boolean(root.current?.contains(document.activeElement))));
         }
       } finally {
         if (!controller.signal.aborted) setLoading(false);
       }
     }, 140);
 
-    return () => window.clearTimeout(timer);
-  }, [query]);
+    return () => {
+      window.clearTimeout(timer);
+      if (mobileFriendly) request.current?.abort();
+    };
+  }, [query, mobileFriendly]);
 
   return (
-    <div className={`relative ${className}`}>
+    <div ref={root} className={`relative ${className}`} onBlur={(event) => {
+      if (mobileFriendly && event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) {
+        dismissed.current = true;
+        setOpen(false);
+      }
+    }}>
       <form action="/products" role="search" className="sen-search-form flex gap-2">
         <label className="sr-only" htmlFor={`${listId}-input`}>
           Search products
@@ -71,6 +119,7 @@ export function ProductSearch({
           value={query}
           onChange={(event) => {
             const value = event.target.value;
+            dismissed.current = false;
             setQuery(value);
             if (!value.trim()) {
               request.current?.abort();
@@ -79,11 +128,18 @@ export function ProductSearch({
               setLoading(false);
             }
           }}
-          onFocus={() => query.trim() && setOpen(true)}
+          onFocus={() => {
+            dismissed.current = false;
+            if (query.trim()) setOpen(true);
+          }}
           onKeyDown={(event) => {
-            if (event.key === "Escape") setOpen(false);
+            if (event.key === "Escape") {
+              dismissed.current = true;
+              setOpen(false);
+            }
           }}
           autoComplete="off"
+          enterKeyHint={mobileFriendly ? "search" : undefined}
           role="combobox"
           aria-autocomplete="list"
           aria-controls={listId}
@@ -105,7 +161,8 @@ export function ProductSearch({
         <div
           id={listId}
           role="listbox"
-          className="absolute left-0 right-0 top-full z-50 mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-white text-slate-950 shadow-2xl"
+          style={mobileFriendly ? { maxHeight: "min(24rem, var(--search-results-height, 40dvh))" } : undefined}
+          className={`absolute left-0 right-0 top-full z-50 mt-2 rounded-2xl border border-slate-200 bg-white text-slate-950 shadow-2xl ${mobileFriendly ? "overflow-y-auto overscroll-contain" : "overflow-hidden"}`}
         >
           {loading ? (
             <p className="p-4 text-sm text-slate-500">Finding matching products…</p>
@@ -116,7 +173,7 @@ export function ProductSearch({
                   <Link
                     href={`/products/${product.slug}`}
                     role="option"
-                    className="block border-b border-slate-100 px-4 py-3 transition last:border-0 hover:bg-cyan-50 focus:bg-cyan-50"
+                    className={`block border-b border-slate-100 px-4 py-3 transition last:border-0 hover:bg-cyan-50 focus:bg-cyan-50 ${mobileFriendly ? "break-words" : ""}`}
                     onClick={() => setOpen(false)}
                   >
                     <strong className="block text-sm">{product.name}</strong>

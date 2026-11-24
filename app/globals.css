@@ -442,6 +442,9 @@ html { scroll-behavior: smooth; }
   right: 1rem;
   z-index: 130;
   width: min(20rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 10.75rem - env(safe-area-inset-bottom, 0px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid rgb(103 232 249 / .2);
   border-radius: 1.2rem;
   padding: .8rem;
@@ -503,6 +506,10 @@ html { scroll-behavior: smooth; }
   margin: .2rem;
   border-radius: .78rem;
   box-shadow: 0 6px 16px rgb(8 145 178 / .22);
+}
+@media (max-width: 1023px) {
+  .sen-header-search .sen-search-input { min-height: 44px; font-size: 16px; }
+  .sen-header-search .sen-search-button { min-height: 44px; font-size: .875rem; }
 }
 @media (max-width: 1279px) {
   .sen-header-main { gap: .6rem; }

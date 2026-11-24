@@ -129,7 +129,7 @@ export async function PublicHeader() {
             ))}
           </ul>
         </nav>
-        <ProductSearch compact className="sen-header-search hidden w-full max-w-xs xl:block" />
+        <ProductSearch mobileFriendly compact className="sen-header-search hidden w-full max-w-xs xl:block" />
         <div className="sen-header-actions hidden items-center gap-2 lg:flex">
           {dash ? (
             <>
@@ -185,7 +185,7 @@ export async function PublicHeader() {
         />
           </Container>
           <Container className="pb-3 xl:hidden">
-            <ProductSearch compact className="sen-header-search" />
+            <ProductSearch mobileFriendly compact className="sen-header-search" />
           </Container>
         </div>
       </header>

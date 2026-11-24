@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useRef, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
+import { checkoutPhoneOptions, isValidCheckoutPhone, normalizeCheckoutPhone } from "@/lib/orders/checkout-contact";
 
 type Address = {
   id: string;
@@ -19,13 +20,6 @@ type Address = {
 };
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-const normalizePhone = (value: string) => value.replace(/[()\s.-]/g, "");
-const validPhone = (value: string) => {
-  const normalized = normalizePhone(value);
-  if (/^\+8801[3-9]\d{8}$/.test(normalized)) return true;
-  if (/^01[3-9]\d{8}$/.test(normalized)) return true;
-  return /^\+[1-9]\d{6,14}$/.test(normalized);
-};
 
 function addressLabel(address: Address) {
   return [
@@ -60,6 +54,10 @@ export function CheckoutConfirmation({
   total: number;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const emailInput = useRef<HTMLInputElement>(null);
+  const phoneInput = useRef<HTMLInputElement>(null);
+  const phoneHintId = useId();
+  const errorId = useId();
   const defaultAddress =
     addresses.find((address) => address.is_default_shipping) ?? addresses[0];
   const [addressId, setAddressId] = useState(defaultAddress?.id ?? "");
@@ -68,30 +66,42 @@ export function CheckoutConfirmation({
     [addressId, addresses],
   );
   const [email, setEmail] = useState(initialEmail);
+  // Use the selected delivery contact initially, just as when the address changes.
   const [phone, setPhone] = useState(
-    initialPhone || selectedAddress?.phone || "",
+    selectedAddress?.phone || initialPhone || "",
   );
   const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("cash_on_delivery");
   const online = paymentMethod === "eps";
+  const phoneOptions = useMemo(
+    () => checkoutPhoneOptions([initialPhone, selectedAddress?.phone ?? ""]),
+    [initialPhone, selectedAddress?.phone],
+  );
 
-  const validate = () => {
+  const validateAddress = () => {
     if (!selectedAddress) return "Choose a saved shipping address.";
     if (
       online &&
       (!selectedAddress.postal_code?.trim() || !selectedAddress.city?.trim())
     )
       return "Add a postcode and city to your shipping address for online payment.";
+    return "";
+  };
+
+  const validate = () => {
+    const addressError = validateAddress();
+    if (addressError) return addressError;
     if (!emailPattern.test(email.trim())) return "Enter a valid email address.";
-    if (!validPhone(phone)) {
-      return "Enter a valid Bangladesh phone number or an international number with country code.";
+    if (!isValidCheckoutPhone(phone)) {
+      return "Enter one valid contact phone number. For international numbers, include + and the country code.";
     }
     return "";
   };
 
   const openReview = () => {
-    const message = validate();
+    // Contact inputs live in this dialog, so let the customer review and correct them first.
+    const message = validateAddress();
     setError(message);
     if (!message) dialog.current?.showModal();
   };
@@ -220,6 +230,7 @@ export function CheckoutConfirmation({
       >
         <form
           noValidate
+          data-checkout-review
           action={action}
           className="flex max-h-[90dvh] flex-col p-6 sm:p-8"
           onSubmit={(event) => {
@@ -227,6 +238,11 @@ export function CheckoutConfirmation({
             if (message) {
               event.preventDefault();
               setError(message);
+              const input = !emailPattern.test(email.trim())
+                ? emailInput.current
+                : !isValidCheckoutPhone(phone) ? phoneInput.current : null;
+              input?.focus({ preventScroll: true });
+              input?.scrollIntoView({ block: "nearest" });
             }
           }}
         >
@@ -274,10 +290,14 @@ export function CheckoutConfirmation({
             <label className="text-sm font-semibold">
               Billing email
               <input
+                ref={emailInput}
                 name="billing_email"
                 type="email"
                 required
                 value={email}
+                autoComplete="email"
+                aria-invalid={Boolean(error && !emailPattern.test(email.trim()))}
+                aria-describedby={error && !emailPattern.test(email.trim()) ? errorId : undefined}
                 onChange={(event) => {
                   setEmail(event.target.value);
                   setError("");
@@ -288,10 +308,15 @@ export function CheckoutConfirmation({
             <label className="text-sm font-semibold">
               Contact phone
               <input
+                ref={phoneInput}
                 name="billing_phone"
                 type="tel"
                 required
                 value={phone}
+                autoComplete="tel"
+                maxLength={40}
+                aria-invalid={Boolean(error && !isValidCheckoutPhone(phone))}
+                aria-describedby={`${phoneHintId}${error && !isValidCheckoutPhone(phone) ? ` ${errorId}` : ""}`}
                 onChange={(event) => {
                   setPhone(event.target.value);
                   setError("");
@@ -299,7 +324,28 @@ export function CheckoutConfirmation({
                 placeholder="+8801XXXXXXXXX"
                 className="mt-1 w-full rounded-xl border bg-white p-3 text-base text-slate-950"
               />
+              <span id={phoneHintId} className="mt-1 block text-xs font-normal leading-5 text-slate-600">
+                Use one number only. Bangladesh: 017XXXXXXXX. International: include + and the country code.
+              </span>
             </label>
+            {phoneOptions.length > 1 ? (
+              <fieldset className="rounded-xl border bg-slate-50 p-3">
+                <legend className="px-1 text-sm font-semibold">Choose a contact number for this order</legend>
+                <div className="flex flex-wrap gap-2">
+                  {phoneOptions.map((number) => (
+                    <button
+                      key={number}
+                      type="button"
+                      aria-pressed={normalizeCheckoutPhone(phone) === number}
+                      onClick={() => { setPhone(number); setError(""); }}
+                      className={`rounded-lg border px-3 py-2 text-sm font-semibold ${normalizeCheckoutPhone(phone) === number ? "border-blue-600 bg-blue-50 text-blue-900" : "bg-white text-slate-950"}`}
+                    >
+                      {number}
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
+            ) : null}
             <div className="rounded-2xl border bg-slate-50 p-4">
               <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
                 Delivery location
@@ -325,7 +371,7 @@ export function CheckoutConfirmation({
               </p>
             </div>
             {error ? (
-              <p className="text-sm font-semibold text-red-700" role="alert">
+              <p id={errorId} className="text-sm font-semibold text-red-700" role="alert">
                 {error}
               </p>
             ) : null}
