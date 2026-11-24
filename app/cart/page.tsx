@@ -8,7 +8,8 @@ import { CartQuantityForm } from "@/components/cart/CartQuantityForm";
 import { Container } from "@/components/ui/Container";
 import { requireProfile } from "@/lib/auth/session";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { availableEpsGateway } from "@/lib/payments/eps-server";
+import { availableEpsGateway, getRecoverableEpsCheckouts } from "@/lib/payments/eps-server";
+import { money } from "@/lib/orders/types";
 
 import { checkoutAction, updateCartAction } from "./actions";
 
@@ -41,7 +42,10 @@ export default async function CartPage({
   const { profile } = await requireProfile(["customer", "admin"]);
   const notice = await searchParams;
   const db = createSupabaseAdminClient();
-  const eps = await availableEpsGateway();
+  const [eps, savedCheckouts] = await Promise.all([
+    availableEpsGateway(),
+    getRecoverableEpsCheckouts(profile.id),
+  ]);
   const { data: cart } = await db
     .from("shopping_carts")
     .select("id")
@@ -100,6 +104,24 @@ export default async function CartPage({
               {notice.error}
             </p>
           ) : null}
+          {savedCheckouts.length > 0 ? (
+            <section className="mt-5 rounded-2xl border border-blue-200 bg-blue-50 p-5" aria-labelledby="saved-checkouts">
+              <h2 id="saved-checkouts" className="font-bold">Saved EPS checkouts</h2>
+              <p className="mt-1 text-sm text-slate-700">
+                If EPS did not open or you closed it, check your existing payment before placing the same order again.
+              </p>
+              <ul className="mt-3 space-y-2">
+                {savedCheckouts.map(({ order_id, sales_orders }) => (
+                  <li key={order_id} className="flex flex-wrap items-center gap-x-4">
+                    <Link href={`/account/orders/${order_id}/pay`} className="inline-flex min-h-11 items-center font-bold text-blue-800 underline">
+                      {sales_orders.status === "cancelled" ? "Recover cart for" : "View payment for"} {sales_orders.order_number}
+                    </Link>
+                    <span className="text-sm font-semibold">{money(sales_orders.total_amount, sales_orders.currency)}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
           <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_24rem]">
             <section className="min-w-0 space-y-3">
               {(items ?? []).map((item) => {
@@ -152,14 +174,14 @@ export default async function CartPage({
               })}
               {!items?.length ? (
                 <p className="rounded-2xl border bg-white p-10 text-center">
-                  Your cart is empty.{" "}
+                  {savedCheckouts.length ? "Items from your EPS checkout are saved with the order above." : "Your cart is empty."}{" "}
                   <Link href="/products" className="font-bold text-blue-700">
                     Browse products
                   </Link>
                 </p>
               ) : null}
             </section>
-            <aside className="rounded-2xl border bg-white p-5">
+            {items?.length ? <aside className="rounded-2xl border bg-white p-5">
               <h2 className="text-xl font-bold">Order summary</h2>
               <p className="mt-4 flex justify-between">
                 <span>Subtotal</span>
@@ -171,8 +193,7 @@ export default async function CartPage({
                   }).format(total)}
                 </b>
               </p>
-              {items?.length ? (
-                <CheckoutConfirmation
+              <CheckoutConfirmation
                   action={checkoutAction}
                   addresses={addresses ?? []}
                   email={profile.email ?? ""}
@@ -180,9 +201,8 @@ export default async function CartPage({
                   eps={eps ? { testMode: eps.test_mode } : null}
                   operationId={crypto.randomUUID()}
                   total={total}
-                />
-              ) : null}
-            </aside>
+              />
+            </aside> : null}
           </div>
         </Container>
       </main>

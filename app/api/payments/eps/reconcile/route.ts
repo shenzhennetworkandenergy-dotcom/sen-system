@@ -27,10 +27,12 @@ export async function POST(request: NextRequest) {
     await Promise.all(batch.map((a) => reconcileEpsAttempt(a.id)));
     checked += batch.length;
   }
-  if (process.env.EPS_RECEIVING_ADMIN_ID)
-    await db.rpc("expire_eps_unpaid_orders", {
+  if (process.env.EPS_RECEIVING_ADMIN_ID) {
+    const { error: expiryError } = await db.rpc("expire_eps_unpaid_orders", {
       requested_admin_id: process.env.EPS_RECEIVING_ADMIN_ID,
     });
+    if (expiryError) return Response.json({ error: "Checkout recovery unavailable", checked }, { status: 503 });
+  }
   return Response.json(
     { checked },
     { headers: { "cache-control": "no-store" } },

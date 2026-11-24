@@ -8,10 +8,11 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import {
   availableEpsGateway,
   getOrderEpsAttempts,
+  resumableEpsUrl,
 } from "@/lib/payments/eps-server";
 import { money, dateTime } from "@/lib/orders/types";
 import { getPaymentOrigin } from "@/lib/payments/eps-config";
-import { beginPaymentAction, checkEpsPaymentAction } from "./actions";
+import { beginPaymentAction, checkEpsPaymentAction, recoverEpsCartAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 export default async function PayPage({
@@ -45,7 +46,7 @@ export default async function PayPage({
     getOrderEpsAttempts(id, profile.id),
     db
       .from("eps_checkout_requests")
-      .select("order_id")
+      .select("order_id,cart_restored_at")
       .eq("order_id", id)
       .eq("profile_id", profile.id)
       .maybeSingle(),
@@ -71,24 +72,22 @@ export default async function PayPage({
     Number(order.total_amount) - Number(order.paid_amount ?? 0),
   );
   const latest = attempts[0];
-  const resumable = Boolean(
-    latest &&
-    ["ready", "pending"].includes(latest.status) &&
-    latest.checkout_url,
-  );
+  const resumeUrl = resumableEpsUrl(latest);
   const unresolved = Boolean(
-    latest && ["initializing", "unknown", "pending"].includes(latest.status),
-  );
-  const blocked = Boolean(
-    latest &&
-    (["initializing", "unknown", "review_required"].includes(latest.status) ||
-      (latest.status === "pending" && !resumable)),
+    latest && ["initializing", "ready", "unknown", "pending"].includes(latest.status),
   );
   const sandboxPaid = attempts.some((a) => a.status === "sandbox_paid");
   const hasEpsReceipt = attempts.some((a) =>
     ["paid", "sandbox_paid"].includes(a.status),
   );
   const paid = due <= 0;
+  const terminal = latest && ["failed", "cancelled"].includes(latest.status);
+  const canRecover = onlineOrder && !paid && !sandboxPaid &&
+    ["confirmed", "cancelled"].includes(order.status) && latest?.status !== "review_required";
+  const canOpenEps = eps && onlineOrder && !paid && !sandboxPaid &&
+    order.status === "confirmed" && latest?.test_mode === eps.test_mode && resumeUrl;
+  const canPrepareEps = eps && onlineOrder && !paid && !latest &&
+    order.status === "confirmed";
   return (
     <CustomerPaymentShell
       title={`Payment · ${order.order_number}`}
@@ -127,7 +126,9 @@ export default async function PayPage({
                   ? "Payment requires SEN review"
                   : order.status === "cancelled"
                     ? "Order cancelled"
-                    : unresolved
+                    : terminal
+                      ? "Payment did not complete"
+                      : unresolved
                       ? "Payment awaiting confirmation"
                       : "Ready for payment"}
           </h2>
@@ -139,33 +140,46 @@ export default async function PayPage({
                 : latest?.status === "review_required"
                   ? "Please contact SEN with your order number. Do not make another payment."
                   : order.status === "cancelled"
-                    ? "Do not pay for this order. If you already attempted payment, check its status or contact SEN."
-                    : resumable
-                      ? "If you left EPS before finishing, continue the same payment below. Check the status before paying again."
-                      : blocked
+                    ? onlineOrder?.cart_restored_at
+                      ? "Your items were returned to your cart."
+                      : "If no payment was collected, you can recover the items from this order."
+                    : terminal
+                      ? "Return the items to your cart to start over or choose another payment method."
+                      : canOpenEps
+                        ? "Open the secure EPS page to pay. If it stalls or you already tried to pay, come back here to check the same payment."
+                      : unresolved
                         ? "Do not pay again while this transaction is being checked. Use Check payment status below."
                         : onlineOrder
                           ? "Complete payment on EPS. Your card and wallet details are entered on the payment provider's secure page."
                           : "Choose an available payment method for this order."}
           </p>
         </div>
-        {!paid &&
-        eps &&
-        onlineOrder &&
-        !sandboxPaid &&
-        order.status !== "cancelled" ? (
+        {canOpenEps ? (
+          <a href={resumeUrl} rel="noreferrer" className="mt-5 block rounded-xl bg-[var(--primary)] px-5 py-3 text-center font-bold text-[var(--primary-foreground)]">
+            Open EPS checkout{eps.test_mode ? " · Sandbox" : ""}
+          </a>
+        ) : null}
+        {canPrepareEps ? (
           <form action={beginPaymentAction.bind(null, id)} className="mt-5">
             <input type="hidden" name="gateway_id" value={eps.id} />
             <button
-              disabled={blocked}
-              className="w-full rounded-xl bg-[var(--primary)] px-5 py-3 font-bold text-[var(--primary-foreground)] disabled:opacity-40"
+              className="w-full rounded-xl bg-[var(--primary)] px-5 py-3 font-bold text-[var(--primary-foreground)]"
             >
-              {resumable
-                ? "Continue existing EPS payment"
-                : "Pay securely with EPS"}
+              Prepare EPS checkout
               {eps.test_mode ? " · Sandbox" : ""}
             </button>
           </form>
+        ) : null}
+        {canRecover ? (
+          onlineOrder.cart_restored_at ? (
+            <Link href="/cart" className="mt-3 block rounded-xl border px-5 py-3 text-center font-bold">Go to cart</Link>
+          ) : (
+            <form action={recoverEpsCartAction.bind(null, id)} className="mt-3">
+              <button className="w-full rounded-xl border px-5 py-3 font-bold">
+                {unresolved ? "Check payment and recover cart" : "Return items to cart"}
+              </button>
+            </form>
+          )
         ) : null}
         {attempts.length && !paid && !sandboxPaid ? (
           <form action={checkEpsPaymentAction.bind(null, id)} className="mt-3">

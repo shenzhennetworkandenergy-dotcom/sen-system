@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { requireProfile } from "@/lib/auth/session";
 import { createGatewayCheckout } from "@/lib/payments/gateways";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { getOrderEpsAttempts, reconcileEpsAttempt, startEpsPayment } from "@/lib/payments/eps-server";
+import { getOrderEpsAttempts, reconcileEpsAttempt, restoreUnpaidEpsCart, startEpsPayment } from "@/lib/payments/eps-server";
 import { revalidatePath } from "next/cache";
 
 export async function beginPaymentAction(orderId: string, form: FormData) {
@@ -44,10 +44,9 @@ export async function beginPaymentAction(orderId: string, form: FormData) {
   }
 
   if (gateway.adapter === "eps") {
-    let checkoutUrl: string;
-    try { checkoutUrl = await startEpsPayment(orderId, profile.id); }
+    try { await startEpsPayment(orderId, profile.id); }
     catch { redirect(`/account/orders/${orderId}/pay?error=Payment%20is%20not%20confirmed.%20Check%20payment%20status%20before%20trying%20again.`); }
-    redirect(checkoutUrl);
+    redirect(`/account/orders/${orderId}/pay`);
   }
 
   const { data: onlineOrder, error: onlineOrderError } = await db
@@ -139,4 +138,22 @@ export async function checkEpsPaymentAction(orderId: string) {
   revalidatePath(`/account/orders/${orderId}`);
   revalidatePath(`/account/orders/${orderId}/pay`);
   redirect(`/account/orders/${orderId}/pay`);
+}
+
+export async function recoverEpsCartAction(orderId: string) {
+  const { profile } = await requireProfile(["customer", "admin"]);
+  const attempts = await getOrderEpsAttempts(orderId, profile.id);
+  const latest = attempts[0];
+  if (latest && ["initializing", "ready", "unknown", "pending"].includes(latest.status)) {
+    await reconcileEpsAttempt(latest.id);
+  }
+  // The database locks and rechecks the owned order before changing anything.
+  const result = await restoreUnpaidEpsCart(orderId, profile.id);
+  revalidatePath("/cart");
+  revalidatePath("/account/orders");
+  if (result === "restored") redirect("/cart?success=Your%20items%20were%20returned%20to%20your%20cart.");
+  const message = result === "blocked"
+    ? "The cart cannot be restored while an EPS payment is unconfirmed or the order has been paid. Check the status below."
+    : "Unable to restore this cart. Contact SEN with your order number.";
+  redirect(`/account/orders/${orderId}/pay?error=${encodeURIComponent(message)}`);
 }

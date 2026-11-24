@@ -80,9 +80,8 @@ export async function checkoutAction(form:FormData){
     const {data:orderId,error}=await admin.rpc("customer_checkout_cart_eps",{actor_profile_id:profile.id,requested_address_id:addressId,requested_notes:notes,requested_email:email,requested_phone:phone,requested_operation_id:operationId,requested_fingerprint:fingerprint,requested_expected_total:expectedTotal});
     if(error||!orderId)redirect(`/cart?error=${encodeURIComponent(checkoutErrorMessage(error))}`);
     revalidatePath("/cart");revalidatePath("/account/orders");
-    let checkoutUrl:string;
-    try{checkoutUrl=await startEpsPayment(orderId,profile.id);}catch{redirect(`/account/orders/${orderId}/pay?error=Payment%20has%20not%20been%20confirmed.%20Check%20the%20status%20before%20trying%20again.`);}
-    redirect(checkoutUrl);
+    try{await startEpsPayment(orderId,profile.id);}catch{redirect(`/account/orders/${orderId}/pay?error=Could%20not%20prepare%20EPS.%20Check%20the%20payment%20status%20or%20return%20to%20your%20cart.`);}
+    redirect(`/account/orders/${orderId}/pay`);
   }
   const {data:orderId,error}=await db.rpc("customer_checkout_cart_cod",{actor_profile_id:profile.id,requested_address_id:addressId,requested_notes:String(form.get("notes")??"").slice(0,4000),requested_email:email,requested_phone:phone});
   if(error||!orderId){
