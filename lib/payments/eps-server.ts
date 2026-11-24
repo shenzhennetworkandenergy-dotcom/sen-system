@@ -28,6 +28,41 @@ export type EpsAttempt = {
 const validId = (value: string) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 
+export function resumableEpsUrl(attempt: EpsAttempt | undefined) {
+  if (!attempt?.checkout_url || !["ready", "pending"].includes(attempt.status)) return null;
+  try {
+    return epsCheckoutUrl(attempt.checkout_url, attempt.test_mode ? "sandbox" : "live");
+  } catch {
+    return null;
+  }
+}
+
+export async function restoreUnpaidEpsCart(orderId: string, profileId: string) {
+  if (!validId(orderId)) return "unavailable";
+  const { data, error } = await createSupabaseAdminClient().rpc("restore_unpaid_eps_cart", {
+    requested_order_id: orderId,
+    requested_profile_id: profileId,
+    requested_admin_id: process.env.EPS_RECEIVING_ADMIN_ID || null,
+  });
+  return error ? "unavailable" : data;
+}
+
+export async function getRecoverableEpsCheckouts(profileId: string) {
+  const { data } = await createSupabaseAdminClient()
+    .from("eps_checkout_requests")
+    .select("order_id,sales_orders!inner(order_number,status,total_amount,currency)")
+    .eq("profile_id", profileId)
+    .is("cart_restored_at", null)
+    .eq("sales_orders.paid_amount", 0)
+    .in("sales_orders.status", ["confirmed", "cancelled"])
+    .order("created_at", { ascending: false })
+    .limit(5);
+  return (data ?? []) as unknown as {
+    order_id: string;
+    sales_orders: { order_number: string; status: string; total_amount: number; currency: string };
+  }[];
+}
+
 export async function availableEpsGateway() {
   try {
     const { data, error } = await createSupabaseAdminClient()
