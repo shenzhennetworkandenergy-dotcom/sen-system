@@ -107,6 +107,7 @@ export default async function PublicProductsPage({
         <section className="py-10 sm:py-14">
           <Container>
             <ProductSearch
+              mobileFriendly
               defaultValue={params.q ?? ""}
               className="catalogue-theme-panel mb-3 rounded-2xl border p-4 shadow-sm"
             />

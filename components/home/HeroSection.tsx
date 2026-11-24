@@ -23,7 +23,7 @@ export function HeroSection() {
           <p className="mt-7 max-w-2xl text-lg leading-8 text-slate-300 sm:text-xl">
             SEN connects enterprise networking, high-performance compute, energy, medical technology and global procurement into one intelligent delivery ecosystem.
           </p>
-          <ProductSearch className="mt-7 max-w-2xl" />
+          <ProductSearch mobileFriendly className="mt-7 max-w-2xl" />
           <div className="mt-9 flex flex-col gap-3 sm:flex-row">
             <Button href={siteConfig.publicCtas.exploreProducts.href} size="lg" className="sen-button-glow">Explore our ecosystem <span aria-hidden="true">→</span></Button>
             <Button href={siteConfig.publicCtas.requestQuote.href} size="lg" variant="outline" className="sen-button-ghost">Start a project</Button>

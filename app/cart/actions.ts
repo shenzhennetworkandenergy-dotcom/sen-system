@@ -6,6 +6,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { wholeNumberFromForm } from "@/lib/validation/numbers";
 import { checkoutErrorMessage, isExpectedCheckoutRejection } from "@/lib/orders/checkout-errors";
+import { isValidCheckoutPhone } from "@/lib/orders/checkout-contact";
 import { createHash } from "node:crypto";
 import { availableEpsGateway, startEpsPayment } from "@/lib/payments/eps-server";
 import { bdtAmount } from "@/lib/payments/eps";
@@ -59,9 +60,8 @@ export async function checkoutAction(form:FormData){
   const {profile}=await requireProfile(["customer","admin"]),db=await createSupabaseServerClient(),addressId=uuid(form.get("address_id"));
   const email=String(form.get("billing_email")??"").trim().toLowerCase().slice(0,254);
   const phone=String(form.get("billing_phone")??"").trim().slice(0,40);
-  const normalizedPhone=phone.replace(/[()\s.-]/g,"");
   const validEmail=/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email);
-  const validPhone=/^\+8801[3-9]\d{8}$/.test(normalizedPhone)||/^01[3-9]\d{8}$/.test(normalizedPhone)||/^\+[1-9]\d{6,14}$/.test(normalizedPhone);
+  const validPhone=isValidCheckoutPhone(phone);
   const paymentMethod=String(form.get("payment_method")??"");
   if(form.get("confirmed")!=="yes"||!["cash_on_delivery","eps"].includes(paymentMethod))redirect("/cart?error=Review%20and%20confirm%20your%20billing%20information.");
   if(!validEmail)redirect("/cart?error=Enter%20a%20valid%20billing%20email.");

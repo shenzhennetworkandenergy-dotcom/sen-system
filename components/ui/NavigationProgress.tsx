@@ -72,6 +72,8 @@ export function NavigationProgress() {
     const submit = (event: SubmitEvent) => {
       const form = event.target as HTMLFormElement;
       if (!form.checkValidity()) return;
+      // Checkout shows its own pending button after validating the contact fields.
+      if (form.hasAttribute("data-checkout-review")) return;
       start("Saving changes");
     };
     const restore = () => {
