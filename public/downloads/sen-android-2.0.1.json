@@ -1,0 +1,11 @@
+{
+  "version": "2.0.1",
+  "versionCode": 5,
+  "package": "bd.com.sen.erp.mobile",
+  "minSdk": 26,
+  "targetSdk": 36,
+  "sha256": "7954f318e5e04068fb74e36c2f7c66296d903db3784509619485a841d00bf53f",
+  "bytes": 595737,
+  "certificateSha256": "8969bdbc9b17b811aa297475736dac505091886dfcf9c8eedb2aa4c78064540f",
+  "launchUrl": "https://www.sen.com.bd/?source=android"
+}

@@ -19,6 +19,10 @@
                 <data android:host="sen.com.bd" />
             </intent-filter>
         </activity>
+        <!-- LauncherActivity updates this component's enabled state at startup. -->
+        <activity android:name="com.google.androidbrowserhelper.trusted.ManageDataLauncherActivity" android:exported="false">
+            <meta-data android:name="android.support.customtabs.trusted.MANAGE_SPACE_URL" android:value="${launchUrl}" />
+        </activity>
         <activity android:name="com.google.androidbrowserhelper.trusted.FocusActivity" />
         <service android:name="com.google.androidbrowserhelper.trusted.DelegationService" android:enabled="true" android:exported="true" tools:ignore="ExportedService">
             <intent-filter><action android:name="android.support.customtabs.trusted.TRUSTED_WEB_ACTIVITY_SERVICE" /><category android:name="android.intent.category.DEFAULT" /></intent-filter>

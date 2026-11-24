@@ -1,9 +1,9 @@
 export const mobileApp = {
   name: "SEN",
-  version: "2.0.0",
-  versionCode: 4,
+  version: "2.0.1",
+  versionCode: 5,
   packageName: "bd.com.sen.erp.mobile",
-  download: "/downloads/sen-android-2.0.0.apk",
+  download: "/downloads/sen-android-2.0.1.apk",
   minimumAndroid: "Android 8.0+",
   origin: "https://www.sen.com.bd",
   // Public certificate of the existing SEN release key. Never put the key here.
