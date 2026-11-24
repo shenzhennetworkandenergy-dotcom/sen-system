@@ -26,7 +26,7 @@ export default function AppDownloadPage() {
       <section className="sen-app-card" aria-labelledby="android-title">
         <span className="sen-app-platform">ANDROID</span><h2 id="android-title" className="mt-3 text-2xl font-bold">Download. Install. Open SEN.</h2>
         <p className="mt-3 text-sm leading-6 text-slate-600">Version {mobileApp.version} · {mobileApp.minimumAndroid} · Uses your up-to-date browser.</p>
-        <a href={mobileApp.download} download="sen-android-2.0.0.apk" className="sen-app-button mt-6 w-full">Download Android app <span aria-hidden="true">↓</span></a>
+        <a href={mobileApp.download} download="sen-android-2.0.1.apk" className="sen-app-button mt-6 w-full">Download Android app <span aria-hidden="true">↓</span></a>
         <ol className="sen-app-steps mt-6"><li>Download the APK on your Android phone.</li><li>Open the file. If Android asks, allow installation from the browser you used.</li><li>Install SEN, open it and sign in with your existing account.</li></ol>
         <p className="mt-4 text-xs leading-5 text-slate-500">Keep Chrome or another compatible browser updated. Already have the SEN Android app? This version installs as an update.</p>
       </section>

@@ -9,6 +9,11 @@ const nextConfig: NextConfig = {
         { key: "Content-Disposition", value: "attachment" },
         { key: "X-Content-Type-Options", value: "nosniff" },
       ] },
+      { source: "/downloads/sen-android-2.0.1.apk", headers: [
+        { key: "Content-Type", value: "application/vnd.android.package-archive" },
+        { key: "Content-Disposition", value: "attachment" },
+        { key: "X-Content-Type-Options", value: "nosniff" },
+      ] },
     ];
   },
   turbopack: {

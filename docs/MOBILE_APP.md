@@ -1,5 +1,13 @@
 # SEN mobile release — installation only
 
+## Android 2.0.1 startup correction
+
+The published 2.0.0 APK reproduced an immediate launch crash on Android 11: `Component class p0.d does not exist`. The minified class is Browser Helper's `ManageDataLauncherActivity`, which its launcher enables or disables while registering the site-settings shortcut. Version 2.0.1 / code 5 registers that private activity with the existing launch URL and updates the public download. Browser Helper 2.7.4, the signing certificate, package, permissions, dependencies and ERP behavior are retained. No database migration is needed.
+
+The signed release installs over 2.0.0 and passes the Android 11 emulator startup smoke test; the same smoke test fails on the published 2.0.0 APK. The unavailable-browser dialog, APK signature/alignment, TypeScript, changed-file lint, production web build and download checksum were also checked. The owner approved the local correction on 2026-11-24. Agent testing did not include a physical phone or a full modern-browser ERP workflow: the emulator's bundled Chrome 83 is obsolete, and a current ARM64 Chromium test build failed in the emulator's native translation layer.
+
+## Original Android 2.0 installation release
+
 The owner requires all existing ERP modules, database and features to remain untouched. This supersedes the broader first local candidate. No GitHub push, production access or deployment has occurred for this task.
 
 ## Included scope
