@@ -4,6 +4,8 @@ import { notFound } from "next/navigation";
 import { connection } from "next/server";
 
 import { PrintDocumentButton } from "@/components/sales/PrintDocumentButton";
+import { CompanyWhatsapp } from "@/components/whatsapp/CompanyWhatsapp";
+import { assertCustomerVisibleToActor } from "@/lib/customers/visibility";
 import { calculateDocumentDiscounts } from "@/lib/documents/commercial-totals";
 import { label, money } from "@/lib/orders/types";
 import { requireQuotationView } from "@/lib/quotations/access";
@@ -14,6 +16,7 @@ import {
 } from "@/lib/quotations/document";
 import { defaultQuotationExpiration } from "@/lib/quotations/validity";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { canSendCompanyWhatsapp } from "@/lib/whatsapp/messages";
 
 export const dynamic = "force-dynamic";
 
@@ -152,7 +155,7 @@ export default async function QuotationDocumentPage({
   let quotationQuery = createSupabaseAdminClient()
     .from("quotation_requests")
     .select(
-      "id,reference,status,subject,message,company_name,customer_tax_identification_number,required_by,expiration_date,created_at,created_by,currency,billing_address_snapshot,shipping_address_snapshot,subtotal,discount_amount,tax_amount,total_amount,terms_and_conditions,payment_terms,delivery_information,customer_notes,profiles!quotation_requests_profile_id_fkey(full_name,email,phone,company_name),quotation_request_items(id,product_name_snapshot,sku_snapshot,quantity,target_price,unit_price,discount_amount,tax_amount,line_subtotal,line_total,currency)",
+      "id,profile_id,reference,status,subject,message,company_name,customer_tax_identification_number,required_by,expiration_date,created_at,created_by,currency,billing_address_snapshot,shipping_address_snapshot,subtotal,discount_amount,tax_amount,total_amount,terms_and_conditions,payment_terms,delivery_information,customer_notes,profiles!quotation_requests_profile_id_fkey(full_name,email,phone,company_name),quotation_request_items(id,product_name_snapshot,sku_snapshot,quantity,target_price,unit_price,discount_amount,tax_amount,line_subtotal,line_total,currency)",
     )
     .eq("id", id);
   if (quotationViewScope === "own") {
@@ -231,6 +234,8 @@ export default async function QuotationDocumentPage({
   const validityDate = formatDate(expirationDate);
   const downloadName = `${customerName} - ${text(data.reference)}`;
   const customerNote = text(data.customer_notes ?? data.message);
+  const canPrepareWhatsapp = data.profile_id && ["quoted", "accepted"].includes(data.status) && canSendCompanyWhatsapp(profile, permissions)
+    && await assertCustomerVisibleToActor(profile, data.profile_id).then(() => true, () => false);
 
   return (
     <>
@@ -516,8 +521,13 @@ export default async function QuotationDocumentPage({
           );
         })}
 
-        <div className="mx-auto mt-4 flex max-w-[210mm] gap-3 print:hidden">
+        <div className="mx-auto mt-4 flex max-w-[210mm] flex-wrap gap-3 print:hidden">
           <PrintDocumentButton fileName={downloadName} />
+          {canPrepareWhatsapp && <CompanyWhatsapp inline employee={profile.role === "employee"} draft={{
+            label: "WhatsApp quotation",
+            recipient: customer?.phone,
+            text: `Hello, your SEN quotation ${data.reference} is available in My Quotations. Sign in at https://sen.com.bd/account/quotations to view the details. Please reply if you have any questions.`,
+          }} />}
           <Link
             href="/admin/quotations"
             className="rounded-lg border bg-white px-4 py-2 font-semibold"
