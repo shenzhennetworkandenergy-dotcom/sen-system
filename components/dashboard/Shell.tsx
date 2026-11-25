@@ -9,6 +9,8 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { ProfileAvatar } from "@/components/profile/ProfileAvatar";
 import { getEmployeeInventoryWorkCounts } from "@/lib/inventory/employee-inventory-work-counts";
 import { getEmployeePendingWorkCount } from "@/lib/work-scheduler/data";
+import { CompanyWhatsapp, type WhatsappDraft } from "@/components/whatsapp/CompanyWhatsapp";
+import { hasCompanyWhatsappAccess } from "@/lib/whatsapp/server";
 
 type DashboardShellProps = {
   title: string;
@@ -16,9 +18,10 @@ type DashboardShellProps = {
   children: React.ReactNode;
   admin?: boolean;
   employeePermissions?: Iterable<string>;
+  whatsappDraft?: WhatsappDraft;
 };
 
-export async function DashboardShell({ title, subtitle, children, admin = false, employeePermissions }: DashboardShellProps) {
+export async function DashboardShell({ title, subtitle, children, admin = false, employeePermissions, whatsappDraft }: DashboardShellProps) {
   const permissionSet = new Set(employeePermissions ?? []);
   const navigation = admin ? adminNavigation : visibleEmployeeNavigation(permissionSet);
   const { profile } = await getCurrentProfile();
@@ -73,5 +76,6 @@ export async function DashboardShell({ title, subtitle, children, admin = false,
         {children}
       </main>
     </div>
+    {await hasCompanyWhatsappAccess(profile) ? <CompanyWhatsapp employee={profile?.role === "employee"} draft={whatsappDraft} /> : null}
   </div>;
 }

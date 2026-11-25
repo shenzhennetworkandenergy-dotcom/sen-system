@@ -81,6 +81,10 @@ export default async function ProductDetailPage({
     employeePermissions={profile.role === "employee" ? permissions : undefined}
     title={product.name}
     subtitle={`SKU ${product.sku} · ${product.product_type} product`}
+    whatsappDraft={isPublic ? {
+      label: "WhatsApp product update",
+      text: `Hello, here is a product from SEN you may be interested in:\n\n${product.name}\nhttps://sen.com.bd/products/${encodeURIComponent(product.slug)}\n\nReply if you would like details or a quotation.`,
+    } : undefined}
   >
     {message.success ? <p className="mb-4 rounded border border-green-200 bg-green-50 p-3 text-green-900">{message.success}</p> : null}
     {message.error ? <p className="mb-4 rounded border border-red-200 bg-red-50 p-3 text-red-900">{message.error}</p> : null}
