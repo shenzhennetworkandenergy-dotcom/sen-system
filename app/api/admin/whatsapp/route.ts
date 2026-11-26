@@ -4,7 +4,7 @@ import { WhatsappFailure } from "@/lib/whatsapp/cloud";
 import { parseMessage } from "@/lib/whatsapp/messages";
 import { sendOnce } from "@/lib/whatsapp/outbox";
 import { isWhatsappSameOrigin } from "@/lib/whatsapp/security";
-import { createCloudClient, hasCompanyWhatsappAccess, isCompanyWhatsappRecipientAllowed, readWhatsappJson, whatsappConnectionConfiguration, whatsappInboxConfiguration, whatsappOutboxDirectory } from "@/lib/whatsapp/server";
+import { createCloudClient, hasCompanyWhatsappAccess, hasOpenWhatsappReplyWindow, isCompanyWhatsappRecipientAllowed, readWhatsappJson, whatsappConnectionConfiguration, whatsappInboxConfiguration, whatsappOutboxDirectory, whatsappReplyOnly } from "@/lib/whatsapp/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,15 +19,17 @@ export async function GET() {
   if (!(await authorizedSender())) return json({ error: "WhatsApp sending permission required." }, 403);
   const requestId = randomUUID();
   const inboxReady = Boolean(whatsappInboxConfiguration());
+  const replyOnly = whatsappReplyOnly();
   const config = whatsappConnectionConfiguration();
-  if (!config) return json({ ready: false, inboxReady, requestId, businessNumber: null, templates: [], error: "The company's WhatsApp number has not been connected yet." });
+  const status = { inboxReady, replyOnly, requestId };
+  if (!config) return json({ ...status, ready: false, businessNumber: null, templates: [], error: "The company's WhatsApp number has not been connected yet." });
   try {
     const cloud = createCloudClient(config);
     await cloud.verifySender();
-    const templates = await cloud.templates();
-    return json({ ready: Boolean(whatsappOutboxDirectory()), inboxReady, requestId, businessNumber: config.businessNumber, templates });
+    const templates = replyOnly ? [] : await cloud.templates();
+    return json({ ...status, ready: Boolean(whatsappOutboxDirectory()) && (!replyOnly || inboxReady), businessNumber: config.businessNumber, templates });
   } catch (error) {
-    return json({ ready: false, inboxReady, requestId, businessNumber: null, templates: [], error: error instanceof WhatsappFailure ? error.message : "The WhatsApp connection is unavailable." });
+    return json({ ...status, ready: false, businessNumber: null, templates: [], error: error instanceof WhatsappFailure ? error.message : "The WhatsApp connection is unavailable." });
   }
 }
 
@@ -35,15 +37,22 @@ export async function POST(request: Request) {
   if (!isWhatsappSameOrigin(request)) return json({ error: "Request not allowed." }, 403);
   const profile = await authorizedSender();
   if (!profile) return json({ error: "WhatsApp sending permission required." }, 403);
+  const replyOnly = whatsappReplyOnly();
   const outbox = whatsappOutboxDirectory();
-  if (!outbox) return json({ error: "WhatsApp sending is disabled. You can prepare messages while your administrator finishes setup.", code: "paused" }, 503);
+  if (!outbox || (replyOnly && !whatsappInboxConfiguration())) return json({ error: "WhatsApp sending is disabled. You can prepare messages while your administrator finishes setup.", code: "paused" }, 503);
   const config = whatsappConnectionConfiguration();
   if (!config) return json({ error: "The company's WhatsApp number has not been connected yet.", code: "unavailable" }, 503);
   let parsed: ReturnType<typeof parseMessage>;
   try { parsed = parseMessage(await readWhatsappJson(request)); }
   catch (error) { return json({ error: error instanceof SyntaxError ? "Invalid message." : (error as Error).message }, 400); }
+  if (replyOnly && parsed.message.kind !== "text") {
+    return json({ error: "Only replies to recent incoming messages are enabled.", code: "reply_only" }, 422);
+  }
   try {
     if (!(await isCompanyWhatsappRecipientAllowed(profile, parsed.message.to))) return json({ error: "This recipient is not available in your assigned business categories. Ask your administrator to review access.", code: "recipient" }, 403);
+    if (replyOnly && !(await hasOpenWhatsappReplyWindow(config.phoneId, parsed.message.to))) {
+      return json({ error: "The customer must send a WhatsApp message within the last 24 hours before you can reply.", code: "window" }, 422);
+    }
     const cloud = createCloudClient(config);
     await cloud.verifySender();
     await cloud.validateTemplate(parsed.message);

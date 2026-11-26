@@ -10,12 +10,13 @@ export type CloudConfig = {
 };
 
 export class WhatsappFailure extends Error {
-  code: "unavailable" | "account" | "template" | "window" | "rejected" | "unknown";
+  code: "unavailable" | "account" | "billing" | "template" | "window" | "rejected" | "unknown";
   constructor(code: WhatsappFailure["code"], message: string) { super(message); this.code = code; }
 }
 
 function providerFailure(code: number) {
-  if (code === 131047) return new WhatsappFailure("window", "The 24-hour reply window is closed. Choose an approved template.");
+  if (code === 131047) return new WhatsappFailure("window", "The 24-hour reply window has closed. The customer can send a new message to reopen it.");
+  if (code === 131042) return new WhatsappFailure("billing", "Meta reported a billing issue. Ask your administrator to check the account's free reply allowance and billing status.");
   if ([190, 10, 200, 131005, 133010].includes(code)) return new WhatsappFailure("account", "The business WhatsApp connection needs attention. Contact your administrator.");
   return new WhatsappFailure("rejected", "WhatsApp did not accept this message. Check the number, template and account before trying again.");
 }

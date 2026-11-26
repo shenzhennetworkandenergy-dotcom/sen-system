@@ -17,19 +17,20 @@ Keep all credentials in the server's private environment, never a `NEXT_PUBLIC_`
 ```dotenv
 WHATSAPP_ENABLED=true
 WHATSAPP_SEND_ENABLED=false
+WHATSAPP_SEND_MODE=reply-only
 WHATSAPP_ACCESS_TOKEN=<server-only system-user token>
 WHATSAPP_PHONE_NUMBER_ID=<business phone number ID>
 WHATSAPP_BUSINESS_NUMBER=<confirmed company number including country code>
 WHATSAPP_GRAPH_API_VERSION=v27.0
-WHATSAPP_ACCOUNT_ID=<account ID used to read approved templates>
+WHATSAPP_ACCOUNT_ID=<WhatsApp Business account ID>
 WHATSAPP_OUTBOX_DIR=<absolute private persistent directory outside the release>
 ```
 
-`WHATSAPP_ENABLED` enables read-only sender and template checks. Keep `WHATSAPP_SEND_ENABLED=false` while preparing the ERP and billing. The send route rejects requests on the server until this flag is explicitly set to `true` and an absolute outbox path is configured. Inbox receiving has its own configuration. Without `WHATSAPP_ACCOUNT_ID`, the composer has only free-form messages. Provision the writable outbox outside the release directory with the service account as owner, directory mode 0700 and files mode 0600. The journal stores request fingerprints and send outcomes.
+`WHATSAPP_ENABLED` enables the read-only sender check. `WHATSAPP_SEND_ENABLED=true` and an absolute outbox path are required to send. The default mode is reply-only. It requires the live Inbox and an incoming text from the recipient in the previous 24 hours. The server rejects template requests in this mode. Only `WHATSAPP_SEND_MODE=full` enables approved templates and their read-only checks. Provision the writable outbox outside the release directory with the service account as owner, directory mode 0700 and files mode 0600. The journal stores request fingerprints and send outcomes.
 
 Use the customer quotation page link from issued or accepted quotation drafts. Generated invoices prefill an invoice reference and total, and published products prefill a public catalogue link. These shortcuts fill the composer for review. A quotation or invoice draft carries text only.
 
-The business number must first be registered with Meta. If it is already used in the Business app, discuss the official coexistence onboarding flow and its account/device effects with the owner before making account changes. Never remove or migrate their existing number automatically. Configure the token's messaging permission and template-reading access. Number, token, account and desk readiness still require owner setup/confirmation before a real send test.
+The business number must first be registered with Meta. If it is already used in the Business app, discuss the official coexistence onboarding flow and its account/device effects with the owner before making account changes. Never remove or migrate their existing number automatically. Configure the token's messaging permission and access to read the business phone. Full mode also requires template-reading access. Number, token, account and desk readiness still require owner setup/confirmation before a real send test.
 
 Each send verifies Meta's actual sender number against the configured company number. The connection also requires Meta to return `is_on_biz_app: true` and `platform_type: CLOUD_API` for that phone ID, so a Cloud API-only number or a Business app-only number cannot be selected. Templates come from Meta (first 100 entries), with fresh approval and parameter checks before sending. The composer supports approved text templates with positional body parameters and static text headers or footers.
 
@@ -45,13 +46,13 @@ WHATSAPP_WEBHOOK_VERIFY_TOKEN=<random server-only verification token>
 
 Use the HTTPS callback `/api/webhooks/whatsapp` and subscribe the configured business account to the `messages` field. The callback verifies the raw message signature and checks both asset IDs before writing incoming text. Retries with the same WhatsApp message ID leave one inbox row. Leave history and contact imports off until the business has approved that access.
 
-For deployment before billing, apply both migrations, provision the private server settings and leave sending disabled. Verify the sender and approved templates with read-only requests. After the owner approves connecting the inbox, verify the HTTPS callback using Meta and subscribe only the intended business account. Confirm the send route reports `paused` and check the inbox using test data before enabling customer messaging.
+For an Inbox deployment with sending disabled, apply both migrations and provision the private server settings. Verify the sender with a read-only request. After the owner approves connecting the inbox, verify the HTTPS callback using Meta and subscribe only the intended business account. Confirm the send route reports `paused` and check the inbox using test data before enabling replies.
 
 Administrators can load the 50 most recent messages across the connected number or filter by customer phone. Employees with the WhatsApp grant must load a phone belonging to an active customer within their visible categories. Selecting Reply copies the sender into the composer. The inbox does not include older app history, attachments, mobile-app outbound echoes or delivery receipts.
 
 ## Sending behavior
 
-- Free-form messages are limited to the provider's 24-hour customer service window. After it closes, choose an approved template.
+- Free-form messages are limited to the provider's 24-hour customer service window. Meta provides a [monthly free allowance](https://developers.facebook.com/documentation/business-messaging/whatsapp/pricing/#free-tier-of-monthly-service-messages) for service replies. Meta stops delivering replies once the allowance is used if there is no payment method on the account.
 - Only send to recipients who have agreed to receive the business's messages.
 - The button waits for the explicit user action. Page loads only check the connection and read templates.
 - Duplicate requests are blocked by an atomic persistent journal, including concurrent requests and process restarts. A previous accepted request returns its existing message ID.

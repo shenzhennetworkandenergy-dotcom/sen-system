@@ -5,7 +5,7 @@ import { normalizeRecipient, templatePreview, type WhatsappTemplate } from "@/li
 import styles from "./company-whatsapp.module.css";
 import { WhatsappInbox } from "./WhatsappInbox";
 
-type Connection = { ready: boolean; inboxReady: boolean; requestId: string; businessNumber: string | null; templates: WhatsappTemplate[]; error?: string };
+type Connection = { ready: boolean; inboxReady: boolean; replyOnly: boolean; requestId: string; businessNumber: string | null; templates: WhatsappTemplate[]; error?: string };
 export type WhatsappDraft = { label: string; text: string; recipient?: string | null };
 
 function WhatsappIcon() {
@@ -25,6 +25,7 @@ export function CompanyWhatsapp({ employee = false, draft, inline = false }: {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [loading, setLoading] = useState(false);
   const [to, setTo] = useState(draft?.recipient ?? "");
+  const [replyRecipient, setReplyRecipient] = useState("");
   const [text, setText] = useState(draft?.text ?? "");
   const [kind, setKind] = useState("text");
   const [templateKey, setTemplateKey] = useState("");
@@ -32,6 +33,9 @@ export function CompanyWhatsapp({ employee = false, draft, inline = false }: {
   const [sending, setSending] = useState(false);
   const [result, setResult] = useState<{ accepted?: boolean; error?: string; code?: string } | null>(null);
   const template = connection?.templates.find((item) => `${item.name}:${item.language}` === templateKey);
+  const replyOnly = connection?.replyOnly ?? false;
+  const useTemplate = !replyOnly && kind === "template";
+  const canSend = Boolean(connection?.ready && (!replyOnly || replyRecipient));
 
   useEffect(() => {
     if (!open) return;
@@ -73,14 +77,14 @@ export function CompanyWhatsapp({ employee = false, draft, inline = false }: {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (busy.current || !connection?.ready || result?.accepted || result?.code === "unknown") return;
+    if (busy.current || !connection || !canSend || result?.accepted || result?.code === "unknown") return;
     let recipient: string;
-    try { recipient = normalizeRecipient(to); }
+    try { recipient = normalizeRecipient(replyOnly ? replyRecipient : to); }
     catch (error) { setResult({ error: (error as Error).message }); return; }
-    if (kind === "template" && (!template || parameters.length !== template.parameterCount || parameters.some((value) => !value.trim()))) {
+    if (useTemplate && (!template || parameters.length !== template.parameterCount || parameters.some((value) => !value.trim()))) {
       setResult({ error: "Choose a template and complete all its fields." }); return;
     }
-    const message = kind === "template" && template
+    const message = useTemplate && template
       ? { kind, name: template.name, language: template.language, parameters }
       : { kind: "text", text };
     busy.current = true;
@@ -98,6 +102,8 @@ export function CompanyWhatsapp({ employee = false, draft, inline = false }: {
 
   function newMessage() {
     setConnection(null); setResult(null); setText(""); setParameters([]); setTemplateKey(""); setKind("text"); setLoading(true);
+    setReplyRecipient("");
+    if (replyOnly) setView("inbox");
   }
 
   return <>
@@ -110,21 +116,22 @@ export function CompanyWhatsapp({ employee = false, draft, inline = false }: {
         <button type="button" aria-pressed={view === "inbox"} disabled={sending} onClick={() => setView("inbox")}>Inbox</button>
       </div>
       {view === "inbox" ? open && <WhatsappInbox employee={employee} ready={Boolean(connection?.inboxReady)} recipient={to} onReply={(recipient) => {
-        setTo(`+${recipient}`);
-        setView("compose");
         if (result?.code !== "unknown") newMessage();
+        setTo(`+${recipient}`);
+        setReplyRecipient(recipient);
+        setView("compose");
       }} /> : <form onSubmit={submit} className={styles.form}>
         <div className={styles.connection} role="status">
           {loading ? "Checking connection…" : <>
             {connection?.businessNumber && <strong className={styles.number}>Company number: +{connection.businessNumber}</strong>}
             {connection?.error && <span className={styles.number}>{connection.error}</span>}
-            <span>{connection?.ready ? "Ready to send" : "Sending is disabled. You can prepare a message here."}</span>
+            <span>{connection?.ready ? (replyOnly ? "Inbox replies only" : "Ready to send") : "Sending is disabled. You can prepare a message here."}</span>
           </>}
         </div>
         <fieldset disabled={sending || result?.accepted || result?.code === "unknown"} className={styles.fields}>
-          <label>Recipient WhatsApp number<input name="whatsapp_recipient" type="tel" inputMode="tel" autoComplete="off" placeholder="+880 1XXXXXXXXX" value={to} onChange={(event) => setTo(event.target.value)} required maxLength={40}/><small>{employee ? "Use a customer's saved phone number within your assigned business categories." : "Include the country code. Bangladesh mobile numbers can start with 01."}</small></label>
-          <label>Message type<select value={kind} onChange={(event) => { setKind(event.target.value); setResult(null); }}><option value="text">Write a reply</option><option value="template">Approved template</option></select></label>
-          {kind === "text" ? <label>Message<textarea name="whatsapp_message" rows={5} value={text} onChange={(event) => setText(event.target.value)} required maxLength={4096} placeholder="Write your message…"/><small>Replies are available within 24 hours of the customer’s last WhatsApp message. Use an approved template after that.</small><span className={styles.count}>{text.length.toLocaleString()} / 4,096</span></label>
+          <label>Recipient WhatsApp number<input name="whatsapp_recipient" type="tel" inputMode="tel" autoComplete="off" placeholder={replyOnly ? "Select a message in the Inbox" : "+880 1XXXXXXXXX"} value={replyOnly ? (replyRecipient ? `+${replyRecipient}` : "") : to} onChange={(event) => setTo(event.target.value)} readOnly={replyOnly} required maxLength={40}/><small>{replyOnly ? "Choose Reply on an incoming message in the Inbox." : employee ? "Use a customer's saved phone number within your assigned business categories." : "Include the country code. Bangladesh mobile numbers can start with 01."}</small></label>
+          {!replyOnly && <label>Message type<select value={kind} onChange={(event) => { setKind(event.target.value); setResult(null); }}><option value="text">Write a reply</option><option value="template">Approved template</option></select></label>}
+          {!useTemplate ? <label>Message<textarea name="whatsapp_message" rows={5} value={text} onChange={(event) => setText(event.target.value)} required maxLength={4096} placeholder="Write your message…"/><small>Replies are available within 24 hours of the customer’s last WhatsApp message.{!replyOnly && " Use an approved template after that."}</small><span className={styles.count}>{text.length.toLocaleString()} / 4,096</span></label>
             : <>
               <label>Approved template<select value={templateKey} onChange={(event) => { const selected = connection?.templates.find((item) => `${item.name}:${item.language}` === event.target.value); setTemplateKey(event.target.value); setParameters(Array(selected?.parameterCount ?? 0).fill("")); }} required><option value="">Select a template</option>{connection?.templates.map((item) => <option key={`${item.name}:${item.language}`} value={`${item.name}:${item.language}`}>{item.name.replaceAll("_", " ")} ({item.language})</option>)}</select></label>
               {!connection?.templates.length ? <p className={styles.note}>No supported approved text templates are available. Your administrator can connect them in WhatsApp Manager.</p> : null}
@@ -134,7 +141,7 @@ export function CompanyWhatsapp({ employee = false, draft, inline = false }: {
         </fieldset>
         {result?.error ? <p className={styles.error} role="alert">{result.error}</p> : null}
         {result?.accepted ? <p className={styles.success} role="status">Accepted by WhatsApp. Delivery has not been confirmed yet.</p> : null}
-        <div className={styles.actions}><button type="button" className={styles.secondary} onClick={close} disabled={sending}>Close</button>{result?.accepted || (result?.code && result.code !== "unknown") ? <button type="button" className={styles.primary} onClick={newMessage}>New message</button> : <button type="submit" className={styles.primary} disabled={!connection?.ready || sending || result?.code === "unknown"}>{sending ? "Sending…" : "Send message"}</button>}</div>
+        <div className={styles.actions}><button type="button" className={styles.secondary} onClick={close} disabled={sending}>Close</button>{result?.accepted || (result?.code && result.code !== "unknown") ? <button type="button" className={styles.primary} onClick={newMessage}>{replyOnly ? "Back to Inbox" : "New message"}</button> : <button type="submit" className={styles.primary} disabled={!canSend || sending || result?.code === "unknown"}>{sending ? "Sending…" : replyOnly ? "Send reply" : "Send message"}</button>}</div>
       </form>}
     </dialog>
   </>;
