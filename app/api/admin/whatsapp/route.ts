@@ -49,7 +49,7 @@ export async function POST(request: Request) {
     return json({ error: "Only replies to recent incoming messages are enabled.", code: "reply_only" }, 422);
   }
   try {
-    if (!(await isCompanyWhatsappRecipientAllowed(profile, parsed.message.to))) return json({ error: "This recipient is not available in your assigned business categories. Ask your administrator to review access.", code: "recipient" }, 403);
+    if (!(await isCompanyWhatsappRecipientAllowed(profile, parsed.message.to, config.phoneId))) return json({ error: "This recipient is not available in your assigned business categories. Ask your administrator to review access.", code: "recipient" }, 403);
     if (replyOnly && !(await hasOpenWhatsappReplyWindow(config.phoneId, parsed.message.to))) {
       return json({ error: "The customer must send a WhatsApp message within the last 24 hours before you can reply.", code: "window" }, 422);
     }

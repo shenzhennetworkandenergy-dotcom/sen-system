@@ -55,6 +55,16 @@
 .inboxSearch, .inboxMessages { display: grid; gap: .75rem; }
 .inboxMessages { margin: 0; padding: 0; list-style: none; }
 .inboxMessageHeading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .25rem .75rem; }
+.inboxTabs { display: flex; gap: .5rem; }
+.inboxTabs button, .inlineAction { min-height: 44px; padding: .6rem .8rem; border: 1px solid var(--wa-border); border-radius: .625rem; font: inherit; font-weight: 650; color: var(--wa-text); cursor: pointer; }
+.inboxTabs button[aria-pressed="true"] { background: var(--wa-tint); }
+.inlineAction { display: inline-flex; align-items: center; font-size: .875rem; }
+.contactTitle { font-size: 1rem; font-weight: 750; overflow-wrap: anywhere; }
+.directoryEntry { display: grid; width: 100%; gap: .25rem; margin-top: .25rem; padding: .75rem; text-align: start; border: 1px solid var(--wa-border); border-radius: .625rem; background: var(--wa-tint); color: var(--wa-text); overflow-wrap: anywhere; cursor: pointer; }
+.directoryEntry span { color: var(--wa-muted); font-size: .8rem; }
+.directoryMessage { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.automaticReply { margin-top: .75rem; border-top: 1px solid var(--wa-border); padding-top: .75rem; }
+.importPreview { max-height: 12rem; overflow: auto; padding: .5rem; font-size: .8rem; }
 .fields { display: grid; gap: 1rem; min-width: 0; margin: 0; padding: 0; border: 0; }
 .fields label { display: grid; gap: .375rem; min-width: 0; color: var(--wa-text); font-size: .875rem; font-weight: 650; }
 .fields :is(input, select, textarea) { width: 100%; min-width: 0; min-height: 44px; padding: .7rem .75rem; border: 1px solid var(--wa-border); border-radius: .625rem; background: var(--wa-surface); color: var(--wa-text); -webkit-text-fill-color: var(--wa-text); caret-color: var(--wa-text); font: inherit; font-size: 16px; font-weight: 400; }
@@ -67,7 +77,7 @@
 .error, .success { padding: .875rem; border: 1px solid; border-radius: .75rem; font-size: .875rem; }
 .error { background: #fff1f2; color: #9f1239; border-color: #fda4af; }
 .success { background: #ecfdf5; color: #065f46; border-color: #6ee7b7; }
-.actions { display: flex; justify-content: flex-end; gap: .75rem; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .75rem; }
 .actions button { min-height: 44px; padding: .7rem 1rem; border: 1px solid; border-radius: .75rem; font-size: .875rem; font-weight: 700; cursor: pointer; }
 .primary { background: #117544; color: white; border-color: #117544; }
 .secondary { background: var(--wa-surface); color: var(--wa-text); border-color: var(--wa-border); }

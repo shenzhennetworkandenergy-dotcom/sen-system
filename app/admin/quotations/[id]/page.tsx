@@ -526,6 +526,7 @@ export default async function QuotationDocumentPage({
           {canPrepareWhatsapp && <CompanyWhatsapp inline employee={profile.role === "employee"} draft={{
             label: "WhatsApp quotation",
             recipient: customer?.phone,
+            customerId: data.profile_id,
             text: `Hello, your SEN quotation ${data.reference} is available in My Quotations. Sign in at https://sen.com.bd/account/quotations to view the details. Please reply if you have any questions.`,
           }} />}
           <Link

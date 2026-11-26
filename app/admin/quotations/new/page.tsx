@@ -12,28 +12,33 @@ export const dynamic = "force-dynamic";
 export default async function NewQuotationPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; success?: string }>;
+  searchParams: Promise<{ error?: string; success?: string; customer?: string }>;
 }) {
   await connection();
   const { profile, permissions } = await requirePermission("quotations.create");
   const params = await searchParams;
   const db = createSupabaseAdminClient();
   const visibleCustomerIds = await getVisibleCustomerIds(profile);
-  let customerQuery = db
+  const activeCustomers = () => db
     .from("profiles")
     .select("id,full_name,email,phone,company_name")
     .eq("role", "customer")
     .eq("status", "active")
+    .is("archived_at", null);
+  let customerQuery = activeCustomers()
     .order("full_name")
     .limit(500);
   if (visibleCustomerIds !== null) {
     customerQuery = customerQuery.in("id", visibleCustomerIds.length ? visibleCustomerIds : ["00000000-0000-0000-0000-000000000000"]);
   }
+  const selectedId = typeof params.customer === "string" && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(params.customer)
+    && (visibleCustomerIds === null || visibleCustomerIds.includes(params.customer)) ? params.customer : "";
 
   const [
     { data: customers, error: customerError },
     { data: products, error: productError },
     { data: variations, error: variationError },
+    selected,
   ] = await Promise.all([
     customerQuery,
     db
@@ -50,8 +55,11 @@ export default async function NewQuotationPage({
       .eq("status", "active")
       .order("combination_key")
       .limit(2000),
+    selectedId ? activeCustomers().eq("id", selectedId).maybeSingle() : null,
   ]);
-  const loadError = customerError ?? productError ?? variationError;
+  const loadError = customerError ?? productError ?? variationError ?? selected?.error;
+  const customerOptions = selected?.data
+    ? [selected.data, ...(customers ?? []).filter((customer) => customer.id !== selectedId)] : customers ?? [];
 
   return (
     <DashboardShell
@@ -76,7 +84,8 @@ export default async function NewQuotationPage({
         </p>
       ) : (
         <QuotationBuilder
-          customers={customers ?? []}
+          customers={customerOptions}
+          initialCustomerId={selected?.data?.id}
           products={products ?? []}
           variations={variations ?? []}
           defaultExpiration={defaultQuotationExpiration()}

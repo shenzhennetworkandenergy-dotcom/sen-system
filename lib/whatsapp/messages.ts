@@ -5,6 +5,7 @@ export type WhatsappInboxMessage = {
   sender: string;
   received_at: string;
   body: string;
+  auto_reply?: { body: string; accepted_at: string } | null;
 };
 
 export function isWhatsappReplyWindowOpen(receivedAt: string, now = Date.now()) {

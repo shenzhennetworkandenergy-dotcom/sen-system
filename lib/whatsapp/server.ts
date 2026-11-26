@@ -2,10 +2,10 @@ import "server-only";
 import path from "node:path";
 import { getEffectivePermissions } from "@/lib/auth/permissions";
 import type { Profile } from "@/lib/auth/session";
-import { getVisibleCustomerIds } from "@/lib/customers/visibility";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createCloudClient, type CloudConfig } from "./cloud";
-import { canSendCompanyWhatsapp, isWhatsappReplyWindowOpen, matchesCustomerPhone, normalizeRecipient } from "./messages";
+import { whatsappDirectoryForActor } from "./directory";
+import { canSendCompanyWhatsapp, isWhatsappReplyWindowOpen, normalizeRecipient } from "./messages";
 
 export async function hasCompanyWhatsappAccess(profile: Profile | null) {
   if (!profile || profile.status !== "active" || profile.archived_at) return false;
@@ -14,19 +14,11 @@ export async function hasCompanyWhatsappAccess(profile: Profile | null) {
   try { return canSendCompanyWhatsapp(profile, await getEffectivePermissions(profile.id)); } catch { return false; }
 }
 
-export async function isCompanyWhatsappRecipientAllowed(profile: Profile, recipient: string) {
+export async function isCompanyWhatsappRecipientAllowed(profile: Profile, recipient: string, phoneId: string) {
   if (profile.role === "admin") return true;
   if (profile.role !== "employee" || profile.status !== "active") return false;
-  const visible = await getVisibleCustomerIds(profile);
-  if (!visible?.length) return false;
-  const db = createSupabaseAdminClient();
-  for (let offset = 0; offset < visible.length; offset += 250) {
-    const { data, error } = await db.from("profiles").select("phone").in("id", visible.slice(offset, offset + 250))
-      .eq("role", "customer").eq("status", "active").is("archived_at", null);
-    if (error) throw new Error("Customer access could not be verified.");
-    if (data?.some((customer) => matchesCustomerPhone(recipient, customer.phone))) return true;
-  }
-  return false;
+  const [contact] = await whatsappDirectoryForActor(profile, phoneId, { recipient });
+  return Boolean(contact?.customer_profile_id);
 }
 
 export function whatsappConnectionConfiguration(): CloudConfig | null {
