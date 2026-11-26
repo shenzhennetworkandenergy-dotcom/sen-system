@@ -65,6 +65,7 @@ export function QuotationBuilder({
   defaultExpiration,
   mode = "create",
   fixedCustomer,
+  initialCustomerId,
   initialDraft,
   canCreateCustomer = true,
 }: {
@@ -76,10 +77,11 @@ export function QuotationBuilder({
   defaultExpiration: string;
   mode?: "create" | "edit";
   fixedCustomer?: CustomerSearchOption;
+  initialCustomerId?: string;
   initialDraft?: DraftQuotationValues;
   canCreateCustomer?: boolean;
 }) {
-  const [customerId, setCustomerId] = useState(fixedCustomer?.id ?? "");
+  const [customerId, setCustomerId] = useState(fixedCustomer?.id ?? initialCustomerId ?? "");
   const [customerOptions, setCustomerOptions] =
     useState<CustomerSearchOption[]>(customers);
   const createAndSelectCustomer = async (

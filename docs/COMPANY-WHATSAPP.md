@@ -48,7 +48,17 @@ Use the HTTPS callback `/api/webhooks/whatsapp` and subscribe the configured bus
 
 For an Inbox deployment with sending disabled, apply both migrations and provision the private server settings. Verify the sender with a read-only request. After the owner approves connecting the inbox, verify the HTTPS callback using Meta and subscribe only the intended business account. Confirm the send route reports `paused` and check the inbox using test data before enabling replies.
 
-Administrators can load the 50 most recent messages across the connected number or filter by customer phone. Employees with the WhatsApp grant must load a phone belonging to an active customer within their visible categories. Selecting Reply copies the sender into the composer. The inbox does not include older app history, attachments, mobile-app outbound echoes or delivery receipts.
+Recent chats group incoming texts by WhatsApp number. Contacts also lists active ERP customer numbers and administrator-saved contacts. Search accepts the saved name, ERP customer name, company or phone number. The same normalized number links automatically when it matches a single active ERP customer. The administrator can save a contact name and explicitly link an alternate or shared number to the intended ERP customer. Employees continue to see and reply only within their assigned customer categories.
+
+An administrator can review and import a vCard (.vcf) file exported from the phone's Contacts app. Conflicting phone names are flagged, and existing saved contacts keep their current name and link. Standard Inbox receiving stores new incoming texts. Historical mobile chats, mobile-app outbound echoes and attachments require separate integration.
+
+From a recognized customer's chat, staff with quotation access can open the quotation form with that customer selected. The price lookup inserts a chosen public catalogue price into the reply composer for review.
+
+### Automatic catalogue price replies
+
+After applying `202611260001_company_whatsapp_customer_inbox.sql`, set the private runtime flag `WHATSAPP_AUTO_PRICE_REPLIES=true` to enable automatic price replies. The ordinary send flags and the Inbox must already be active. A new incoming text from a recognized contact can get one reply when it explicitly asks for the price and matches one active public catalogue product with an exact model, SKU, or hard-drive capacity and one BDT price. Unknown or ambiguous requests remain in Recent chats for staff. Formal quotations use the ordinary quotation workflow.
+
+Automatic replies use the existing durable send journal. A signed webhook retry leaves one incoming row and cannot send a second reply. The conversation displays automatic replies after Meta accepts them.
 
 ## Sending behavior
 

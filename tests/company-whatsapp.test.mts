@@ -9,10 +9,47 @@ import { createCloudClient, WhatsappFailure } from "../lib/whatsapp/cloud.ts";
 import { sendOnce } from "../lib/whatsapp/outbox.ts";
 import { isWhatsappSameOrigin } from "../lib/whatsapp/security.ts";
 import { isWhatsappWebhookSigned, whatsappInboxMessages, whatsappWebhookChallenge } from "../lib/whatsapp/webhook.ts";
+import { exactWhatsappPriceMatch, whatsappPriceText, type WhatsappPriceProduct } from "../lib/whatsapp/price-inquiry.ts";
+import { parseWhatsappVCard } from "../lib/whatsapp/vcard.ts";
 
 const config = { token: "test-secret-not-a-real-token", phoneId: "123456789", businessNumber: "15555550100", version: "v27.0", accountId: "987654321" };
 const message = { kind: "text" as const, to: "15555550101", text: "পণ্যটি প্রস্তুত আছে। SEN & customer" };
 const approved = { name: "order_ready", language: "en_US", status: "APPROVED", components: [{ type: "BODY", text: "Hello {{1}}, order {{2}} is ready." }] };
+
+test("contact exports normalize phone formats and skip conflicting names", () => {
+  const input = [
+    "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Example Customer\r\nTEL;TYPE=CELL:01712-345678\r\nEND:VCARD",
+    "BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Example Customer\r\nTEL;VALUE=uri:tel:+8801712345678\r\nEND:VCARD",
+    "BEGIN:VCARD\r\nFN:Example A\r\nTEL:+8612345678900\r\nEND:VCARD",
+    "BEGIN:VCARD\r\nFN:Example B\r\nTEL:+8612345678900\r\nEND:VCARD",
+  ].join("\r\n");
+  assert.deepEqual(parseWhatsappVCard(input), {
+    contacts: [{ name: "Example Customer", recipient: "8801712345678" }], skipped: 0, conflicting: 1,
+  });
+});
+
+const hdd: WhatsappPriceProduct = {
+  name: "Seagate 16TB HDD", sku: "SEN-EXOS-16T", model_number: "ST16000NM001G",
+  slug: "example-16tb-hdd", product_type: "simple", currency: "BDT", regular_price: 20000, sale_price: 18000,
+};
+
+test("automatic price replies require a unique exact model or qualified disk capacity", () => {
+  assert.equal(exactWhatsappPriceMatch("16TB HDD price?", [hdd])?.price, 18000);
+  assert.equal(exactWhatsappPriceMatch("১৬ টিবি হার্ড ডিস্ক এর দাম কত?", [hdd])?.price, 18000);
+  assert.equal(exactWhatsappPriceMatch("একটা ১৬টিবি হার্ড ডিস্কের দাম কত?", [hdd])?.price, 18000);
+  assert.equal(exactWhatsappPriceMatch("ST16000NM001G price?", [hdd])?.price, 18000);
+  assert.equal(exactWhatsappPriceMatch("SEN-EXOS-16T price?", [hdd])?.price, 18000);
+  assert.match(whatsappPriceText(hdd, 18000, true), /BDT 18,000\.00/);
+  assert.equal(exactWhatsappPriceMatch("60TB HDD price?", [hdd]), null);
+  assert.equal(exactWhatsappPriceMatch("WD 16TB HDD price?", [hdd]), null);
+  assert.equal(exactWhatsappPriceMatch("16TB or 60TB HDD price?", [hdd]), null);
+  assert.equal(exactWhatsappPriceMatch("16TB HDD", [hdd]), null);
+  assert.equal(exactWhatsappPriceMatch("16TB HDD price BDT 18000", [hdd]), null);
+  assert.equal(exactWhatsappPriceMatch("16TB HDD price?", [hdd, { ...hdd, name: "WD 16TB HDD" }]), null);
+  assert.equal(exactWhatsappPriceMatch("16TB HDD price?", [{ ...hdd, product_type: "variable" }]), null);
+  assert.equal(exactWhatsappPriceMatch("16TB HDD price?", [{ ...hdd, currency: "USD" }]), null);
+  assert.equal(exactWhatsappPriceMatch("16TB HDD price?", [{ ...hdd, sale_price: null, regular_price: null }]), null);
+});
 
 test("webhook verification checks both the challenge mode and matching token", () => {
   const url = new URL("https://example.test/api/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=test-token&hub.challenge=42");

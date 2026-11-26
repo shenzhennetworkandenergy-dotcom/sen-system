@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { normalizeRecipient, templatePreview, type WhatsappTemplate } from "@/lib/whatsapp/messages";
+import type { WhatsappContact } from "@/lib/whatsapp/directory";
+import { matchesCustomerPhone, normalizeRecipient, templatePreview, type WhatsappTemplate } from "@/lib/whatsapp/messages";
 import styles from "./company-whatsapp.module.css";
 import { WhatsappInbox } from "./WhatsappInbox";
 
 type Connection = { ready: boolean; inboxReady: boolean; replyOnly: boolean; requestId: string; businessNumber: string | null; templates: WhatsappTemplate[]; error?: string };
-export type WhatsappDraft = { label: string; text: string; recipient?: string | null };
+export type WhatsappDraft = { label: string; text: string; recipient?: string | null; customerId?: string | null };
 
 function WhatsappIcon() {
   return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M21 11.5a9 9 0 0 1-13.4 7.8L3 21l1.7-4.5A9 9 0 1 1 21 11.5Z"/><path d="M8 7.5c0 4 2.5 6.5 6.5 7l1.5-2-2.5-1-1 1c-1.5-.7-2.3-1.5-3-3l1-1-1-2.5Z"/></svg>;
@@ -21,11 +22,12 @@ export function CompanyWhatsapp({ employee = false, draft, inline = false }: {
   const trigger = useRef<HTMLButtonElement>(null);
   const busy = useRef(false);
   const [open, setOpen] = useState(false);
-  const [view, setView] = useState<"compose" | "inbox">("compose");
+  const [view, setView] = useState<"compose" | "inbox">(draft ? "compose" : "inbox");
   const [connection, setConnection] = useState<Connection | null>(null);
   const [loading, setLoading] = useState(false);
   const [to, setTo] = useState(draft?.recipient ?? "");
-  const [replyRecipient, setReplyRecipient] = useState("");
+  const [replyContact, setReplyContact] = useState<WhatsappContact | null>(null);
+  const replyRecipient = replyContact?.recipient ?? "";
   const [text, setText] = useState(draft?.text ?? "");
   const [kind, setKind] = useState("text");
   const [templateKey, setTemplateKey] = useState("");
@@ -102,7 +104,7 @@ export function CompanyWhatsapp({ employee = false, draft, inline = false }: {
 
   function newMessage() {
     setConnection(null); setResult(null); setText(""); setParameters([]); setTemplateKey(""); setKind("text"); setLoading(true);
-    setReplyRecipient("");
+    setReplyContact(null);
     if (replyOnly) setView("inbox");
   }
 
@@ -115,12 +117,19 @@ export function CompanyWhatsapp({ employee = false, draft, inline = false }: {
         <button type="button" aria-pressed={view === "compose"} disabled={sending} onClick={() => setView("compose")}>Compose</button>
         <button type="button" aria-pressed={view === "inbox"} disabled={sending} onClick={() => setView("inbox")}>Inbox</button>
       </div>
-      {view === "inbox" ? open && <WhatsappInbox employee={employee} ready={Boolean(connection?.inboxReady)} recipient={to} onReply={(recipient) => {
-        if (result?.code !== "unknown") newMessage();
-        setTo(`+${recipient}`);
-        setReplyRecipient(recipient);
+      {view === "inbox" ? open && (loading
+        ? <div className={styles.form}><p className={styles.note} role="status">Checking WhatsApp Inbox…</p></div>
+        : <WhatsappInbox employee={employee} ready={Boolean(connection?.inboxReady)} initialContact={replyContact} onReply={(contact, priceText) => {
+        if (result?.code === "unknown") { setView("compose"); return; }
+        newMessage();
+        const matchedDraft = draft && (draft.customerId
+          ? draft.customerId === contact.customer_profile_id
+          : matchesCustomerPhone(contact.recipient, draft.recipient ?? null));
+        setText(priceText ?? (matchedDraft ? draft.text : ""));
+        setTo(`+${contact.recipient}`);
+        setReplyContact(contact);
         setView("compose");
-      }} /> : <form onSubmit={submit} className={styles.form}>
+      }} />) : <form onSubmit={submit} className={styles.form}>
         <div className={styles.connection} role="status">
           {loading ? "Checking connection…" : <>
             {connection?.businessNumber && <strong className={styles.number}>Company number: +{connection.businessNumber}</strong>}
@@ -129,6 +138,7 @@ export function CompanyWhatsapp({ employee = false, draft, inline = false }: {
           </>}
         </div>
         <fieldset disabled={sending || result?.accepted || result?.code === "unknown"} className={styles.fields}>
+          {replyContact?.display_name && <p className={styles.note}>Reply to <strong>{replyContact.display_name}</strong></p>}
           <label>Recipient WhatsApp number<input name="whatsapp_recipient" type="tel" inputMode="tel" autoComplete="off" placeholder={replyOnly ? "Select a message in the Inbox" : "+880 1XXXXXXXXX"} value={replyOnly ? (replyRecipient ? `+${replyRecipient}` : "") : to} onChange={(event) => setTo(event.target.value)} readOnly={replyOnly} required maxLength={40}/><small>{replyOnly ? "Choose Reply on an incoming message in the Inbox." : employee ? "Use a customer's saved phone number within your assigned business categories." : "Include the country code. Bangladesh mobile numbers can start with 01."}</small></label>
           {!replyOnly && <label>Message type<select value={kind} onChange={(event) => { setKind(event.target.value); setResult(null); }}><option value="text">Write a reply</option><option value="template">Approved template</option></select></label>}
           {!useTemplate ? <label>Message<textarea name="whatsapp_message" rows={5} value={text} onChange={(event) => setText(event.target.value)} required maxLength={4096} placeholder="Write your message…"/><small>Replies are available within 24 hours of the customer’s last WhatsApp message.{!replyOnly && " Use an approved template after that."}</small><span className={styles.count}>{text.length.toLocaleString()} / 4,096</span></label>

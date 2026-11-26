@@ -24,15 +24,24 @@ export async function POST(request: Request) {
   }
   if (!sender && profile.role !== "admin") return json({ error: "Enter a customer's saved WhatsApp number." }, 400);
   try {
-    if (sender && !(await isCompanyWhatsappRecipientAllowed(profile, sender))) {
+    if (sender && !(await isCompanyWhatsappRecipientAllowed(profile, sender, config.phoneId))) {
       return json({ error: "This customer is outside your assigned business categories." }, 403);
     }
-    const query = createSupabaseAdminClient().from("company_whatsapp_inbox")
+    const db = createSupabaseAdminClient();
+    const query = db.from("company_whatsapp_inbox")
       .select("message_id,sender,received_at,body").eq("phone_number_id", config.phoneId)
       .order("received_at", { ascending: false }).order("message_id", { ascending: false }).limit(50);
     if (sender) query.eq("sender", sender);
     const { data, error } = await query;
-    if (!error) return json({ messages: data });
+    if (!error) {
+      if (!sender || !data?.length) return json({ messages: data ?? [] });
+      const { data: replies, error: replyError } = await db.from("company_whatsapp_price_replies")
+        .select("incoming_message_id,body,accepted_at").eq("phone_number_id", config.phoneId)
+        .in("incoming_message_id", data.map((message) => message.message_id));
+      if (replyError) throw replyError;
+      const byId = new Map((replies ?? []).map((reply) => [reply.incoming_message_id, reply]));
+      return json({ messages: data.map((message) => ({ ...message, auto_reply: byId.get(message.message_id) ?? null })) });
+    }
   } catch {
     // Fail closed when customer visibility or storage cannot be checked.
   }
