@@ -5,7 +5,7 @@ import type { Profile } from "@/lib/auth/session";
 import { getVisibleCustomerIds } from "@/lib/customers/visibility";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { createCloudClient, type CloudConfig } from "./cloud";
-import { canSendCompanyWhatsapp, matchesCustomerPhone, normalizeRecipient } from "./messages";
+import { canSendCompanyWhatsapp, isWhatsappReplyWindowOpen, matchesCustomerPhone, normalizeRecipient } from "./messages";
 
 export async function hasCompanyWhatsappAccess(profile: Profile | null) {
   if (!profile || profile.status !== "active" || profile.archived_at) return false;
@@ -46,6 +46,19 @@ export function whatsappOutboxDirectory(): string | null {
   if (process.env.WHATSAPP_SEND_ENABLED !== "true") return null;
   const outbox = process.env.WHATSAPP_OUTBOX_DIR?.trim();
   return outbox && path.isAbsolute(outbox) ? outbox : null;
+}
+
+export function whatsappReplyOnly() {
+  return process.env.WHATSAPP_SEND_MODE !== "full";
+}
+
+export async function hasOpenWhatsappReplyWindow(phoneId: string, recipient: string) {
+  const { data, error } = await createSupabaseAdminClient().from("company_whatsapp_inbox")
+    .select("received_at").eq("phone_number_id", phoneId).eq("sender", recipient)
+    .lte("received_at", new Date().toISOString())
+    .order("received_at", { ascending: false }).limit(1).maybeSingle();
+  if (error) throw new Error("The WhatsApp reply window could not be checked.");
+  return Boolean(data && isWhatsappReplyWindowOpen(data.received_at));
 }
 
 export { createCloudClient };

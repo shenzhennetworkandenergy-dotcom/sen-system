@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHmac, randomUUID } from "node:crypto";
-import { canSendCompanyWhatsapp, matchesCustomerPhone, normalizeRecipient, parseMessage, supportedTemplates, templatePreview } from "../lib/whatsapp/messages.ts";
+import { canSendCompanyWhatsapp, isWhatsappReplyWindowOpen, matchesCustomerPhone, normalizeRecipient, parseMessage, supportedTemplates, templatePreview } from "../lib/whatsapp/messages.ts";
 import { createCloudClient, WhatsappFailure } from "../lib/whatsapp/cloud.ts";
 import { sendOnce } from "../lib/whatsapp/outbox.ts";
 import { isWhatsappSameOrigin } from "../lib/whatsapp/security.ts";
@@ -92,6 +92,15 @@ test("matches visible customer phone formats and refuses missing or different nu
   assert.equal(matchesCustomerPhone("8801712345678", null), false);
 });
 
+test("inbox replies require an incoming timestamp less than 24 hours old", () => {
+  const now = Date.parse("2026-11-26T12:00:00Z");
+  assert.equal(isWhatsappReplyWindowOpen("2026-11-26T12:00:00Z", now), true);
+  assert.equal(isWhatsappReplyWindowOpen("2026-11-25T12:00:00.001Z", now), true);
+  assert.equal(isWhatsappReplyWindowOpen("2026-11-25T12:00:00Z", now), false);
+  assert.equal(isWhatsappReplyWindowOpen("2026-11-26T12:00:00.001Z", now), false);
+  assert.equal(isWhatsappReplyWindowOpen("invalid", now), false);
+});
+
 test("only approved supported text templates appear; ordered parameters and preview remain correct", () => {
   const result = supportedTemplates([approved, { ...approved, status: "REJECTED" },
     { ...approved, components: [{ type: "HEADER", format: "IMAGE" }] },
@@ -160,6 +169,16 @@ test("reports closed 24-hour window, sanitizes provider errors and never retries
     return Response.json({ error: { code: 131047, message: config.token } }, { status: 400 });
   }) as typeof fetch);
   await assert.rejects(cloud.send(message), (error: WhatsappFailure) => error.code === "window" && !error.message.includes(config.token));
+  assert.equal(requests, 1);
+});
+
+test("reports Meta billing refusals without retrying the reply", async () => {
+  let requests = 0;
+  const cloud = createCloudClient(config, (async () => {
+    requests++;
+    return Response.json({ error: { code: 131042, message: config.token } }, { status: 400 });
+  }) as typeof fetch);
+  await assert.rejects(cloud.send(message), (error: WhatsappFailure) => error.code === "billing" && !error.message.includes(config.token));
   assert.equal(requests, 1);
 });
 

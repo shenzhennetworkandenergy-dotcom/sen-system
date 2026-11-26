@@ -7,6 +7,11 @@ export type WhatsappInboxMessage = {
   body: string;
 };
 
+export function isWhatsappReplyWindowOpen(receivedAt: string, now = Date.now()) {
+  const elapsed = now - Date.parse(receivedAt);
+  return elapsed >= 0 && elapsed < 24 * 60 * 60 * 1000;
+}
+
 export function canSendCompanyWhatsapp(profile: { role: string; status: string; archived_at?: string | null } | null, permissions: ReadonlySet<string> = new Set()) {
   return Boolean(profile && profile.status === "active" && !profile.archived_at && (profile.role === "admin" || (profile.role === "employee" && permissions.has(COMPANY_WHATSAPP_PERMISSION))));
 }
