@@ -7,6 +7,8 @@ import { DashboardShell } from "@/components/dashboard/Shell";
 import { SaleLineEditor } from "@/components/sales/SaleLineEditor";
 import { SalePaymentMethodFields } from "@/components/sales/SalePaymentMethodFields";
 import { requireAnyPermission } from "@/lib/auth/permissions";
+import { WhatsappDocumentButton } from "@/components/whatsapp/WhatsappDocumentButton";
+import { canSendCompanyWhatsapp } from "@/lib/whatsapp/messages";
 import { assertCustomerVisibleToActor } from "@/lib/customers/visibility";
 import { buildSaleSourceQuotationLookup } from "@/lib/quotations/access-policy";
 import { getSaleSourceQuotationLink } from "@/lib/quotations/traceability";
@@ -84,6 +86,7 @@ export default async function SaleDetail({
   } = data;
   const sourceQuotationLink = getSaleSourceQuotationLink(sourceQuotation);
   const invoiceOperationId = randomUUID();
+  const canSendWhatsapp = order.status !== "cancelled" && canSendCompanyWhatsapp(profile, permissions);
   const paymentOperationId = randomUUID();
   const commercialTermsOperationId = randomUUID();
   const customer = order.customer as {
@@ -458,13 +461,16 @@ export default async function SaleDetail({
                 <button className="rounded-lg border px-4 py-2 font-semibold">Generate Delivery Challan</button>
               </form>
               {documents.map((document) => (
+                <div key={document.id} className="flex flex-wrap items-center gap-2">
                 <a
-                  key={document.id}
                   href={`/admin/sales/${saleId}/documents/${document.id}`}
                   className={`rounded-lg border px-4 py-2 font-semibold ${document.status === "superseded" ? "opacity-60" : ""}`}
                 >
                   {document.document_number} · Revision {document.revision_number ?? 1} · {label(document.status)} · Print / PDF
                 </a>
+                {canSendWhatsapp && document.document_type === "invoice" && document.status === "generated"
+                  && <WhatsappDocumentButton document={{ kind: "invoice", id: document.id }} />}
+                </div>
               ))}
               {stockOutRequest ? (
                 <span className="rounded-lg border border-cyan-200 bg-cyan-50 px-4 py-2 text-sm font-semibold text-cyan-950">

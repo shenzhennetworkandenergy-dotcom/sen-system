@@ -30,9 +30,12 @@ export function BasicCustomerFields({
       />
       <input
         name="phone"
+        type="tel"
+        autoComplete="tel"
+        aria-label="Customer phone or WhatsApp number"
         required
-        maxLength={50}
-        placeholder="Phone"
+        maxLength={60}
+        placeholder="WhatsApp / phone, e.g. 017… or +880…"
         className={fieldClassName}
       />
       {addressRows ? (

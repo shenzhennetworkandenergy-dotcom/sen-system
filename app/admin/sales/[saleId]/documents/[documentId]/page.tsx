@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { connection } from "next/server";
 
 import { PrintDocumentButton } from "@/components/sales/PrintDocumentButton";
-import { CompanyWhatsapp, type WhatsappDraft } from "@/components/whatsapp/CompanyWhatsapp";
+import { WhatsappDocumentButton } from "@/components/whatsapp/WhatsappDocumentButton";
 import { requireAnyPermission } from "@/lib/auth/permissions";
 import { calculateDocumentDiscounts } from "@/lib/documents/commercial-totals";
 import { dateTime, label, money } from "@/lib/orders/types";
@@ -123,11 +123,13 @@ function AddressBlock({
 
 export default async function SaleDocumentPage({
   params,
+  sharedCustomerId,
 }: {
   params: Promise<{ saleId: string; documentId: string }>;
+  sharedCustomerId?: string;
 }) {
   await connection();
-  const { profile, permissions } = await requireAnyPermission([
+  const context = sharedCustomerId ? null : await requireAnyPermission([
     "sales.view",
     "sales.view_all",
     "sales.view_own",
@@ -143,6 +145,12 @@ export default async function SaleDocumentPage({
     .eq("order_id", saleId)
     .maybeSingle();
   if (error || !data) notFound();
+  if (sharedCustomerId) {
+    if (data.document_type !== "invoice" || data.status !== "generated") notFound();
+    const { data: sale, error: saleError } = await db.from("sales_orders").select("id")
+      .eq("id", saleId).eq("customer_profile_id", sharedCustomerId).neq("status", "cancelled").maybeSingle();
+    if (saleError || !sale) notFound();
+  }
   const { data: payments, error: paymentsError } = await db
     .from("sale_payments")
     .select("id,amount,payment_date,method,reference_number,created_at")
@@ -167,19 +175,11 @@ export default async function SaleDocumentPage({
     unknown
   >;
   const isInvoice = data.document_type === "invoice";
-  let whatsappDraft: WhatsappDraft | undefined;
-  if (isInvoice && data.status === "generated" && canSendCompanyWhatsapp(profile, permissions)) {
+  let canSendWhatsapp = false;
+  if (context && isInvoice && data.status === "generated" && canSendCompanyWhatsapp(context.profile, context.permissions)) {
     const { data: sale } = await db.from("sales_orders").select("customer_profile_id").eq("id", saleId).maybeSingle();
     if (sale?.customer_profile_id) {
-      const customerVisible = await assertCustomerVisibleToActor(profile, sale.customer_profile_id).then(() => true, () => false);
-      if (customerVisible) {
-        const { data: currentCustomer } = await db.from("profiles").select("phone").eq("id", sale.customer_profile_id).eq("role", "customer").eq("status", "active").is("archived_at", null).maybeSingle();
-        if (currentCustomer) whatsappDraft = {
-          label: "WhatsApp invoice",
-          recipient: currentCustomer.phone,
-          text: `Hello, your SEN invoice ${data.document_number} is ready.\nInvoice total ${money(Number(order.total_amount ?? 0), text(order.currency, "BDT"))}.\nPlease reply if you have any questions.`,
-        };
-      }
+      canSendWhatsapp = await assertCustomerVisibleToActor(context.profile, sale.customer_profile_id).then(() => true, () => false);
     }
   }
   const title = isInvoice ? "SALES INVOICE" : "DELIVERY CHALLAN";
@@ -451,13 +451,13 @@ export default async function SaleDocumentPage({
 
         <div className="mx-auto mt-4 flex max-w-[210mm] flex-wrap gap-3 print:hidden">
           <PrintDocumentButton fileName={downloadName} />
-          {whatsappDraft && <CompanyWhatsapp inline employee={profile.role === "employee"} draft={whatsappDraft} />}
-          <a
+          {canSendWhatsapp && <WhatsappDocumentButton document={{ kind: "invoice", id: documentId }} />}
+          {!sharedCustomerId && <a
             href={`/admin/sales/${saleId}`}
             className="rounded-lg border bg-white px-4 py-2 font-semibold"
           >
             Back to sale
-          </a>
+          </a>}
         </div>
       </div>
     </>

@@ -4,7 +4,7 @@ import { notFound } from "next/navigation";
 import { connection } from "next/server";
 
 import { PrintDocumentButton } from "@/components/sales/PrintDocumentButton";
-import { CompanyWhatsapp } from "@/components/whatsapp/CompanyWhatsapp";
+import { WhatsappDocumentButton } from "@/components/whatsapp/WhatsappDocumentButton";
 import { assertCustomerVisibleToActor } from "@/lib/customers/visibility";
 import { calculateDocumentDiscounts } from "@/lib/documents/commercial-totals";
 import { label, money } from "@/lib/orders/types";
@@ -144,13 +144,14 @@ function DetailRow({
 
 export default async function QuotationDocumentPage({
   params,
+  sharedCustomerId,
 }: {
   params: Promise<{ id: string }>;
+  sharedCustomerId?: string;
 }) {
   await connection();
-  const { profile, permissions, quotationViewScope } =
-    await requireQuotationView();
-  if (!canOpenQuotationDocument(profile.role, permissions)) notFound();
+  const context = sharedCustomerId ? null : await requireQuotationView();
+  if (context && !canOpenQuotationDocument(context.profile.role, context.permissions)) notFound();
   const { id } = await params;
   let quotationQuery = createSupabaseAdminClient()
     .from("quotation_requests")
@@ -158,8 +159,10 @@ export default async function QuotationDocumentPage({
       "id,profile_id,reference,status,subject,message,company_name,customer_tax_identification_number,required_by,expiration_date,created_at,created_by,currency,billing_address_snapshot,shipping_address_snapshot,subtotal,discount_amount,tax_amount,total_amount,terms_and_conditions,payment_terms,delivery_information,customer_notes,profiles!quotation_requests_profile_id_fkey(full_name,email,phone,company_name),quotation_request_items(id,product_name_snapshot,sku_snapshot,quantity,target_price,unit_price,discount_amount,tax_amount,line_subtotal,line_total,currency)",
     )
     .eq("id", id);
-  if (quotationViewScope === "own") {
-    quotationQuery = quotationQuery.eq("created_by", profile.id);
+  if (sharedCustomerId) {
+    quotationQuery = quotationQuery.eq("profile_id", sharedCustomerId).in("status", ["quoted", "accepted"]);
+  } else if (context?.quotationViewScope === "own") {
+    quotationQuery = quotationQuery.eq("created_by", context.profile.id);
   }
   const { data, error } = await quotationQuery.maybeSingle();
 
@@ -234,8 +237,9 @@ export default async function QuotationDocumentPage({
   const validityDate = formatDate(expirationDate);
   const downloadName = `${customerName} - ${text(data.reference)}`;
   const customerNote = text(data.customer_notes ?? data.message);
-  const canPrepareWhatsapp = data.profile_id && ["quoted", "accepted"].includes(data.status) && canSendCompanyWhatsapp(profile, permissions)
-    && await assertCustomerVisibleToActor(profile, data.profile_id).then(() => true, () => false);
+  const canPrepareWhatsapp = context && data.profile_id && ["draft", "quoted", "accepted"].includes(data.status)
+    && canSendCompanyWhatsapp(context.profile, context.permissions)
+    && await assertCustomerVisibleToActor(context.profile, data.profile_id).then(() => true, () => false);
 
   return (
     <>
@@ -523,18 +527,13 @@ export default async function QuotationDocumentPage({
 
         <div className="mx-auto mt-4 flex max-w-[210mm] flex-wrap gap-3 print:hidden">
           <PrintDocumentButton fileName={downloadName} />
-          {canPrepareWhatsapp && <CompanyWhatsapp inline employee={profile.role === "employee"} draft={{
-            label: "WhatsApp quotation",
-            recipient: customer?.phone,
-            customerId: data.profile_id,
-            text: `Hello, your SEN quotation ${data.reference} is available in My Quotations. Sign in at https://sen.com.bd/account/quotations to view the details. Please reply if you have any questions.`,
-          }} />}
-          <Link
+          {canPrepareWhatsapp && <WhatsappDocumentButton document={{ kind: "quotation", id }} issueFirst={data.status === "draft"} />}
+          {!sharedCustomerId && <Link
             href="/admin/quotations"
             className="rounded-lg border bg-white px-4 py-2 font-semibold"
           >
             Back to quotations
-          </Link>
+          </Link>}
         </div>
       </div>
     </>

@@ -3,6 +3,7 @@ import { connection } from "next/server";
 import { DashboardShell } from "@/components/dashboard/Shell";
 import { QuotationBuilder } from "@/components/quotations/QuotationBuilder";
 import { requirePermission } from "@/lib/auth/permissions";
+import { getCustomerClassificationOptions } from "@/lib/customers/classification-server";
 import { getVisibleCustomerIds } from "@/lib/customers/visibility";
 import { defaultQuotationExpiration } from "@/lib/quotations/validity";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -39,6 +40,7 @@ export default async function NewQuotationPage({
     { data: products, error: productError },
     { data: variations, error: variationError },
     selected,
+    customerClassification,
   ] = await Promise.all([
     customerQuery,
     db
@@ -56,6 +58,7 @@ export default async function NewQuotationPage({
       .order("combination_key")
       .limit(2000),
     selectedId ? activeCustomers().eq("id", selectedId).maybeSingle() : null,
+    profile.role === "admin" ? getCustomerClassificationOptions() : null,
   ]);
   const loadError = customerError ?? productError ?? variationError ?? selected?.error;
   const customerOptions = selected?.data
@@ -90,6 +93,7 @@ export default async function NewQuotationPage({
           variations={variations ?? []}
           defaultExpiration={defaultQuotationExpiration()}
           canCreateCustomer={profile.role === "admin"}
+          customerClassification={customerClassification ?? undefined}
         />
       )}
     </DashboardShell>

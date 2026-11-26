@@ -126,3 +126,15 @@ test("quotation document renders company as the billing entity and contact secon
   assert.match(document, /`Contact: \$\{customer\.full_name\}`/);
   assert.match(document, /title="Quotation for"[\s\S]*company=\{contactName\}/);
 });
+
+test("customer creation stores local and international phone numbers with a country code", () => {
+  const fields = { fullName: "Local Test", email: "", addressLine1: "Dhaka" };
+  for (const [phone, expected] of [
+    ["০১৭১১ ০০০০০১", "+8801711000001"],
+    ["8801711000001", "+8801711000001"],
+    ["0086 (177) 2796-8999", "+8617727968999"],
+    ["+1 (202) 555-0133", "+12025550133"],
+  ]) assert.equal(normalizeBasicCustomerInput({ ...fields, phone }).phone, expected);
+  assert.throws(() => normalizeBasicCustomerInput({ ...fields, phone: "17727968999" }), /country code/);
+  assert.throws(() => normalizeBasicCustomerInput({ ...fields, phone: "01711000001 / 01711000002" }), /country code/);
+});

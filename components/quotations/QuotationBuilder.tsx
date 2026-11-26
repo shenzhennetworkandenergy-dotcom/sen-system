@@ -68,6 +68,7 @@ export function QuotationBuilder({
   initialCustomerId,
   initialDraft,
   canCreateCustomer = true,
+  customerClassification,
 }: {
   customers: CustomerSearchOption[];
   products: SalePickerProduct[];
@@ -80,6 +81,10 @@ export function QuotationBuilder({
   initialCustomerId?: string;
   initialDraft?: DraftQuotationValues;
   canCreateCustomer?: boolean;
+  customerClassification?: {
+    categories: readonly { id: string; slug: string; name: string }[];
+    districts: readonly { code: string; name: string }[];
+  };
 }) {
   const [customerId, setCustomerId] = useState(fixedCustomer?.id ?? initialCustomerId ?? "");
   const [customerOptions, setCustomerOptions] =
@@ -220,6 +225,22 @@ export function QuotationBuilder({
           className="mt-4 grid gap-3 lg:grid-cols-5"
         >
           <BasicCustomerFields fieldClassName={field} />
+          {customerClassification && <>
+            <fieldset className="lg:col-span-3">
+              <legend className="text-sm font-semibold">Business Categories (required)</legend>
+              <div className="mt-1 grid gap-2 sm:grid-cols-2">
+                {customerClassification.categories.map((category) => <label key={category.id} className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" name="customer_category_slugs" value={category.slug} />{category.name}
+                </label>)}
+              </div>
+            </fieldset>
+            <label className="text-sm font-semibold lg:col-span-2">District (required)
+              <select name="customer_district_code" required className={field + " mt-1 w-full"}>
+                <option value="">Select district</option>
+                {customerClassification.districts.map((district) => <option key={district.code} value={district.code}>{district.name}</option>)}
+              </select>
+            </label>
+          </>}
           <button
             disabled={customerPending}
             className="rounded-xl bg-[var(--primary)] px-4 py-3 font-bold text-[var(--primary-foreground)] disabled:opacity-50 lg:col-start-5"
@@ -549,7 +570,7 @@ export function QuotationBuilder({
           />
         </label>
       </section>
-      <div className="flex justify-end">
+      <div className={editing ? "flex justify-end pb-[calc(5rem+env(safe-area-inset-bottom))]" : "flex justify-end"}>
         <button
           disabled={!customerId || !payload.length || hasIncompleteRow}
           className="rounded-xl bg-[var(--primary)] px-5 py-3 font-bold text-[var(--primary-foreground)] disabled:cursor-not-allowed disabled:opacity-50"
