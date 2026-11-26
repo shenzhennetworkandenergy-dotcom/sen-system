@@ -2,6 +2,8 @@ import Link from "next/link";
 import { connection } from "next/server";
 
 import { DashboardShell } from "@/components/dashboard/Shell";
+import { WhatsappDocumentButton } from "@/components/whatsapp/WhatsappDocumentButton";
+import { canSendCompanyWhatsapp } from "@/lib/whatsapp/messages";
 import { QuotationStatusBadge } from "@/components/quotations/QuotationStatusBadge";
 import { QuotationCustomerFilter } from "@/components/quotations/QuotationCustomerFilter";
 import type { CustomerSearchOption } from "@/lib/customers/search";
@@ -30,6 +32,7 @@ export default async function AdminQuotationsPage({
     profile.role,
     permissions,
   );
+  const canSendWhatsapp = canOpenDocument && canSendCompanyWhatsapp(profile, permissions);
   const params = await searchParams;
   const filters = quotationListFilters(params);
   let filterError = filters.error;
@@ -152,6 +155,9 @@ export default async function AdminQuotationsPage({
                 <a href={`/admin/quotations/${quotation.id}/manage`} className="inline-flex rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-semibold text-[var(--primary-foreground)]">Manage quotation</a>
                 {canEdit && quotation.status === "draft" ? <a href={`/admin/quotations/${quotation.id}/edit`} className="inline-flex rounded-lg border px-3 py-2 text-sm font-semibold">Edit draft</a> : null}
                 {canOpenDocument ? <a href={`/admin/quotations/${quotation.id}`} className="inline-flex rounded-lg border px-3 py-2 text-sm font-semibold">Print quotation</a> : null}
+                {canSendWhatsapp && ["draft", "quoted", "accepted"].includes(quotation.status) && (
+                  <WhatsappDocumentButton document={{ kind: "quotation", id: quotation.id }} issueFirst={quotation.status === "draft"} />
+                )}
               </div>
               <p className="mt-3">{quotation.message || "No additional notes."}</p>
               <div className="mt-4 grid gap-2">

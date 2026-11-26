@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 
 import { requirePermission } from "@/lib/auth/permissions";
 import { normalizeBasicCustomerInput } from "@/lib/customers/basic";
+import { assertCustomerCategoriesAssignableToActor } from "@/lib/customers/visibility";
 import {
   createBasicCustomerRecord,
   type CreatedBasicCustomer,
@@ -51,7 +52,12 @@ export async function createQuotationCustomerAction(
       phone: form.get("phone"),
       addressLine1: form.get("address_line_1"),
     });
-    const customer = await createBasicCustomerRecord(input);
+    const categorySlugs = form.getAll("customer_category_slugs").map(String);
+    await assertCustomerCategoriesAssignableToActor(profile, categorySlugs);
+    const customer = await createBasicCustomerRecord(input, {
+      categorySlugs,
+      districtCode: String(form.get("customer_district_code") ?? "").trim() || null,
+    });
     await writeAuditLog({
       actorId: profile.id,
       actorRole: profile.role,

@@ -5,6 +5,7 @@ import vm from "node:vm";
 import ts from "typescript";
 import { createClient } from "@supabase/supabase-js";
 import * as filters from "../lib/quotations/list-filters.ts";
+import * as whatsappMessages from "../lib/whatsapp/messages.ts";
 
 const owner = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const other = "aaaaaaaa-aaaa-4aaa-8aaa-bbbbbbbbbbbb";
@@ -62,10 +63,12 @@ async function renderPage(params: Record<string, unknown>, scope = "all", rows: 
     "react/jsx-runtime": { jsx, jsxs: jsx }, "next/link": {}, "next/server": { connection: async () => {} },
     "@/components/dashboard/Shell": {}, "@/components/quotations/QuotationStatusBadge": {},
     "@/components/quotations/QuotationCustomerFilter": {},
+    "@/components/whatsapp/WhatsappDocumentButton": { WhatsappDocumentButton: () => null },
     "@/lib/customers/visibility": { getVisibleCustomerIds: async () => [customer] },
     "@/lib/quotations/access": { requireQuotationView: async () => ({ profile: { id: owner, role: "employee" }, permissions: new Set(["quotations.view_own"]), quotationViewScope: scope }) },
     "@/lib/quotations/access-policy": { canOpenQuotationDocument: () => false },
     "@/lib/quotations/list-filters": filters,
+    "@/lib/whatsapp/messages": whatsappMessages,
     "@/lib/quotations/customer-options": { quotationCustomerOptions: async () => [{ id: customer, full_name: "Demo", email: null, company_name: null }] },
     "@/lib/supabase/admin": { createSupabaseAdminClient: () => ({ from: (table: string) => { calls.push(["from", table]); return query; } }) },
   });
