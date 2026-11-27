@@ -1,8 +1,8 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { usePathname, useSearchParams } from "next/navigation";
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
+import { FormEvent, useEffect, useId, useRef, useState } from "react";
 
 import { replyDelayMs } from "@/lib/chatbot/conversation";
 
@@ -550,35 +550,55 @@ export function FloatingChat({
   authenticated: boolean;
   conversation: FloatingConversation;
 }) {
-  const params = useSearchParams();
   const pathname = usePathname();
-  const [open, setOpen] = useState(params.get("chat") === "open");
+  const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<"assistant" | "support">("assistant");
+  const panelId = useId();
+  const launcher = useRef<HTMLButtonElement>(null);
 
-  useEffect(() => {
-    if (params.get("chat") === "open") {
-      const timer = window.setTimeout(() => setOpen(true), 0);
-      return () => window.clearTimeout(timer);
-    }
-    const openedKey = "sen-product-assistant-opened";
-    if (!sessionStorage.getItem(openedKey)) {
-      sessionStorage.setItem(openedKey, "1");
-      const timer = window.setTimeout(() => setOpen(true), 0);
-      return () => window.clearTimeout(timer);
-    }
-  }, [params]);
+  function closeChat() {
+    setOpen(false);
+    launcher.current?.focus();
+  }
 
   return (
-    <div className="sen-floating-chat">
+    <div
+      className="sen-floating-chat"
+      onKeyDown={(event) => {
+        if (open && event.key === "Escape") {
+          event.stopPropagation();
+          closeChat();
+        }
+      }}
+    >
+      <button
+        ref={launcher}
+        type="button"
+        onClick={() => {
+          if (open) {
+            closeChat();
+            return;
+          }
+          setTab("assistant");
+          setOpen(true);
+        }}
+        aria-expanded={open}
+        aria-controls={open ? panelId : undefined}
+        aria-label={open ? "Close Live Chat" : "Live Chat"}
+        title={open ? "Close Live Chat" : "Live Chat"}
+        className="sen-chat-trigger"
+      >
+        <span aria-hidden="true">{open ? "×" : "💬"}</span>
+      </button>
       {open ? (
-        <section data-testid="product-assistant-window" className="sen-messenger-window" aria-label="SEN Product Assistant" aria-live="polite">
+        <section id={panelId} data-testid="product-assistant-window" className="sen-messenger-window" aria-label="SEN Live Chat" aria-live="polite">
           <header className="sen-messenger-header">
             <div className="sen-messenger-avatar" aria-hidden="true">S</div>
             <div className="min-w-0 flex-1">
               <strong className="block truncate">{tab === "assistant" ? "SEN Product Assistant" : "SEN Customer Care"}</strong>
               <span className="flex items-center gap-1 text-xs text-slate-500"><i className="h-2 w-2 rounded-full bg-emerald-500" /> Bilingual assistance</span>
             </div>
-            <button type="button" onClick={() => setOpen(false)} aria-label="Close chat" className="sen-messenger-icon-button">×</button>
+            <button type="button" onClick={closeChat} aria-label="Close chat" className="sen-messenger-icon-button">×</button>
           </header>
           {authenticated ? (
             <div className="grid grid-cols-2 border-b bg-slate-50 p-1">
@@ -586,12 +606,9 @@ export function FloatingChat({
               <button type="button" onClick={() => setTab("support")} aria-pressed={tab === "support"} className={`rounded-lg px-2 py-2 text-xs font-bold ${tab === "support" ? "bg-white text-blue-700 shadow-sm" : "text-slate-600"}`}>Human Support</button>
             </div>
           ) : null}
-          {tab === "assistant" ? <ProductAssistant closeChat={() => setOpen(false)} /> : <FloatingHumanSupport conversation={conversation} pathname={pathname} />}
+          {tab === "assistant" ? <ProductAssistant closeChat={closeChat} /> : <FloatingHumanSupport conversation={conversation} pathname={pathname} />}
         </section>
       ) : null}
-      <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} aria-label={open ? "Close SEN Product Assistant" : "Open SEN Product Assistant"} className="sen-chat-trigger">
-        <span aria-hidden="true">💬</span><span>{open ? "Close" : "Product Assistant"}</span>
-      </button>
     </div>
   );
 }

@@ -1,14 +1,21 @@
 import Link from "next/link";
-import { redirectAuthenticatedUser } from "@/lib/auth/session";
+import { getCurrentProfile, redirectAuthenticatedUser } from "@/lib/auth/session";
+import { redirect } from "next/navigation";
+import { safeEpsProductResume } from "@/lib/orders/eps-product-checkout";
 import { loginAction } from "./actions";
 
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; message?: string }>;
+  searchParams: Promise<{ error?: string; message?: string; next?: string }>;
 }) {
-  await redirectAuthenticatedUser();
   const params = await searchParams;
+  const next = safeEpsProductResume(params.next);
+  if (next) {
+    const { user, profile } = await getCurrentProfile();
+    if (user && profile?.status === "active" && !profile.archived_at && ["admin", "customer"].includes(profile.role)) redirect(next);
+  }
+  await redirectAuthenticatedUser();
 
   return (
     <main className="mx-auto max-w-md px-6 py-16">
@@ -27,6 +34,7 @@ export default async function LoginPage({
         </div>
       ) : null}
       <form action={loginAction} className="mt-8 grid gap-4">
+        {next ? <input type="hidden" name="next" value={next} /> : null}
         <label className="font-semibold">
           Email
           <input name="email" type="email" autoComplete="email" required className="mt-1 w-full rounded-lg border p-3 font-normal focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200" />

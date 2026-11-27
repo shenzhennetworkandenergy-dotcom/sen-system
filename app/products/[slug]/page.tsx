@@ -1,5 +1,6 @@
 /* eslint-disable @next/next/no-html-link-for-pages */
 import type { Metadata } from "next";
+import { randomUUID } from "node:crypto";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 
@@ -13,6 +14,11 @@ import { getPublicProduct } from "@/lib/catalog/products";
 import { catalogueTheme, categoryStyle } from "@/lib/catalog/themes";
 import { addToCartAction, orderNowAction } from "@/app/cart/actions";
 import { startConversationAction } from "@/app/account/messages/actions";
+import { getCurrentProfile } from "@/lib/auth/session";
+import { readEpsProductSelection } from "@/lib/orders/eps-product-checkout";
+import { availableEpsGateway } from "@/lib/payments/eps-server";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { checkoutProductWithEps } from "./eps-actions";
 import {
   hasPublicPrice,
   publicStockLabel,
@@ -45,15 +51,34 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 }
 
 function money(amount: number | null, currency: string) {
-  return amount === null ? null : new Intl.NumberFormat("en", { style: "currency", currency, maximumFractionDigits: 0 }).format(amount);
+  return amount === null ? null : new Intl.NumberFormat("en", { style: "currency", currency, minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(amount);
 }
 
-export default async function PublicProductDetailPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams:Promise<{success?:string;error?:string}> }) {
+export default async function PublicProductDetailPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   await connection();
   const notice=await searchParams;
   const product = await getPublicProduct((await params).slug);
   if (!product) notFound();
   const price = product.sale_price ?? product.regular_price;
+  const initialSelection = notice.buy === "1" ? readEpsProductSelection(notice.qty, notice.variation ?? null) : null;
+  const hasSellableStock = product.product_type === "variable"
+    ? product.variations.some((variation) => variation.available > 0 && hasPublicPrice(variation.sale_price ?? variation.regular_price))
+    : product.available > 0 && hasPublicPrice(price);
+  let eps = null;
+  if (product.currency === "BDT" && hasSellableStock) {
+    const [gateway, { user, profile }] = await Promise.all([availableEpsGateway(), getCurrentProfile()]);
+    if (gateway && !user) {
+      eps = { operationId: randomUUID(), signedIn: false, testMode: gateway.test_mode, email: "", phone: "", addresses: [] };
+    } else if (gateway && profile?.status === "active" && !profile.archived_at && ["customer", "admin"].includes(profile.role)) {
+      const { data: addresses, error } = await createSupabaseAdminClient().from("customer_addresses")
+        .select("id,recipient_name,phone,address_line_1,address_line_2,city,postal_code,country_code,is_default_shipping")
+        .eq("profile_id", profile.id).order("is_default_shipping", { ascending: false }).order("created_at");
+      if (!error) eps = {
+        operationId: randomUUID(), signedIn: true, testMode: gateway.test_mode, email: profile.email ?? user?.email ?? "",
+        phone: profile.phone ?? "", addresses: addresses ?? [],
+      };
+    }
+  }
   const theme = catalogueTheme(product.businessCategory);
   const specifications = product.specifications && typeof product.specifications === "object" && !Array.isArray(product.specifications)
     ? Object.entries(product.specifications as Record<string, unknown>)
@@ -124,10 +149,14 @@ export default async function PublicProductDetailPage({ params, searchParams }: 
             productSlug={product.slug}
             productType={product.product_type}
             currency={product.currency}
+            price={price}
             available={product.available}
             incoming={product.incoming}
             allowBackorders={product.allow_backorders}
             variations={product.variations}
+            initialSelection={initialSelection}
+            eps={eps}
+            epsAction={checkoutProductWithEps.bind(null, { id: product.id, slug: product.slug })}
             addAction={addToCartAction.bind(null, product.id, product.slug)}
             orderAction={orderNowAction.bind(null, product.id)}
             conversationAction={startConversationAction.bind(null, product.id)}

@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { publicStockLabel } from "@/lib/catalog/product-display";
+import { epsProductTotal, type EpsProductSelection } from "@/lib/orders/eps-product-checkout";
+import { EpsProductOrderForm, epsProductFormId, type EpsProductOrderAction, type EpsProductOrderDetails } from "./EpsProductOrderForm";
 
 type Variation = {
   id: string;
@@ -22,7 +24,8 @@ function money(amount: number | null, currency: string) {
     : new Intl.NumberFormat("en", {
         style: "currency",
         currency,
-        maximumFractionDigits: 0,
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 2,
       }).format(amount);
 }
 
@@ -31,10 +34,14 @@ export function ProductPurchasePanel({
   productSlug,
   productType,
   currency,
+  price,
   available,
   incoming,
   allowBackorders,
   variations,
+  initialSelection,
+  eps,
+  epsAction,
   addAction,
   orderAction,
   conversationAction,
@@ -43,16 +50,22 @@ export function ProductPurchasePanel({
   productSlug: string;
   productType: string;
   currency: string;
+  price: number | null;
   available: number;
   incoming: number;
   allowBackorders: boolean;
   variations: Variation[];
+  initialSelection: EpsProductSelection | null;
+  eps: EpsProductOrderDetails | null;
+  epsAction: EpsProductOrderAction;
   addAction: PurchaseAction;
   orderAction: PurchaseAction;
   conversationAction: PurchaseAction;
 }) {
-  const [variationId, setVariationId] = useState(variations[0]?.id ?? "");
-  const [quantity, setQuantity] = useState(1);
+  const [variationId, setVariationId] = useState(
+    variations.find((variation) => variation.id === initialSelection?.variationId)?.id ?? variations[0]?.id ?? "",
+  );
+  const [quantity, setQuantity] = useState(initialSelection?.quantity ?? 1);
   const selected = useMemo(
     () => variations.find((variation) => variation.id === variationId) ?? null,
     [variationId, variations],
@@ -68,14 +81,18 @@ export function ProductPurchasePanel({
       (selectedAvailable > 0 || allowBackorders),
   );
   const maxQuantity = allowBackorders ? 99 : Math.max(1, Math.floor(selectedAvailable));
+  const reviewedTotal = eps && canOrder && quantity <= selectedAvailable
+    ? epsProductTotal(selected ? selected.sale_price ?? selected.regular_price : price, quantity)
+    : null;
 
   return (
-    <div className="mt-7">
+    <div id="purchase" className="mt-7 scroll-mt-52">
       {productType === "variable" ? (
         <label className="block text-sm font-semibold text-slate-800">
           Select configuration
           <select
-            name="variation_selector"
+            name={reviewedTotal ? "variation_id" : "variation_selector"}
+            form={reviewedTotal ? epsProductFormId : undefined}
             value={variationId}
             onChange={(event) => {
               const nextVariationId = event.target.value;
@@ -117,13 +134,15 @@ export function ProductPurchasePanel({
       ) : null}
 
       {canOrder ? (
-        <div className="mt-5 grid gap-3 sm:grid-cols-[7rem_1fr_1fr]">
+        <div className={reviewedTotal ? "mt-5 grid gap-3 sm:grid-cols-[7rem_1fr]" : "mt-5 grid gap-3 sm:grid-cols-[7rem_1fr_1fr]"}>
           <label className="text-sm font-semibold">
             Quantity
             <input
+              form={reviewedTotal ? epsProductFormId : undefined}
+              name="quantity"
               value={quantity}
               onChange={(event) =>
-                setQuantity(Math.min(maxQuantity, Math.max(1, Number(event.target.value) || 1)))
+                setQuantity(Math.min(maxQuantity, Math.max(1, Math.floor(Number(event.target.value)) || 1)))
               }
               type="number"
               min="1"
@@ -138,13 +157,13 @@ export function ProductPurchasePanel({
               Add to cart
             </button>
           </form>
-          <form action={orderAction} className="self-end">
+          {!reviewedTotal ? <form action={orderAction} className="self-end">
             <input name="quantity" type="hidden" value={quantity} />
             {selected ? <input name="variation_id" type="hidden" value={selected.id} /> : null}
             <button className="sen-button-glow min-h-12 w-full rounded-xl px-5 font-semibold">
               Order now
             </button>
-          </form>
+          </form> : null}
         </div>
       ) : (
         <div className="mt-5 grid gap-3 sm:grid-cols-2">
@@ -166,6 +185,10 @@ export function ProductPurchasePanel({
           </form>
         </div>
       )}
+
+      {eps && reviewedTotal ? (
+        <EpsProductOrderForm details={eps} selection={{ quantity, variationId: selected?.id ?? null }} total={reviewedTotal} action={epsAction} />
+      ) : null}
 
       {productType === "variable" && !variations.length ? (
         <p className="mt-3 rounded-xl bg-amber-50 p-3 text-sm font-semibold text-amber-900">
