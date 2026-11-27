@@ -57,8 +57,10 @@ begin
   perform public.expire_eps_unpaid_orders(admin_id);
   if (select o.status from public.sales_orders o where o.id=abandoned_order)<>'cancelled' then raise exception 'Abandoned checkout did not expire'; end if;
   if (select b.reserved from public.inventory_balances b where b.product_id=eps_payment_gateway.product_id)<>2 then raise exception 'Expired checkout did not release exactly its own stock'; end if;
-  insert into public.shopping_carts(profile_id,currency) values(customer_id,'BDT') returning id into cart_id;
-  insert into public.shopping_cart_items(cart_id,product_id,quantity) values(cart_id,product_id,1);
+  select id into strict cart_id from public.shopping_carts where profile_id=customer_id and status='active';
+  if (select sum(quantity) from public.shopping_cart_items where shopping_cart_items.cart_id=eps_payment_gateway.cart_id
+      and shopping_cart_items.product_id=eps_payment_gateway.product_id) is distinct from 1::numeric
+  then raise exception 'Abandoned checkout items were not restored to the active cart'; end if;
   review_order:=public.customer_checkout_cart_eps(customer_id,address_id,'Changed order payment review test','test@example.test','01700000000',gen_random_uuid(),repeat('d',64),120.50);
   result:=public.begin_eps_payment(review_order,customer_id,'202611230000005');review_attempt:=(result->'attempt'->>'id')::uuid;
   update public.sales_orders set total_amount=120.49 where id=review_order;
