@@ -51,10 +51,26 @@ export async function orderNowAction(productId:string,form:FormData){
   redirect("/cart?success=Review%20your%20order%20and%20confirm%20checkout.");
 }
 export async function updateCartAction(form:FormData){
-  const {profile}=await requireProfile(["customer","admin"]),db=createSupabaseAdminClient(),itemId=uuid(form.get("item_id"));let quantity:number;try{quantity=wholeNumberFromForm(form,"quantity","Quantity",{required:true,minimum:0,maximum:99})!;}catch(error){redirect(`/cart?error=${encodeURIComponent(error instanceof Error?error.message:"Quantity is invalid.")}`);}
-  const {data:cart}=await db.from("shopping_carts").select("id").eq("profile_id",profile.id).eq("status","active").maybeSingle();if(!cart)redirect("/cart");
-  const result=quantity===0?await db.from("shopping_cart_items").delete().eq("id",itemId).eq("cart_id",cart.id):await db.from("shopping_cart_items").update({quantity,updated_at:new Date().toISOString()}).eq("id",itemId).eq("cart_id",cart.id);
-  if(result.error)redirect("/cart?error=Unable%20to%20update%20cart.");revalidatePath("/cart");redirect("/cart?success=Cart%20updated.");
+  const { profile } = await requireProfile(["customer", "admin"]);
+  const db = createSupabaseAdminClient();
+  const itemId = uuid(form.get("item_id"));
+  let quantity: number;
+  try {
+    quantity = form.get("cart_action") === "remove"
+      ? 0
+      : wholeNumberFromForm(form, "quantity", "Quantity", { required: true, minimum: 0, maximum: 99 })!;
+  } catch (error) {
+    redirect(`/cart?error=${encodeURIComponent(error instanceof Error ? error.message : "Quantity is invalid.")}`);
+  }
+  const { data: changed, error } = await db.rpc("update_active_cart_item", {
+    requested_profile_id: profile.id,
+    requested_item_id: itemId,
+    requested_quantity: quantity,
+  });
+  if (error) redirect("/cart?error=Unable%20to%20update%20cart.");
+  revalidatePath("/cart");
+  if (!changed) redirect("/cart?error=This%20item%20is%20no%20longer%20in%20your%20active%20cart.");
+  redirect(quantity === 0 ? "/cart?success=Item%20removed." : "/cart?success=Cart%20updated.");
 }
 export async function checkoutAction(form:FormData){
   const {profile}=await requireProfile(["customer","admin"]),db=await createSupabaseServerClient(),addressId=uuid(form.get("address_id"));

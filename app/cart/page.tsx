@@ -8,8 +8,9 @@ import { CartQuantityForm } from "@/components/cart/CartQuantityForm";
 import { Container } from "@/components/ui/Container";
 import { requireProfile } from "@/lib/auth/session";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { availableEpsGateway, getRecoverableEpsCheckouts } from "@/lib/payments/eps-server";
+import { availableEpsGateway, getRecoverableEpsCheckouts, hasEpsCheckoutExpired } from "@/lib/payments/eps-server";
 import { money } from "@/lib/orders/types";
+import { manageEpsCheckoutAction } from "@/app/account/orders/[id]/pay/actions";
 
 import { checkoutAction, updateCartAction } from "./actions";
 
@@ -108,17 +109,32 @@ export default async function CartPage({
             <section className="mt-5 rounded-2xl border border-blue-200 bg-blue-50 p-5" aria-labelledby="saved-checkouts">
               <h2 id="saved-checkouts" className="font-bold">Saved EPS checkouts</h2>
               <p className="mt-1 text-sm text-slate-700">
-                If EPS did not open or you closed it, check your existing payment before placing the same order again.
+                Continue an existing payment, return the items to your cart to edit them, or remove the saved checkout.
               </p>
               <ul className="mt-3 space-y-2">
-                {savedCheckouts.map(({ order_id, sales_orders }) => (
-                  <li key={order_id} className="flex flex-wrap items-center gap-x-4">
-                    <Link href={`/account/orders/${order_id}/pay`} className="inline-flex min-h-11 items-center font-bold text-blue-800 underline">
-                      {sales_orders.status === "cancelled" ? "Recover cart for" : "View payment for"} {sales_orders.order_number}
-                    </Link>
-                    <span className="text-sm font-semibold">{money(sales_orders.total_amount, sales_orders.currency)}</span>
-                  </li>
-                ))}
+                {savedCheckouts.map(({ order_id, payment_expires_at, sales_orders }) => {
+                  const cancelled = sales_orders.status === "cancelled";
+                  const expired = hasEpsCheckoutExpired(payment_expires_at);
+                  return (
+                    <li key={order_id} className="space-y-2 border-t border-blue-200 py-3">
+                      <div className="flex flex-wrap items-center gap-x-4">
+                        <span className="text-sm font-semibold">{sales_orders.order_number}</span>
+                        <span className="text-sm font-semibold">{money(sales_orders.total_amount, sales_orders.currency)}</span>
+                        {cancelled || expired ? <span className="text-sm text-slate-700">{cancelled ? "Cancelled" : "Checkout window ended"}</span> : null}
+                      </div>
+                      <p className="text-sm text-slate-700">
+                        {sales_orders.sales_order_items.map(item => `${Number(item.quantity)} × ${item.product_name_snapshot}`).join(" · ")}
+                      </p>
+                      <form action={manageEpsCheckoutAction.bind(null, order_id)} className="flex flex-wrap gap-2">
+                        <Link href={`/account/orders/${order_id}/pay`} className="inline-flex min-h-11 items-center rounded-lg bg-blue-800 px-3 py-2 text-sm font-bold text-white">
+                          {cancelled ? "View checkout" : expired ? "Check payment" : "Continue checkout"}
+                        </Link>
+                        <button name="mode" value="edit" className="min-h-11 rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-900">Edit items in cart</button>
+                        <button name="mode" value="remove" className="min-h-11 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-800">Remove saved checkout</button>
+                      </form>
+                    </li>
+                  );
+                })}
               </ul>
             </section>
           ) : null}

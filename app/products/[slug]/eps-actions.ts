@@ -9,7 +9,7 @@ import { checkoutErrorMessage } from "@/lib/orders/checkout-errors";
 import { epsProductResumePath, readEpsProductSelection } from "@/lib/orders/eps-product-checkout";
 import { addressFromForm, uuid } from "@/lib/orders/validation";
 import { bdtAmount } from "@/lib/payments/eps";
-import { availableEpsGateway, startEpsPayment } from "@/lib/payments/eps-server";
+import { availableEpsGateway, findOpenProductEpsCheckout, hasEpsCheckoutExpired, startEpsPayment } from "@/lib/payments/eps-server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export type EpsProductCheckoutState = { error?: string };
@@ -60,7 +60,7 @@ export async function checkoutProductWithEps(
   const fingerprint = createHash("sha256").update(JSON.stringify([
     "product", profile.id, product.id, selection.variationId, selection.quantity, addressId, newAddress, email, phone, expectedTotal,
   ])).digest("hex");
-  const { data: orderId, error } = await createSupabaseAdminClient().rpc("customer_checkout_product_eps", {
+  const { data: newOrderId, error } = await createSupabaseAdminClient().rpc("customer_checkout_product_eps", {
     actor_profile_id: profile.id,
     requested_address_id: addressId,
     requested_email: email,
@@ -73,7 +73,24 @@ export async function checkoutProductWithEps(
     requested_quantity: selection.quantity,
     requested_new_address: newAddress,
   });
-  if (error || !orderId) return { error: checkoutErrorMessage(error) };
+  let orderId = newOrderId;
+  if (error?.code === "P0001" && error.message.startsWith("An EPS payment for this product is already open")) {
+    // The database serializes submissions, so parallel clicks still converge on one order.
+    const existing = await findOpenProductEpsCheckout(profile.id, product.id, selection.variationId);
+    if (!existing) redirect("/account/orders");
+    const payPath = `/account/orders/${existing.order_id}/pay`;
+    if (hasEpsCheckoutExpired(existing.payment_expires_at)) {
+      redirect(`${payPath}?from=powersemi-expired`);
+    }
+    if (existing.fingerprint !== fingerprint ||
+        Number(existing.sales_orders.total_amount) !== Number(expectedTotal) ||
+        Number(existing.sales_orders.matched_items[0]?.quantity) !== selection.quantity) {
+      redirect(`${payPath}?from=powersemi-selection`);
+    }
+    orderId = existing.order_id;
+  } else if (error || !orderId) {
+    return { error: checkoutErrorMessage(error) };
+  }
 
   revalidatePath("/cart");
   revalidatePath("/account/orders");
