@@ -42,7 +42,9 @@ export function resumableEpsUrl(attempt: EpsAttempt | undefined) {
   }
 }
 
-export async function manageUnpaidEpsCheckout(orderId: string, profileId: string, mode: "edit" | "remove") {
+export type EpsCheckoutChange = "edit" | "remove";
+
+export async function manageUnpaidEpsCheckout(orderId: string, profileId: string, mode: EpsCheckoutChange | null) {
   if (!validId(orderId)) return "unavailable";
   const { data, error } = await createSupabaseAdminClient().rpc("manage_unpaid_eps_checkout", {
     requested_order_id: orderId,
@@ -80,7 +82,7 @@ export async function findOpenProductEpsCheckout(profileId: string, productId: s
 export async function getRecoverableEpsCheckouts(profileId: string) {
   const { data } = await createSupabaseAdminClient()
     .from("eps_checkout_requests")
-    .select("order_id,payment_expires_at,sales_orders!inner(order_number,status,total_amount,currency,sales_order_items(product_name_snapshot,quantity))")
+    .select("order_id,payment_expires_at,requested_change,sales_orders!inner(order_number,status,total_amount,currency,sales_order_items(product_name_snapshot,quantity))")
     .eq("profile_id", profileId)
     .is("cart_restored_at", null)
     .is("discarded_at", null)
@@ -91,6 +93,7 @@ export async function getRecoverableEpsCheckouts(profileId: string) {
   return (data ?? []) as unknown as {
     order_id: string;
     payment_expires_at: string;
+    requested_change: EpsCheckoutChange | null;
     sales_orders: {
       order_number: string; status: string; total_amount: number; currency: string;
       sales_order_items: { product_name_snapshot: string; quantity: number }[];
@@ -300,5 +303,8 @@ export async function reconcileEpsAttempt(attemptId: string) {
     .select("*")
     .eq("id", attempt.id)
     .maybeSingle();
+  if (current && ["failed", "cancelled", "paid", "sandbox_paid", "review_required"].includes(current.status)) {
+    await manageUnpaidEpsCheckout(current.order_id, current.profile_id, null);
+  }
   return (current ?? attempt) as EpsAttempt;
 }

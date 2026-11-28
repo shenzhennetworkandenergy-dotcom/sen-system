@@ -88,20 +88,34 @@ begin
   );
   attempt_id := (public.begin_eps_payment(order_id,buyer_id,merchant_id)->'attempt'->>'id')::uuid;
   if public.manage_unpaid_eps_checkout(order_id,admin_id,admin_id,'remove') <> 'unavailable'
-    or public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'remove') <> 'blocked'
-    or public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'edit') <> 'blocked'
-  then raise exception 'Checkout was modified before EPS closed or by the wrong customer'; end if;
+    or public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'remove') <> 'queued'
+    or public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'edit') <> 'queued'
+  then raise exception 'A queued deletion was not accepted or a foreign request was accepted'; end if;
+  if (select requested_change from public.eps_checkout_requests where eps_checkout_requests.order_id=eps_test.order_id) is distinct from 'remove'
+  then raise exception 'A conflicting request replaced the original deletion'; end if;
+  update public.eps_checkout_requests set payment_expires_at=now()-interval '1 hour'
+  where eps_checkout_requests.order_id=eps_test.order_id;
+  perform public.expire_eps_unpaid_orders(admin_id);
   if (select reserved from public.inventory_balances where inventory_balances.product_id=eps_test.product_id) <> 2
   then raise exception 'Stock was released while payment could still complete'; end if;
+  rejected := false;
+  begin
+    perform public.begin_eps_payment(order_id,buyer_id,merchant_id);
+  exception when raise_exception then
+    rejected := sqlerrm like '%checkout is being changed%';
+  end;
+  if not rejected then raise exception 'A queued deletion allowed the customer to reopen EPS'; end if;
 
   perform public.apply_eps_verification(attempt_id,merchant_id,241,'cancelled',null,null,admin_id);
-  if public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'remove') <> 'removed'
-  then raise exception 'The closed checkout could not be removed'; end if;
+  perform public.expire_eps_unpaid_orders(admin_id);
+  if not exists(select 1 from public.eps_checkout_requests where eps_checkout_requests.order_id=eps_test.order_id and discarded_at is not null and requested_change is null)
+  then raise exception 'The closed checkout was not automatically deleted'; end if;
   if public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'remove') <> 'removed'
     or public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'edit') <> 'removed'
   then raise exception 'Checkout removal did not preserve the final state'; end if;
   if (select status from public.sales_orders where id=order_id) <> 'cancelled'
     or (select reserved from public.inventory_balances where inventory_balances.product_id=eps_test.product_id) <> 0
+    or (select available from public.inventory_balances where inventory_balances.product_id=eps_test.product_id) <> 6
     or (select sum(quantity) from public.shopping_cart_items where cart_id=active_cart_id) <> 5
     or not exists(select 1 from public.eps_payment_attempts where id=attempt_id and status='cancelled')
     or not exists(select 1 from public.eps_checkout_requests where eps_checkout_requests.order_id=eps_test.order_id and discarded_at is not null)
@@ -117,8 +131,14 @@ begin
     buyer_id,selected_address_id,'direct@example.test','01712345678',gen_random_uuid(),repeat('e',64),120.50,
     product_id,null,1,null
   );
-  if public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'edit') <> 'restored'
-  then raise exception 'The saved checkout could not be edited'; end if;
+  merchant_id := (merchant_id::bigint + 100000000)::text;
+  attempt_id := (public.begin_eps_payment(order_id,buyer_id,merchant_id)->'attempt'->>'id')::uuid;
+  if public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'edit') <> 'queued'
+    or (select sum(quantity) from public.shopping_cart_items where cart_id=active_cart_id) <> 5
+  then raise exception 'An in-flight checkout edit was not queued correctly'; end if;
+  perform public.apply_eps_verification(attempt_id,merchant_id,120.50,'failed',null,null,admin_id);
+  if public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,null) <> 'restored'
+  then raise exception 'The worker did not return the closed checkout to the active cart'; end if;
   if public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'edit') <> 'restored'
     or public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'remove') <> 'restored'
   then raise exception 'Editing did not preserve the final state'; end if;
@@ -142,8 +162,13 @@ begin
   );
   merchant_id := (merchant_id::bigint + 100000000)::text;
   attempt_id := (public.begin_eps_payment(order_id,buyer_id,merchant_id)->'attempt'->>'id')::uuid;
+  if public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'remove') <> 'queued'
+  then raise exception 'The deletion was not queued before the EPS payment was recorded'; end if;
   perform public.apply_eps_verification(attempt_id,merchant_id,120.50,'success','LOCAL-SAVED-EPS-TEST','test',admin_id);
+  perform public.expire_eps_unpaid_orders(admin_id);
   if (select status from public.eps_payment_attempts where id=attempt_id) <> 'sandbox_paid'
+    or (select reserved from public.inventory_balances where inventory_balances.product_id=eps_test.product_id) <> 1
+    or exists(select 1 from public.eps_checkout_requests where eps_checkout_requests.order_id=eps_test.order_id and (discarded_at is not null or requested_change is not null))
     or public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'edit') <> 'blocked'
     or public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'remove') <> 'blocked'
   then raise exception 'Paid checkout could be changed'; end if;
