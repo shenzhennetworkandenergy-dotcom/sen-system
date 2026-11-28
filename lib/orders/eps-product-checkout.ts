@@ -28,6 +28,7 @@ export function epsProductResumePath(slug: string, selection: EpsProductSelectio
 
 export function safeEpsProductResume(value: unknown) {
   if (typeof value !== "string" || value.length > 512) return null;
+  if (/^\/checkout\/powersemi\?request=[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(value)) return value;
   const match = /^\/products\/([a-z0-9_-]+)\?([^#]+)(?:#purchase)?$/i.exec(value);
   if (!match) return null;
   const query = new URLSearchParams(match[2]);

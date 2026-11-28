@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import type { EpsProductCheckoutState } from "@/app/products/[slug]/eps-actions";
 import { isValidCheckoutPhone } from "@/lib/orders/checkout-contact";
 import type { EpsProductSelection, EpsShippingAddress } from "@/lib/orders/eps-product-checkout";
@@ -22,11 +22,12 @@ export type EpsProductOrderAction = (
 const fieldClass = "mt-1 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-base text-slate-950";
 export const epsProductFormId = "eps-product-checkout";
 
-export function EpsProductOrderForm({ details, selection, total, action }: {
+export function EpsProductOrderForm({ details, selection, total, action, express }: {
   details: EpsProductOrderDetails;
   selection: EpsProductSelection;
   total: string;
   action: EpsProductOrderAction;
+  express?: "auto" | "review";
 }) {
   const [operationId] = useState(details.operationId);
   const usableAddresses = details.addresses.filter((address) => address.city?.trim() && address.postal_code?.trim());
@@ -45,11 +46,18 @@ export function EpsProductOrderForm({ details, selection, total, action }: {
   const hasEmail = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(details.email.trim());
   const needsPhone = ![address?.phone, details.phone].some((value) => value && isValidCheckoutPhone(value));
   const needsDetails = details.signedIn && (!address || !hasEmail || needsPhone);
-  const button = pending ? "Opening EPS…" : needsDetails ? "Continue to EPS" : "Order Now · Pay with EPS";
+  const formRef = useRef<HTMLFormElement>(null);
+  const started = useRef(false);
+  useEffect(() => {
+    if (express !== "auto" || !details.signedIn || needsDetails || started.current || !formRef.current) return;
+    started.current = true;
+    formRef.current.requestSubmit();
+  }, [express, details.signedIn, needsDetails]);
+  const button = pending ? "Opening EPS…" : express || needsDetails ? "Continue to EPS" : "Order Now · Pay with EPS";
   const displayTotal = new Intl.NumberFormat("en-BD", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(total));
 
   return (
-    <form id={epsProductFormId} action={submit} className="mt-3 space-y-4 rounded-2xl border border-slate-300 bg-white p-4 text-slate-900">
+    <form ref={formRef} id={epsProductFormId} action={submit} className="mt-3 space-y-4 rounded-2xl border border-slate-300 bg-white p-4 text-slate-900">
       <input type="hidden" name="operation_id" value={operationId} />
       <input type="hidden" name="expected_total" value={total} />
       <div className="flex flex-wrap items-baseline justify-between gap-2">
