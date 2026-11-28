@@ -12,6 +12,8 @@ declare
   active_cart_id uuid;
   selected_address_id uuid;
   order_id uuid;
+  replacement_order_id uuid;
+  replacement_operation_id uuid := gen_random_uuid();
   saved_item_id uuid;
   active_item_id uuid;
   attempt_id uuid;
@@ -216,9 +218,51 @@ begin
   if public.apply_eps_verification(attempt_id,merchant_id,80,'success','LOCAL-REVIEW-LATE-EPS','test',admin_id) <> 'review_required'
   then raise exception 'Late verified money after closure was not escalated for review'; end if;
 
+  order_id := public.customer_checkout_product_eps(
+    buyer_id,selected_address_id,'direct@example.test','01712345678',gen_random_uuid(),repeat('8',64),40,
+    other_product_id,null,1,null
+  );
+  merchant_id := (merchant_id::bigint + 100000000)::text;
+  attempt_id := (public.begin_eps_payment(order_id,buyer_id,merchant_id)->'attempt'->>'id')::uuid;
+  update public.eps_payment_attempts set test_mode=false where id=attempt_id;
+  perform public.apply_eps_verification(attempt_id,merchant_id,40,'pending',null,null,admin_id);
+  if public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'remove') <> 'queued'
+    or (select checkout.order_id from public.find_blocking_eps_product_checkout(buyer_id,other_product_id,null) checkout)
+      is distinct from order_id
+  then raise exception 'A live payment window stopped blocking duplicate checkout'; end if;
+
+  update public.eps_checkout_requests set payment_expires_at=now()-interval '1 hour'
+  where eps_checkout_requests.order_id=eps_test.order_id;
+  if exists(select 1 from public.find_blocking_eps_product_checkout(buyer_id,other_product_id,null))
+  then raise exception 'An expired checkout queued for removal blocked a new order'; end if;
+  replacement_order_id := public.customer_checkout_product_eps(
+    buyer_id,selected_address_id,'direct@example.test','01712345678',replacement_operation_id,repeat('9',64),120,
+    other_product_id,null,3,null
+  );
+  if replacement_order_id=order_id
+    or (select total_amount from public.sales_orders where id=replacement_order_id) is distinct from 120
+    or (select quantity from public.sales_order_items where sales_order_items.order_id=replacement_order_id) is distinct from 3
+    or (select reserved from public.inventory_balances where inventory_balances.product_id=other_product_id) is distinct from 4
+    or (select checkout.order_id from public.find_blocking_eps_product_checkout(buyer_id,other_product_id,null) checkout)
+      is distinct from replacement_order_id
+  then raise exception 'The new selection did not get a separate checkout with the original reservation intact'; end if;
+  if public.customer_checkout_product_eps(
+    buyer_id,selected_address_id,'direct@example.test','01712345678',replacement_operation_id,repeat('9',64),120,
+    other_product_id,null,3,null
+  ) is distinct from replacement_order_id
+  then raise exception 'Retrying the new checkout created a second order'; end if;
+  if (public.begin_eps_payment(replacement_order_id,buyer_id,(merchant_id::bigint + 100000000)::text)->'attempt'->>'amount')::numeric
+    is distinct from 120
+  then raise exception 'The EPS attempt did not use the new order total'; end if;
+  if public.apply_eps_verification(attempt_id,merchant_id,40,'success','LOCAL-ABANDONED-LATE-EPS','test',admin_id) <> 'review_required'
+    or exists(select 1 from public.sale_payments where sale_payments.order_id=eps_test.order_id)
+    or (select paid_amount from public.sales_orders where id=order_id) is distinct from 0
+  then raise exception 'A late payment for the old order was applied automatically'; end if;
+
   if has_function_privilege('authenticated','public.manage_unpaid_eps_checkout(uuid,uuid,uuid,text)','execute')
     or has_function_privilege('authenticated','public.update_active_cart_item(uuid,uuid,integer)','execute')
     or has_function_privilege('authenticated','public.confirm_closed_eps_checkout(uuid,uuid,text)','execute')
+    or has_function_privilege('authenticated','public.find_blocking_eps_product_checkout(uuid,uuid,uuid)','execute')
   then raise exception 'The saved checkout management RPC is exposed'; end if;
   if has_function_privilege('authenticated','public.customer_checkout_product_eps(uuid,uuid,text,text,uuid,text,numeric,uuid,uuid,integer,jsonb)','execute')
   then raise exception 'The direct checkout RPC is exposed'; end if;

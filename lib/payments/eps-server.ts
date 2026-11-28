@@ -56,26 +56,18 @@ export async function manageUnpaidEpsCheckout(orderId: string, profileId: string
 }
 
 export async function findOpenProductEpsCheckout(profileId: string, productId: string, variationId: string | null) {
-  const db = createSupabaseAdminClient();
-  const query = db.from("eps_checkout_requests")
-    .select("order_id,fingerprint,payment_expires_at,sales_orders!inner(total_amount,matched_items:sales_order_items!inner(quantity))")
-    .eq("profile_id", profileId)
-    .is("cart_restored_at", null)
-    .is("discarded_at", null)
-    .eq("sales_orders.customer_profile_id", profileId)
-    .eq("sales_orders.status", "confirmed")
-    .eq("sales_orders.paid_amount", 0)
-    .eq("sales_orders.matched_items.product_id", productId);
-  const matchingVariant = variationId
-    ? query.eq("sales_orders.matched_items.variation_id", variationId)
-    : query.is("sales_orders.matched_items.variation_id", null);
-  const { data, error } = await matchingVariant.order("created_at", { ascending: false }).limit(1);
+  const { data, error } = await createSupabaseAdminClient().rpc("find_blocking_eps_product_checkout", {
+    requested_profile_id: profileId,
+    requested_product_id: productId,
+    requested_variation_id: variationId,
+  });
   if (error || !data?.[0]) return null;
-  return data[0] as unknown as {
+  return data[0] as {
     order_id: string;
     fingerprint: string;
-    payment_expires_at: string;
-    sales_orders: { total_amount: number; matched_items: { quantity: number }[] };
+    total_amount: number;
+    quantity: number;
+    expired: boolean;
   };
 }
 

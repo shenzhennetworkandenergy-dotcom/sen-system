@@ -9,7 +9,7 @@ import { checkoutErrorMessage } from "@/lib/orders/checkout-errors";
 import { epsProductResumePath, readEpsProductSelection } from "@/lib/orders/eps-product-checkout";
 import { addressFromForm, uuid } from "@/lib/orders/validation";
 import { bdtAmount } from "@/lib/payments/eps";
-import { availableEpsGateway, findOpenProductEpsCheckout, hasEpsCheckoutExpired, startEpsPayment } from "@/lib/payments/eps-server";
+import { availableEpsGateway, findOpenProductEpsCheckout, startEpsPayment } from "@/lib/payments/eps-server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 export type EpsProductCheckoutState = { error?: string };
@@ -79,12 +79,12 @@ export async function checkoutProductWithEps(
     const existing = await findOpenProductEpsCheckout(profile.id, product.id, selection.variationId);
     if (!existing) redirect("/account/orders");
     const payPath = `/account/orders/${existing.order_id}/pay`;
-    if (hasEpsCheckoutExpired(existing.payment_expires_at)) {
+    if (existing.expired) {
       redirect(`${payPath}?from=powersemi-expired`);
     }
     if (existing.fingerprint !== fingerprint ||
-        Number(existing.sales_orders.total_amount) !== Number(expectedTotal) ||
-        Number(existing.sales_orders.matched_items[0]?.quantity) !== selection.quantity) {
+        Number(existing.total_amount) !== Number(expectedTotal) ||
+        Number(existing.quantity) !== selection.quantity) {
       redirect(`${payPath}?from=powersemi-selection`);
     }
     orderId = existing.order_id;
