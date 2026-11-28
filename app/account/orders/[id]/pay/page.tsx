@@ -3,6 +3,7 @@ import { connection } from "next/server";
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { CustomerPaymentShell } from "@/components/payments/CustomerPaymentShell";
+import { SavedCheckoutActions } from "@/components/cart/SavedCheckoutActions";
 import { requireProfile } from "@/lib/auth/session";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import {
@@ -47,7 +48,7 @@ export default async function PayPage({
     getOrderEpsAttempts(id, profile.id),
     db
       .from("eps_checkout_requests")
-      .select("order_id,cart_restored_at,discarded_at,payment_expires_at")
+      .select("order_id,cart_restored_at,discarded_at,payment_expires_at,requested_change")
       .eq("order_id", id)
       .eq("profile_id", profile.id)
       .maybeSingle(),
@@ -86,10 +87,13 @@ export default async function PayPage({
   const expired = Boolean(onlineOrder && hasEpsCheckoutExpired(onlineOrder.payment_expires_at));
   const canManage = onlineOrder && !onlineOrder.discarded_at && Number(order.paid_amount ?? 0) === 0 && !hasEpsReceipt &&
     ["confirmed", "cancelled"].includes(order.status) && latest?.status !== "review_required";
-  const canOpenEps = eps && canManage &&
+  const requestedChange = canManage ? onlineOrder.requested_change : null;
+  const canOpenEps = eps && canManage && !requestedChange &&
     order.status === "confirmed" && !expired && latest?.test_mode === eps.test_mode && resumeUrl;
-  const canPrepareEps = eps && onlineOrder && !paid && !sandboxPaid && !expired && (!latest || terminal) &&
+  const canPrepareEps = eps && onlineOrder && !requestedChange && !paid && !sandboxPaid && !expired && (!latest || terminal) &&
     order.status === "confirmed";
+  const pendingChangeTitle = requestedChange === "remove" ? "Checkout deletion requested"
+    : requestedChange === "edit" ? "Cart edit requested" : null;
   return (
     <CustomerPaymentShell
       title={`Payment · ${order.order_number}`}
@@ -136,7 +140,7 @@ export default async function PayPage({
                 ? "Sandbox payment completed"
                 : latest?.status === "review_required"
                   ? "Payment requires SEN review"
-                  : order.status === "cancelled"
+                  : pendingChangeTitle ?? (order.status === "cancelled"
                     ? onlineOrder?.discarded_at ? "Saved checkout removed" : "Order cancelled"
                     : expired
                       ? "Checkout window ended"
@@ -144,7 +148,7 @@ export default async function PayPage({
                       ? "Payment did not complete"
                       : unresolved
                       ? "Payment awaiting confirmation"
-                      : "Ready for payment"}
+                      : "Ready for payment")}
           </h2>
           <p className="mt-2 text-sm">
             {paid
@@ -153,14 +157,18 @@ export default async function PayPage({
                 ? "The test payment succeeded. No real money was collected and the order has not been marked paid."
                 : latest?.status === "review_required"
                   ? "Please contact SEN with your order number. Do not make another payment."
-                  : order.status === "cancelled"
+                  : requestedChange
+                    ? requestedChange === "remove"
+                      ? "SEN will remove this checkout and release its reserved stock once EPS confirms it closed without payment."
+                      : "SEN will return the items to your cart and release their reserved stock once EPS confirms the checkout closed without payment."
+                    : order.status === "cancelled"
                     ? onlineOrder?.discarded_at
                       ? "You can view this order in your history."
                       : onlineOrder?.cart_restored_at
                       ? "Your items were returned to your cart."
-                      : "Edit the items in your cart or remove this saved checkout once EPS confirms the payment is closed."
+                      : "Edit the items in your cart or delete this saved checkout."
                     : expired
-                      ? "Check this payment’s status. If no payment went through, return these items to your cart to start a new checkout."
+                      ? "Edit or delete this checkout below. SEN will check its payment status."
                       : terminal
                       ? "Retry with the same order, or return the items to your cart to start over."
                       : canOpenEps
@@ -188,21 +196,18 @@ export default async function PayPage({
             </button>
           </form>
         ) : null}
-        {canManage ? (
+        {requestedChange && resumeUrl ? (
+          <p className="mt-4 text-sm">
+            If you have not paid and EPS is still open, <a href={resumeUrl} rel="noreferrer" className="font-bold underline">open EPS and cancel the payment</a>.
+          </p>
+        ) : null}
+        {canManage && !requestedChange ? (
           onlineOrder.cart_restored_at ? (
             <Link href="/cart" className="mt-3 block rounded-xl border px-5 py-3 text-center font-bold">Go to cart</Link>
           ) : (
-            <div className="mt-4">
-              <form action={manageEpsCheckoutAction.bind(null, id)} className="flex flex-wrap gap-3">
-                <button name="mode" value="edit" className="min-h-11 rounded-xl border px-4 py-2 font-bold">Edit items in cart</button>
-                <button name="mode" value="remove" className="min-h-11 rounded-xl border border-red-200 px-4 py-2 font-bold text-red-800">Remove saved checkout</button>
-              </form>
-              {unresolved ? (
-                <p className="mt-2 text-sm text-[var(--muted-text)]">
-                  To change an unpaid checkout, cancel the open payment on EPS first.
-                </p>
-              ) : null}
-            </div>
+            <form action={manageEpsCheckoutAction.bind(null, id)} className="mt-4 flex flex-wrap gap-3">
+              <SavedCheckoutActions orderNumber={order.order_number} />
+            </form>
           )
         ) : null}
         {attempts.length && !paid && !sandboxPaid ? (

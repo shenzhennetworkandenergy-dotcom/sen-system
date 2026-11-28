@@ -136,9 +136,18 @@ export async function checkEpsPaymentAction(orderId: string) {
   const {profile}=await requireProfile(["customer","admin"]);
   const attempts=await getOrderEpsAttempts(orderId,profile.id);
   for(const attempt of attempts.slice(0,3)) await reconcileEpsAttempt(attempt.id);
+  const result = await manageUnpaidEpsCheckout(orderId, profile.id, null);
+  revalidatePath("/cart");
+  revalidatePath("/account/orders");
   revalidatePath(`/account/orders/${orderId}`);
   revalidatePath(`/account/orders/${orderId}/pay`);
+  returnToCartAfterCheckoutChange(result);
   redirect(`/account/orders/${orderId}/pay`);
+}
+
+function returnToCartAfterCheckoutChange(result: unknown) {
+  if (result === "restored") redirect("/cart?success=Your%20items%20were%20returned%20to%20your%20cart.");
+  if (result === "removed") redirect("/cart?success=Pending%20checkout%20deleted.%20Any%20reserved%20stock%20was%20released.");
 }
 
 export async function manageEpsCheckoutAction(orderId: string, form: FormData) {
@@ -148,22 +157,25 @@ export async function manageEpsCheckoutAction(orderId: string, form: FormData) {
       (mode !== "edit" && mode !== "remove")) {
     redirect("/cart?error=Saved%20checkout%20unavailable.");
   }
-  const attempts = await getOrderEpsAttempts(orderId, profile.id);
-  for (const attempt of attempts) {
-    if (["initializing", "ready", "unknown", "pending"].includes(attempt.status)) {
-      await reconcileEpsAttempt(attempt.id);
+  // Save the customer's choice before calling EPS. A delayed verification can finish it later.
+  let result = await manageUnpaidEpsCheckout(orderId, profile.id, mode);
+  if (result === "queued") {
+    const attempts = await getOrderEpsAttempts(orderId, profile.id);
+    for (const attempt of attempts) {
+      if (["initializing", "ready", "unknown", "pending"].includes(attempt.status)) {
+        await reconcileEpsAttempt(attempt.id);
+      }
     }
+    result = await manageUnpaidEpsCheckout(orderId, profile.id, null);
   }
-  // The database locks and rechecks the owned order before changing anything.
-  const result = await manageUnpaidEpsCheckout(orderId, profile.id, mode);
   revalidatePath("/cart");
   revalidatePath("/account/orders");
   revalidatePath(`/account/orders/${orderId}`);
   revalidatePath(`/account/orders/${orderId}/pay`);
-  if (result === "restored") redirect("/cart?success=Your%20items%20were%20returned%20to%20your%20cart.");
-  if (result === "removed") redirect("/cart?success=Saved%20checkout%20removed.");
+  returnToCartAfterCheckoutChange(result);
+  if (result === "queued") redirect(`/account/orders/${orderId}/pay`);
   const message = result === "blocked"
-    ? "This checkout can be changed once EPS confirms it is unpaid and closed. If EPS is still open and you have not paid, cancel there, then try again."
+    ? "This checkout can no longer be changed. Check the payment or order status below."
     : "Unable to update this checkout. Contact SEN with your order number.";
   redirect(`/account/orders/${orderId}/pay?error=${encodeURIComponent(message)}`);
 }
