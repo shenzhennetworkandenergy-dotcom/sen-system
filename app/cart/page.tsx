@@ -38,7 +38,7 @@ type CartVariation = {
 export default async function CartPage({
   searchParams,
 }: {
-  searchParams: Promise<{ success?: string; error?: string }>;
+  searchParams: Promise<{ success?: string; error?: string; checkout?: string }>;
 }) {
   await connection();
   const { profile } = await requireProfile(["customer", "admin"]);
@@ -95,7 +95,16 @@ export default async function CartPage({
       <PublicHeader />
       <main className="min-h-[70vh] bg-slate-50 py-12 text-slate-950">
         <Container>
-          <h1 className="text-4xl font-bold text-slate-950">Your cart</h1>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h1 className="text-4xl font-bold text-slate-950">Your cart</h1>
+            <Link href="/account/orders#checkout-requests" className="text-sm font-bold text-blue-800">My Orders</Link>
+          </div>
+          {notice.checkout === "removed-pending-review" ? (
+            <p role="status" className="mt-4 rounded-xl bg-blue-50 p-4 text-blue-950">
+              Checkout removed from your cart. SEN is checking the EPS payment.{" "}
+              <Link href="/account/orders#checkout-requests" className="font-bold underline">Track the request in My Orders</Link>
+            </p>
+          ) : null}
           {notice.success ? (
             <p className="mt-4 rounded-xl bg-emerald-50 p-4 text-emerald-900">
               {notice.success}
@@ -113,8 +122,7 @@ export default async function CartPage({
                 {savedCheckouts.map(({ order_id, payment_expires_at, requested_change, sales_orders }) => {
                   const cancelled = sales_orders.status === "cancelled";
                   const expired = hasEpsCheckoutExpired(payment_expires_at);
-                  const status = requested_change === "remove" ? "Deletion requested"
-                    : requested_change === "edit" ? "Edit requested"
+                  const status = requested_change === "edit" ? "Edit requested"
                     : cancelled ? "Cancelled" : expired ? "Checkout window ended" : null;
                   return (
                     <li key={order_id} className="space-y-2 border-t border-blue-200 py-3">
