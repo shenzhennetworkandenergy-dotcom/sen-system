@@ -8,11 +8,12 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import {
   availableEpsGateway,
   getOrderEpsAttempts,
+  hasEpsCheckoutExpired,
   resumableEpsUrl,
 } from "@/lib/payments/eps-server";
 import { money, dateTime } from "@/lib/orders/types";
 import { getPaymentOrigin } from "@/lib/payments/eps-config";
-import { beginPaymentAction, checkEpsPaymentAction, recoverEpsCartAction } from "./actions";
+import { beginPaymentAction, checkEpsPaymentAction, manageEpsCheckoutAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 export default async function PayPage({
@@ -20,7 +21,7 @@ export default async function PayPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; from?: string }>;
 }) {
   await connection();
   const { profile } = await requireProfile(["customer", "admin"]);
@@ -37,7 +38,7 @@ export default async function PayPage({
     db
       .from("sales_orders")
       .select(
-        "id,order_number,total_amount,paid_amount,currency,status,payment_status",
+        "id,order_number,total_amount,paid_amount,currency,status,payment_status,sales_order_items(id,product_name_snapshot,quantity)",
       )
       .eq("id", id)
       .eq("customer_profile_id", profile.id)
@@ -46,7 +47,7 @@ export default async function PayPage({
     getOrderEpsAttempts(id, profile.id),
     db
       .from("eps_checkout_requests")
-      .select("order_id,cart_restored_at")
+      .select("order_id,cart_restored_at,discarded_at,payment_expires_at")
       .eq("order_id", id)
       .eq("profile_id", profile.id)
       .maybeSingle(),
@@ -82,23 +83,27 @@ export default async function PayPage({
   );
   const paid = due <= 0;
   const terminal = latest && ["failed", "cancelled"].includes(latest.status);
-  const canRecover = onlineOrder && !paid && !sandboxPaid &&
+  const expired = Boolean(onlineOrder && hasEpsCheckoutExpired(onlineOrder.payment_expires_at));
+  const canManage = onlineOrder && !onlineOrder.discarded_at && Number(order.paid_amount ?? 0) === 0 && !hasEpsReceipt &&
     ["confirmed", "cancelled"].includes(order.status) && latest?.status !== "review_required";
-  const canOpenEps = eps && onlineOrder && !paid && !sandboxPaid &&
-    order.status === "confirmed" && latest?.test_mode === eps.test_mode && resumeUrl;
-  const canPrepareEps = eps && onlineOrder && !paid && !latest &&
+  const canOpenEps = eps && canManage &&
+    order.status === "confirmed" && !expired && latest?.test_mode === eps.test_mode && resumeUrl;
+  const canPrepareEps = eps && onlineOrder && !paid && !sandboxPaid && !expired && (!latest || terminal) &&
     order.status === "confirmed";
   return (
     <CustomerPaymentShell
       title={`Payment · ${order.order_number}`}
       subtitle="Secure checkout and payment confirmation for your order."
     >
-      <Link
-        href={`/account/orders/${id}`}
-        className="font-bold text-[var(--primary)]"
-      >
-        ← Back to order
-      </Link>
+      <nav aria-label="Checkout navigation" className="flex flex-wrap gap-4 font-bold text-[var(--primary)]">
+        <Link href={`/account/orders/${id}`}>← Back to order</Link>
+        {onlineOrder ? <Link href="/cart">Go to cart</Link> : null}
+      </nav>
+      {onlineOrder && notice.from === "powersemi-selection" ? (
+        <p role="status" className="mt-4 rounded-xl bg-amber-50 p-4 text-amber-950">
+          You already have an EPS checkout for this product. It has different order details. Review the saved items and amount below before paying.
+        </p>
+      ) : null}
       {notice.error ? (
         <p
           role="alert"
@@ -114,6 +119,13 @@ export default async function PayPage({
         <p className="mt-1 text-3xl font-bold">
           {money(paid ? order.paid_amount : due, order.currency)}
         </p>
+        {onlineOrder && order.sales_order_items.length ? (
+          <ul className="mt-3 space-y-1 text-sm">
+            {order.sales_order_items.map((item) => (
+              <li key={item.id}>{Number(item.quantity)} × {item.product_name_snapshot}</li>
+            ))}
+          </ul>
+        ) : null}
         <div
           className={`mt-5 rounded-xl border p-4 ${paid ? "border-emerald-200 bg-emerald-50 text-emerald-950" : "bg-[var(--muted-surface)]"}`}
         >
@@ -125,8 +137,10 @@ export default async function PayPage({
                 : latest?.status === "review_required"
                   ? "Payment requires SEN review"
                   : order.status === "cancelled"
-                    ? "Order cancelled"
-                    : terminal
+                    ? onlineOrder?.discarded_at ? "Saved checkout removed" : "Order cancelled"
+                    : expired
+                      ? "Checkout window ended"
+                      : terminal
                       ? "Payment did not complete"
                       : unresolved
                       ? "Payment awaiting confirmation"
@@ -140,11 +154,15 @@ export default async function PayPage({
                 : latest?.status === "review_required"
                   ? "Please contact SEN with your order number. Do not make another payment."
                   : order.status === "cancelled"
-                    ? onlineOrder?.cart_restored_at
+                    ? onlineOrder?.discarded_at
+                      ? "You can view this order in your history."
+                      : onlineOrder?.cart_restored_at
                       ? "Your items were returned to your cart."
-                      : "If no payment was collected, you can recover the items from this order."
-                    : terminal
-                      ? "Return the items to your cart to start over or choose another payment method."
+                      : "Edit the items in your cart or remove this saved checkout once EPS confirms the payment is closed."
+                    : expired
+                      ? "Check this payment’s status. If no payment went through, return these items to your cart to start a new checkout."
+                      : terminal
+                      ? "Retry with the same order, or return the items to your cart to start over."
                       : canOpenEps
                         ? "Open the secure EPS page to pay. If it stalls or you already tried to pay, come back here to check the same payment."
                       : unresolved
@@ -156,7 +174,7 @@ export default async function PayPage({
         </div>
         {canOpenEps ? (
           <a href={resumeUrl} rel="noreferrer" className="mt-5 block rounded-xl bg-[var(--primary)] px-5 py-3 text-center font-bold text-[var(--primary-foreground)]">
-            Open EPS checkout{eps.test_mode ? " · Sandbox" : ""}
+            Continue to EPS{eps.test_mode ? " · Sandbox" : ""}
           </a>
         ) : null}
         {canPrepareEps ? (
@@ -165,20 +183,26 @@ export default async function PayPage({
             <button
               className="w-full rounded-xl bg-[var(--primary)] px-5 py-3 font-bold text-[var(--primary-foreground)]"
             >
-              Prepare EPS checkout
+              {terminal ? "Retry EPS checkout" : "Prepare EPS checkout"}
               {eps.test_mode ? " · Sandbox" : ""}
             </button>
           </form>
         ) : null}
-        {canRecover ? (
+        {canManage ? (
           onlineOrder.cart_restored_at ? (
             <Link href="/cart" className="mt-3 block rounded-xl border px-5 py-3 text-center font-bold">Go to cart</Link>
           ) : (
-            <form action={recoverEpsCartAction.bind(null, id)} className="mt-3">
-              <button className="w-full rounded-xl border px-5 py-3 font-bold">
-                {unresolved ? "Check payment and recover cart" : "Return items to cart"}
-              </button>
-            </form>
+            <div className="mt-4">
+              <form action={manageEpsCheckoutAction.bind(null, id)} className="flex flex-wrap gap-3">
+                <button name="mode" value="edit" className="min-h-11 rounded-xl border px-4 py-2 font-bold">Edit items in cart</button>
+                <button name="mode" value="remove" className="min-h-11 rounded-xl border border-red-200 px-4 py-2 font-bold text-red-800">Remove saved checkout</button>
+              </form>
+              {unresolved ? (
+                <p className="mt-2 text-sm text-[var(--muted-text)]">
+                  To change an unpaid checkout, cancel the open payment on EPS first.
+                </p>
+              ) : null}
+            </div>
           )
         ) : null}
         {attempts.length && !paid && !sandboxPaid ? (

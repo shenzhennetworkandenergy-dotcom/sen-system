@@ -28,6 +28,11 @@ export type EpsAttempt = {
 const validId = (value: string) =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 
+export function hasEpsCheckoutExpired(expiresAt: string) {
+  const end = Date.parse(expiresAt);
+  return !Number.isFinite(end) || end <= Date.now();
+}
+
 export function resumableEpsUrl(attempt: EpsAttempt | undefined) {
   if (!attempt?.checkout_url || !["ready", "pending"].includes(attempt.status)) return null;
   try {
@@ -37,29 +42,59 @@ export function resumableEpsUrl(attempt: EpsAttempt | undefined) {
   }
 }
 
-export async function restoreUnpaidEpsCart(orderId: string, profileId: string) {
+export async function manageUnpaidEpsCheckout(orderId: string, profileId: string, mode: "edit" | "remove") {
   if (!validId(orderId)) return "unavailable";
-  const { data, error } = await createSupabaseAdminClient().rpc("restore_unpaid_eps_cart", {
+  const { data, error } = await createSupabaseAdminClient().rpc("manage_unpaid_eps_checkout", {
     requested_order_id: orderId,
     requested_profile_id: profileId,
     requested_admin_id: process.env.EPS_RECEIVING_ADMIN_ID || null,
+    requested_mode: mode,
   });
   return error ? "unavailable" : data;
+}
+
+export async function findOpenProductEpsCheckout(profileId: string, productId: string, variationId: string | null) {
+  const db = createSupabaseAdminClient();
+  const query = db.from("eps_checkout_requests")
+    .select("order_id,fingerprint,payment_expires_at,sales_orders!inner(total_amount,matched_items:sales_order_items!inner(quantity))")
+    .eq("profile_id", profileId)
+    .is("cart_restored_at", null)
+    .is("discarded_at", null)
+    .eq("sales_orders.customer_profile_id", profileId)
+    .eq("sales_orders.status", "confirmed")
+    .eq("sales_orders.paid_amount", 0)
+    .eq("sales_orders.matched_items.product_id", productId);
+  const matchingVariant = variationId
+    ? query.eq("sales_orders.matched_items.variation_id", variationId)
+    : query.is("sales_orders.matched_items.variation_id", null);
+  const { data, error } = await matchingVariant.order("created_at", { ascending: false }).limit(1);
+  if (error || !data?.[0]) return null;
+  return data[0] as unknown as {
+    order_id: string;
+    fingerprint: string;
+    payment_expires_at: string;
+    sales_orders: { total_amount: number; matched_items: { quantity: number }[] };
+  };
 }
 
 export async function getRecoverableEpsCheckouts(profileId: string) {
   const { data } = await createSupabaseAdminClient()
     .from("eps_checkout_requests")
-    .select("order_id,sales_orders!inner(order_number,status,total_amount,currency)")
+    .select("order_id,payment_expires_at,sales_orders!inner(order_number,status,total_amount,currency,sales_order_items(product_name_snapshot,quantity))")
     .eq("profile_id", profileId)
     .is("cart_restored_at", null)
+    .is("discarded_at", null)
     .eq("sales_orders.paid_amount", 0)
     .in("sales_orders.status", ["confirmed", "cancelled"])
     .order("created_at", { ascending: false })
     .limit(5);
   return (data ?? []) as unknown as {
     order_id: string;
-    sales_orders: { order_number: string; status: string; total_amount: number; currency: string };
+    payment_expires_at: string;
+    sales_orders: {
+      order_number: string; status: string; total_amount: number; currency: string;
+      sales_order_items: { product_name_snapshot: string; quantity: number }[];
+    };
   }[];
 }
 
@@ -125,6 +160,7 @@ export async function startEpsPayment(orderId: string, customerId: string) {
   });
   if (error || !result?.attempt) throw new EpsError("rejected");
   const attempt = result.attempt as EpsAttempt;
+  if (attempt.test_mode !== gateway.test_mode) throw new EpsError("configuration");
   if (!result.created) {
     if (["ready", "pending"].includes(attempt.status) && attempt.checkout_url)
       return epsCheckoutUrl(

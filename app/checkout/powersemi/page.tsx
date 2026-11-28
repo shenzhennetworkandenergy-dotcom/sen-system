@@ -7,7 +7,7 @@ import { getPublicProduct } from "@/lib/catalog/products";
 import { epsProductTotal } from "@/lib/orders/eps-product-checkout";
 import { checkoutIntentSecret, openPowerSemiIntent, powerSemiCookieName, powerSemiResumePath } from "@/lib/orders/powersemi-checkout";
 import { getPaymentOrigin } from "@/lib/payments/eps-config";
-import { availableEpsGateway } from "@/lib/payments/eps-server";
+import { availableEpsGateway, findOpenProductEpsCheckout } from "@/lib/payments/eps-server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
 async function readIntent(id: string | undefined) {
@@ -59,7 +59,11 @@ export default async function PowerSemiCheckout({searchParams}: {searchParams: P
   ]);
   const currentTotal = product && epsProductTotal(product.sale_price ?? product.regular_price, intent.quantity);
   if (!product || product.businessCategory.slug !== "semiconductors" || product.currency !== "BDT" ||
-      product.product_type !== "simple" || !currentTotal || product.available < intent.quantity) {
+      product.product_type !== "simple" || !currentTotal) {
+    return <Message>The selected quantity is no longer available at SEN. Check the product on PowerSemi and try again.</Message>;
+  }
+  if (product.available < intent.quantity &&
+      !(await findOpenProductEpsCheckout(profile.id, product.id, null))) {
     return <Message>The selected quantity is no longer available at SEN. Check the product on PowerSemi and try again.</Message>;
   }
   if (!gateway || error) return <Message>EPS checkout is temporarily unavailable. Try again from PowerSemi.</Message>;

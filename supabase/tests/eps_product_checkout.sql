@@ -12,6 +12,10 @@ declare
   active_cart_id uuid;
   selected_address_id uuid;
   order_id uuid;
+  saved_item_id uuid;
+  active_item_id uuid;
+  attempt_id uuid;
+  merchant_id text := (900000000000000000 + floor(random()*100000000)::bigint)::text;
   operation_id uuid := gen_random_uuid();
   address_count integer;
   rejected boolean;
@@ -77,8 +81,77 @@ begin
   if (select reserved from public.inventory_balances where inventory_balances.product_id=eps_test.product_id) <> 0
     or (select sum(quantity) from public.shopping_cart_items where cart_id=active_cart_id) <> 5
   then raise exception 'Recovery did not release stock and restore the direct order to the cart'; end if;
+
+  order_id := public.customer_checkout_product_eps(
+    buyer_id,selected_address_id,'direct@example.test','01712345678',gen_random_uuid(),repeat('d',64),241,
+    product_id,null,2,null
+  );
+  attempt_id := (public.begin_eps_payment(order_id,buyer_id,merchant_id)->'attempt'->>'id')::uuid;
+  if public.manage_unpaid_eps_checkout(order_id,admin_id,admin_id,'remove') <> 'unavailable'
+    or public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'remove') <> 'blocked'
+    or public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'edit') <> 'blocked'
+  then raise exception 'Checkout was modified before EPS closed or by the wrong customer'; end if;
+  if (select reserved from public.inventory_balances where inventory_balances.product_id=eps_test.product_id) <> 2
+  then raise exception 'Stock was released while payment could still complete'; end if;
+
+  perform public.apply_eps_verification(attempt_id,merchant_id,241,'cancelled',null,null,admin_id);
+  if public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'remove') <> 'removed'
+  then raise exception 'The closed checkout could not be removed'; end if;
+  if public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'remove') <> 'removed'
+    or public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'edit') <> 'removed'
+  then raise exception 'Checkout removal did not preserve the final state'; end if;
+  if (select status from public.sales_orders where id=order_id) <> 'cancelled'
+    or (select reserved from public.inventory_balances where inventory_balances.product_id=eps_test.product_id) <> 0
+    or (select sum(quantity) from public.shopping_cart_items where cart_id=active_cart_id) <> 5
+    or not exists(select 1 from public.eps_payment_attempts where id=attempt_id and status='cancelled')
+    or not exists(select 1 from public.eps_checkout_requests where eps_checkout_requests.order_id=eps_test.order_id and discarded_at is not null)
+  then raise exception 'Removal lost history, retained stock, or changed the active cart'; end if;
+  select i.id into strict saved_item_id
+  from public.eps_checkout_requests c join public.shopping_cart_items i on i.cart_id=c.cart_id
+  where c.order_id=eps_test.order_id;
+  if public.update_active_cart_item(buyer_id,saved_item_id,0)
+    or public.update_active_cart_item(buyer_id,saved_item_id,4)
+  then raise exception 'A cart edit changed a converted checkout'; end if;
+
+  order_id := public.customer_checkout_product_eps(
+    buyer_id,selected_address_id,'direct@example.test','01712345678',gen_random_uuid(),repeat('e',64),120.50,
+    product_id,null,1,null
+  );
+  if public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'edit') <> 'restored'
+  then raise exception 'The saved checkout could not be edited'; end if;
+  if public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'edit') <> 'restored'
+    or public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'remove') <> 'restored'
+  then raise exception 'Editing did not preserve the final state'; end if;
+  if (select sum(quantity) from public.shopping_cart_items where cart_id=active_cart_id) <> 6
+    or (select reserved from public.inventory_balances where inventory_balances.product_id=eps_test.product_id) <> 0
+  then raise exception 'Editing failed to return items and release stock exactly once'; end if;
+  select id into strict active_item_id from public.shopping_cart_items
+  where cart_id=active_cart_id and shopping_cart_items.product_id=eps_test.product_id;
+  if public.update_active_cart_item(admin_id,active_item_id,0)
+    or not public.update_active_cart_item(buyer_id,active_item_id,10)
+  then raise exception 'Active cart change failed or another account modified it'; end if;
+  if (select quantity from public.shopping_cart_items where id=active_item_id) <> 10
+    or not public.update_active_cart_item(buyer_id,active_item_id,0)
+  then raise exception 'Quantity update or item removal failed'; end if;
+  if exists(select 1 from public.shopping_cart_items where id=active_item_id)
+  then raise exception 'Removed item remains in the cart'; end if;
+
+  order_id := public.customer_checkout_product_eps(
+    buyer_id,selected_address_id,'direct@example.test','01712345678',gen_random_uuid(),repeat('f',64),120.50,
+    product_id,null,1,null
+  );
+  merchant_id := (merchant_id::bigint + 100000000)::text;
+  attempt_id := (public.begin_eps_payment(order_id,buyer_id,merchant_id)->'attempt'->>'id')::uuid;
+  perform public.apply_eps_verification(attempt_id,merchant_id,120.50,'success','LOCAL-SAVED-EPS-TEST','test',admin_id);
+  if (select status from public.eps_payment_attempts where id=attempt_id) <> 'sandbox_paid'
+    or public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'edit') <> 'blocked'
+    or public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'remove') <> 'blocked'
+  then raise exception 'Paid checkout could be changed'; end if;
+  if has_function_privilege('authenticated','public.manage_unpaid_eps_checkout(uuid,uuid,uuid,text)','execute')
+    or has_function_privilege('authenticated','public.update_active_cart_item(uuid,uuid,integer)','execute')
+  then raise exception 'The saved checkout management RPC is exposed'; end if;
   if has_function_privilege('authenticated','public.customer_checkout_product_eps(uuid,uuid,text,text,uuid,text,numeric,uuid,uuid,integer,jsonb)','execute')
   then raise exception 'The direct checkout RPC is exposed'; end if;
-  raise notice 'PASS: direct checkout isolation, changed total rollback, idempotency, duplicate guard, and stock recovery';
+  raise notice 'PASS: direct checkout, duplicate protection, edit and remove, payment safeguards, and stock recovery';
 end $$;
 rollback;
