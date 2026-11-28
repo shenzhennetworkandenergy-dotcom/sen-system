@@ -133,16 +133,23 @@ export async function beginPaymentAction(orderId: string, form: FormData) {
 }
 
 export async function checkEpsPaymentAction(orderId: string) {
-  const {profile}=await requireProfile(["customer","admin"]);
-  const attempts=await getOrderEpsAttempts(orderId,profile.id);
-  for(const attempt of attempts.slice(0,3)) await reconcileEpsAttempt(attempt.id);
+  const { profile } = await requireProfile(["customer", "admin"]);
+  const attempts = await getOrderEpsAttempts(orderId, profile.id);
+  const checked = [];
+  for (const attempt of attempts.slice(0, 3)) {
+    const current = await reconcileEpsAttempt(attempt.id);
+    if (current && current.last_checked_at !== attempt.last_checked_at) checked.push(current);
+  }
   const result = await manageUnpaidEpsCheckout(orderId, profile.id, null);
   revalidatePath("/cart");
   revalidatePath("/account/orders");
   revalidatePath(`/account/orders/${orderId}`);
   revalidatePath(`/account/orders/${orderId}/pay`);
   returnToCartAfterCheckoutChange(result);
-  redirect(`/account/orders/${orderId}/pay`);
+  const check = checked.some(attempt => attempt.verification_error) ? "unavailable"
+    : checked.some(attempt => attempt.status === "pending") ? "pending"
+    : checked.length ? "updated" : "recent";
+  redirect(`/account/orders/${orderId}/pay?check=${check}`);
 }
 
 function returnToCartAfterCheckoutChange(result: unknown) {
@@ -173,7 +180,16 @@ export async function manageEpsCheckoutAction(orderId: string, form: FormData) {
   revalidatePath(`/account/orders/${orderId}`);
   revalidatePath(`/account/orders/${orderId}/pay`);
   returnToCartAfterCheckoutChange(result);
-  if (result === "queued") redirect(`/account/orders/${orderId}/pay`);
+  if (result === "queued") {
+    const { data: checkout } = await createSupabaseAdminClient()
+      .from("eps_checkout_requests")
+      .select("requested_change")
+      .eq("order_id", orderId)
+      .eq("profile_id", profile.id)
+      .maybeSingle();
+    if (checkout?.requested_change === "remove") redirect("/cart?checkout=removed-pending-review");
+    redirect(`/account/orders/${orderId}/pay`);
+  }
   const message = result === "blocked"
     ? "This checkout can no longer be changed. Check the payment or order status below."
     : "Unable to update this checkout. Contact SEN with your order number.";

@@ -8,6 +8,7 @@ import {
 } from "@/lib/orders/customer-status";
 import { getOrders } from "@/lib/orders/data";
 import { dateTime, label, money } from "@/lib/orders/types";
+import { getPendingEpsCheckoutChanges } from "@/lib/payments/eps-server";
 
 export const dynamic = "force-dynamic";
 
@@ -19,13 +20,32 @@ export default async function CustomerOrdersPage({
   await connection();
   const { profile } = await requireProfile(["customer", "admin"]);
   const params = await searchParams;
-  const { orders, count, page, size } = await getOrders(params, profile.id);
+  const [{ orders, count, page, size }, { requests }] = await Promise.all([
+    getOrders(params, profile.id),
+    getPendingEpsCheckoutChanges(profile.id),
+  ]);
 
   return (
     <DashboardShell
       title="My Orders"
       subtitle="Track every order through five clear delivery stages."
     >
+      {requests.length > 0 ? (
+        <section id="checkout-requests" className="mb-5 scroll-m-4 rounded-xl border p-4" aria-labelledby="checkout-requests-title">
+          <h2 id="checkout-requests-title" className="font-bold">EPS checkout requests</h2>
+          <ul className="mt-2 divide-y">
+            {requests.map(request => (
+              <li key={request.order_id} className="flex flex-wrap items-center justify-between gap-2 py-3">
+                <span className="text-sm">
+                  <b>{request.sales_orders.order_number}</b>{" "}
+                  {request.requested_change === "remove" ? "Removed from cart · Payment review pending" : "Cart edit · Payment review pending"}
+                </span>
+                <a href={`/account/orders/${request.order_id}/pay`} className="text-sm font-bold text-[var(--primary)] underline">View request</a>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       <div className="mb-5 flex flex-wrap gap-3">
         <a href="/account" className="font-semibold text-[var(--primary)]">
           ← My Account

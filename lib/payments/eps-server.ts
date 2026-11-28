@@ -86,6 +86,7 @@ export async function getRecoverableEpsCheckouts(profileId: string) {
     .eq("profile_id", profileId)
     .is("cart_restored_at", null)
     .is("discarded_at", null)
+    .or("requested_change.is.null,requested_change.eq.edit")
     .eq("sales_orders.paid_amount", 0)
     .in("sales_orders.status", ["confirmed", "cancelled"])
     .order("created_at", { ascending: false })
@@ -99,6 +100,33 @@ export async function getRecoverableEpsCheckouts(profileId: string) {
       sales_order_items: { product_name_snapshot: string; quantity: number }[];
     };
   }[];
+}
+
+export async function getPendingEpsCheckoutChanges(profileId?: string) {
+  const query = createSupabaseAdminClient()
+    .from("eps_checkout_requests")
+    .select("order_id,requested_change,payment_expires_at,sales_orders!inner(order_number,status,paid_amount,total_amount,currency,eps_payment_attempts(merchant_transaction_id,status,verification_error))")
+    .not("requested_change", "is", null)
+    .is("discarded_at", null)
+    .is("cart_restored_at", null)
+    .eq("sales_orders.paid_amount", 0)
+    .in("sales_orders.status", ["confirmed", "cancelled"]);
+  const { data, error } = await (profileId ? query.eq("profile_id", profileId) : query)
+    .order("payment_expires_at", { ascending: true });
+  return {
+    error,
+    requests: (data ?? []) as unknown as {
+      order_id: string;
+      requested_change: EpsCheckoutChange;
+      payment_expires_at: string;
+      sales_orders: {
+        order_number: string;
+        total_amount: number;
+        currency: string;
+        eps_payment_attempts: { merchant_transaction_id: string; status: string; verification_error: string | null }[];
+      };
+    }[],
+  };
 }
 
 export async function availableEpsGateway() {

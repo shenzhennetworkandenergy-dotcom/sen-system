@@ -172,8 +172,53 @@ begin
     or public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'edit') <> 'blocked'
     or public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'remove') <> 'blocked'
   then raise exception 'Paid checkout could be changed'; end if;
+  if public.confirm_closed_eps_checkout(order_id,admin_id,'EPS-CASE-PAID') <> 'not_eligible'
+  then raise exception 'Paid checkout was eligible for manual closure'; end if;
+
+  insert into public.inventory_balances(product_id,warehouse_id,on_hand,reserved)
+  values(other_product_id,warehouse_id,6,0);
+  order_id := public.customer_checkout_product_eps(
+    buyer_id,selected_address_id,'direct@example.test','01712345678',gen_random_uuid(),repeat('7',64),80,
+    other_product_id,null,2,null
+  );
+  merchant_id := (merchant_id::bigint + 100000000)::text;
+  attempt_id := (public.begin_eps_payment(order_id,buyer_id,merchant_id)->'attempt'->>'id')::uuid;
+  -- Simulate a live attempt inside this rolled-back fixture to exercise late real-money detection.
+  update public.eps_payment_attempts set test_mode=false where id=attempt_id;
+  perform public.apply_eps_verification(attempt_id,merchant_id,80,'pending',null,null,admin_id);
+  if public.manage_unpaid_eps_checkout(order_id,buyer_id,admin_id,'remove') <> 'queued'
+    or public.confirm_closed_eps_checkout(order_id,admin_id,'EPS-CASE-1001') <> 'not_eligible'
+  then raise exception 'Manual closure allowed on a checkout whose window was still open'; end if;
+  update public.eps_checkout_requests set payment_expires_at=now()-interval '1 day'
+  where eps_checkout_requests.order_id=eps_test.order_id;
+  rejected := false;
+  begin
+    perform public.confirm_closed_eps_checkout(order_id,buyer_id,'EPS-CASE-1001');
+  exception when raise_exception then
+    rejected := sqlerrm = 'Permission denied';
+  end;
+  if not rejected or public.confirm_closed_eps_checkout(order_id,admin_id,' ') <> 'invalid_reference'
+  then raise exception 'An unauthorized actor or a blank reference could close a checkout'; end if;
+  if not public.claim_eps_verification(attempt_id)
+    or public.confirm_closed_eps_checkout(order_id,admin_id,'EPS-CASE-1001') <> 'verification_busy'
+  then raise exception 'Manual closure could race with active payment verification'; end if;
+  update public.eps_payment_attempts set verification_lease_until=null where id=attempt_id;
+  if public.confirm_closed_eps_checkout(order_id,admin_id,'EPS-CASE-1001') <> 'removed'
+    or public.confirm_closed_eps_checkout(order_id,admin_id,'EPS-CASE-1001') <> 'not_eligible'
+  then raise exception 'Out-of-band closure failed or could be repeated'; end if;
+  if (select reserved from public.inventory_balances where inventory_balances.product_id=other_product_id) <> 0
+    or (select available from public.inventory_balances where inventory_balances.product_id=other_product_id) <> 6
+    or not exists (
+      select 1 from public.audit_logs where action='payments.eps_unpaid_closure_confirmed'
+      and entity_id=order_id::text and actor_id=admin_id and new_values->>'confirmation_reference'='EPS-CASE-1001'
+    )
+  then raise exception 'Manual closure did not release the stock or save the audit reference'; end if;
+  if public.apply_eps_verification(attempt_id,merchant_id,80,'success','LOCAL-REVIEW-LATE-EPS','test',admin_id) <> 'review_required'
+  then raise exception 'Late verified money after closure was not escalated for review'; end if;
+
   if has_function_privilege('authenticated','public.manage_unpaid_eps_checkout(uuid,uuid,uuid,text)','execute')
     or has_function_privilege('authenticated','public.update_active_cart_item(uuid,uuid,integer)','execute')
+    or has_function_privilege('authenticated','public.confirm_closed_eps_checkout(uuid,uuid,text)','execute')
   then raise exception 'The saved checkout management RPC is exposed'; end if;
   if has_function_privilege('authenticated','public.customer_checkout_product_eps(uuid,uuid,text,text,uuid,text,numeric,uuid,uuid,integer,jsonb)','execute')
   then raise exception 'The direct checkout RPC is exposed'; end if;

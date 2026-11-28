@@ -15,7 +15,7 @@ export function SavedCheckoutActions({ orderNumber }: { orderNumber: string }) {
         name="mode"
         value="remove"
         disabled={pending}
-        confirmation={`Delete pending checkout ${orderNumber}? Its items will be removed and any reserved stock released once the payment is confirmed unpaid.`}
+        confirmation={`Delete pending checkout ${orderNumber}? It will be removed from your cart. Reserved stock is released once EPS confirms it closed without payment.`}
         className="min-h-11 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-800 disabled:opacity-50"
       >
         Delete checkout

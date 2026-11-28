@@ -3,6 +3,7 @@ import { connection } from "next/server";
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { CustomerPaymentShell } from "@/components/payments/CustomerPaymentShell";
+import { CheckEpsPaymentButton } from "@/components/payments/CheckEpsPaymentButton";
 import { SavedCheckoutActions } from "@/components/cart/SavedCheckoutActions";
 import { requireProfile } from "@/lib/auth/session";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
@@ -22,7 +23,7 @@ export default async function PayPage({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ error?: string; from?: string }>;
+  searchParams: Promise<{ error?: string; from?: string; check?: string }>;
 }) {
   await connection();
   const { profile } = await requireProfile(["customer", "admin"]);
@@ -92,8 +93,12 @@ export default async function PayPage({
     order.status === "confirmed" && !expired && latest?.test_mode === eps.test_mode && resumeUrl;
   const canPrepareEps = eps && onlineOrder && !requestedChange && !paid && !sandboxPaid && !expired && (!latest || terminal) &&
     order.status === "confirmed";
-  const pendingChangeTitle = requestedChange === "remove" ? "Checkout deletion requested"
+  const pendingChangeTitle = requestedChange === "remove" ? "Removed from cart · Payment review pending"
     : requestedChange === "edit" ? "Cart edit requested" : null;
+  const checkMessage = notice.check === "pending" ? "EPS has not confirmed a final payment status yet."
+    : notice.check === "unavailable" ? "EPS could not confirm the latest payment status. The request remains saved."
+    : notice.check === "recent" ? "This payment was checked recently or is being checked. The latest status is below."
+    : notice.check === "updated" ? "EPS status checked. See the latest result below." : null;
   return (
     <CustomerPaymentShell
       title={`Payment · ${order.order_number}`}
@@ -116,9 +121,14 @@ export default async function PayPage({
           {notice.error}
         </p>
       ) : null}
+      {checkMessage ? (
+        <p role="status" className="mt-4 rounded-xl bg-blue-50 p-4 text-blue-950">
+          {checkMessage}
+        </p>
+      ) : null}
       <section className="mt-5 max-w-3xl rounded-2xl border bg-[var(--surface)] p-5 sm:p-7">
         <p className="text-sm text-[var(--muted-text)]">
-          {paid ? "Amount paid" : "Outstanding amount"}
+          {paid ? "Amount paid" : requestedChange || order.status === "cancelled" ? "Checkout total" : "Outstanding amount"}
         </p>
         <p className="mt-1 text-3xl font-bold">
           {money(paid ? order.paid_amount : due, order.currency)}
@@ -159,7 +169,7 @@ export default async function PayPage({
                   ? "Please contact SEN with your order number. Do not make another payment."
                   : requestedChange
                     ? requestedChange === "remove"
-                      ? "SEN will remove this checkout and release its reserved stock once EPS confirms it closed without payment."
+                      ? "SEN will release the reserved stock after EPS confirms the checkout closed without payment."
                       : "SEN will return the items to your cart and release their reserved stock once EPS confirms the checkout closed without payment."
                     : order.status === "cancelled"
                     ? onlineOrder?.discarded_at
@@ -196,9 +206,14 @@ export default async function PayPage({
             </button>
           </form>
         ) : null}
-        {requestedChange && resumeUrl ? (
+        {requestedChange && !expired && resumeUrl ? (
           <p className="mt-4 text-sm">
             If you have not paid and EPS is still open, <a href={resumeUrl} rel="noreferrer" className="font-bold underline">open EPS and cancel the payment</a>.
+          </p>
+        ) : null}
+        {requestedChange && expired ? (
+          <p className="mt-4 text-sm">
+            The checkout window ended. For help with this payment, <Link href="/contact" className="font-bold underline">contact SEN</Link> and give them order {order.order_number}.
           </p>
         ) : null}
         {canManage && !requestedChange ? (
@@ -210,11 +225,9 @@ export default async function PayPage({
             </form>
           )
         ) : null}
-        {attempts.length && !paid && !sandboxPaid ? (
+        {attempts.length && !paid && !sandboxPaid && !onlineOrder?.discarded_at && !onlineOrder?.cart_restored_at ? (
           <form action={checkEpsPaymentAction.bind(null, id)} className="mt-3">
-            <button className="w-full rounded-xl border px-5 py-3 font-bold">
-              Check payment status
-            </button>
+            <CheckEpsPaymentButton />
           </form>
         ) : null}
         {!onlineOrder && !paid && order.status !== "cancelled" ? (
@@ -253,7 +266,7 @@ export default async function PayPage({
         ) : null}
         {((onlineOrder && !eps) || (!onlineOrder && !gateways?.length)) &&
         !paid &&
-        !sandboxPaid ? (
+        !sandboxPaid && !requestedChange && !expired && order.status !== "cancelled" ? (
           <p className="mt-4 text-sm text-[var(--muted-text)]">
             Online payment is temporarily unavailable. Please contact SEN for
             assistance.
@@ -278,6 +291,7 @@ export default async function PayPage({
                   Reference: {a.eps_transaction_id || a.merchant_transaction_id}
                   <br />
                   {dateTime(a.verified_at || a.created_at)}
+                  {a.last_checked_at ? <> · Last status check {dateTime(a.last_checked_at)}</> : null}
                 </p>
               </article>
             ))}
